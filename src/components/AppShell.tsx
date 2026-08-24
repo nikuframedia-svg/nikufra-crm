@@ -28,7 +28,7 @@ const navItems = [
   { to: "/", label: "Visão geral", icon: LayoutDashboard },
   { to: "/pipeline", label: "Pipeline", icon: KanbanSquare },
   { to: "/leads", label: "Empresas e leads", icon: Building2 },
-  { to: "/email", label: "Email", icon: Mail, badge: 2 },
+  { to: "/email", label: "Email", icon: Mail },
   { to: "/metricas", label: "Métricas", icon: BarChart3 },
   { to: "/faturacao", label: "Faturação", icon: CircleDollarSign },
   { to: "/equipa", label: "Equipa", icon: Users },
@@ -66,7 +66,7 @@ export function AppShell() {
     return leads.filter((lead) => `${lead.nome} ${lead.empresa} ${lead.email}`.toLowerCase().includes(normalized)).slice(0, 6);
   }, [leads, query]);
 
-  const activeLabel = navItems.find((item) => item.to === pathname)?.label ?? "Definições";
+  const activeLabel = pathname.startsWith("/empresas/") ? "Ficha de empresa" : navItems.find((item) => item.to === pathname)?.label ?? "Definições";
   const currentUser = team.find((owner) => owner.id === currentUserId) ?? team[0];
 
   function handleNewActivity(formData: FormData) {
@@ -79,7 +79,7 @@ export function AppShell() {
       userId: currentUser?.id ?? currentUserId,
       tipo: String(formData.get("tipo")) as "email" | "chamada" | "reuniao" | "proposta" | "nota",
       descricao: String(formData.get("descricao")),
-      data: new Date().toISOString(),
+      data: String(formData.get("data") || new Date().toISOString()),
     });
     setActivityOpen(false);
   }
@@ -93,21 +93,21 @@ export function AppShell() {
           <p className="nav-label">Trabalho</p>
           {navItems.map((item) => {
             const Icon = item.icon;
-            return <Link key={item.to} to={item.to} className="nav-item" activeProps={{ className: "nav-item nav-item--active" }}><Icon size={17} /><span>{item.label}</span>{item.badge ? <b>{item.badge}</b> : null}</Link>;
+            return <Link key={item.to} to={item.to} className="nav-item" activeProps={{ className: "nav-item nav-item--active" }}><Icon size={17} /><span>{item.label}</span></Link>;
           })}
           <p className="nav-label nav-label--second">Sistema</p>
           <Link to="/definicoes" className="nav-item" activeProps={{ className: "nav-item nav-item--active" }}><Settings size={17} /><span>Definições</span></Link>
         </nav>
         <div className="sidebar__footer">
-          <button className="user-card" onClick={() => { if (supabase) void supabase.auth.signOut(); }} title={supabase ? "Terminar sessão" : "Modo de demonstração"}><span className="avatar avatar--md" style={{ "--avatar": currentUser?.cor ?? "#3b82f6" } as React.CSSProperties}>{currentUser?.iniciais ?? "N"}</span><span><strong>{currentUser?.nome ?? "Nikufra"}</strong><small>{supabase ? "Terminar sessão" : currentUser?.role === "admin" ? "Administrador" : "Membro"}</small></span><ChevronDown size={15} /></button>
+          <button className="user-card" onClick={() => { if (supabase) void supabase.auth.signOut(); }} title={supabase ? "Terminar sessão" : "Dataset local"}><span className="avatar avatar--md" style={{ "--avatar": currentUser?.cor ?? "#3b82f6" } as React.CSSProperties}>{currentUser?.iniciais ?? "N"}</span><span><strong>{currentUser?.nome ?? "Nikufra"}</strong><small>{supabase ? "Terminar sessão" : "Dados reais locais"}</small></span><ChevronDown size={15} /></button>
         </div>
       </aside>
       <div className="workspace">
         <div className="titlebar" data-tauri-drag-region>
-          <div><span className="status-dot" />{activeLabel}<small>{dataMode === "supabase" ? "Sincronizado com servidor" : "Dados de demonstração"}</small></div>
+          <div><span className="status-dot" />{activeLabel}<small>{dataMode === "supabase" ? "Sincronizado com servidor" : "Dataset Nikufra real · local"}</small></div>
           <div className="titlebar__actions">
             <button className="icon-button" onClick={() => setDark((value) => !value)} aria-label="Alternar tema">{dark ? <Sun size={17} /> : <Moon size={17} />}</button>
-            <button className="icon-button has-notification" aria-label="Notificações"><Bell size={17} /></button>
+            <button className="icon-button" aria-label="Notificações"><Bell size={17} /></button>
             <Button onClick={() => setActivityOpen(true)}><Plus size={16} />Registar atividade <kbd>E</kbd></Button>
           </div>
         </div>
@@ -126,7 +126,7 @@ export function AppShell() {
       <Modal open={activityOpen} onClose={() => setActivityOpen(false)} title="Registar atividade" description="Objetivo: menos de 15 segundos após o contacto.">
         <form onSubmit={(event) => { event.preventDefault(); handleNewActivity(new FormData(event.currentTarget)); }} className="form-stack">
           <label>Oportunidade<select name="opportunityId">{opportunities.map((item) => <option key={item.id} value={item.id}>{item.empresa} — {item.titulo}</option>)}</select></label>
-          <div className="form-grid"><label>Tipo<select name="tipo"><option value="chamada">Chamada</option><option value="reuniao">Reunião</option><option value="email">Email</option><option value="proposta">Proposta</option><option value="nota">Nota</option></select></label><label>Data<input type="datetime-local" defaultValue={new Date().toISOString().slice(0, 16)} /></label></div>
+          <div className="form-grid"><label>Tipo<select name="tipo"><option value="chamada">Chamada</option><option value="reuniao">Reunião</option><option value="email">Email</option><option value="proposta">Proposta</option><option value="nota">Nota</option></select></label><label>Data<input name="data" type="datetime-local" defaultValue={new Date().toISOString().slice(0, 16)} /></label></div>
           <label>Resumo<textarea name="descricao" required autoFocus placeholder="O que aconteceu e qual é o próximo passo?" rows={4} /></label>
           <div className="modal__actions"><Button type="button" variant="secondary" onClick={() => setActivityOpen(false)}>Cancelar</Button><Button type="submit"><FilePenLine size={16} />Guardar atividade</Button></div>
         </form>

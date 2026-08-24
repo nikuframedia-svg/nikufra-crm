@@ -1,29 +1,35 @@
 import { Activity, ArrowUpRight, CalendarCheck2, CircleDollarSign, Clock3, MoveRight, Target } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Link } from "@tanstack/react-router";
-import { revenueMonths, stageLabels, stageOrder } from "../data/seed";
+import { stageLabels, stageOrder } from "../data/seed";
 import { formatCurrency } from "../lib/format";
+import { useRevenueData } from "../hooks/use-revenue-data";
 import { useCRM } from "../state/crm-context";
 import { Avatar, Button, Card, MetricCard, PageHeader, SampleBadge, StageChip } from "../components/ui";
 
 export function OverviewPage() {
-  const { opportunities, activities, team } = useCRM();
+  const { opportunities, activities, team, currentUserId } = useCRM();
+  const { months: revenueMonths } = useRevenueData();
   const active = opportunities.filter((item) => stageOrder.includes(item.estado));
   const pipeline = active.reduce((sum, item) => sum + item.valor, 0);
   const weighted = active.reduce((sum, item) => sum + item.valor * item.probabilidade / 100, 0);
-  const currentRevenue = revenueMonths.at(-1)!;
+  const currentRevenue = revenueMonths.at(-1) ?? { mes: "", contratualizado: 0, faturado: 0, recebido: 0, objetivo: 0 };
   const stalled = active.filter((item) => item.diasNoEstado >= 30).sort((a, b) => b.diasNoEstado - a.diasNoEstado).slice(0, 4);
 
-  const chartData = revenueMonths.map((item) => ({ ...item, pipeline: item.contratualizado + 18000 }));
+  const closedCycles = opportunities.map((item) => item.dataPrimeiroContacto && item.dataFecho ? Math.round((new Date(item.dataFecho).getTime() - new Date(item.dataPrimeiroContacto).getTime()) / 86_400_000) : null).filter((value): value is number => value !== null && value >= 0).sort((a, b) => a - b);
+  const medianCycle = closedCycles.length ? closedCycles[Math.floor(closedCycles.length / 2)] : null;
+  const currentName = team.find((item) => item.id === currentUserId)?.nome.split(" ")[0] ?? "João";
+  const now = new Date();
+  const dateLabel = now.toLocaleDateString("pt-PT", { day: "numeric", month: "long", year: "numeric" });
 
   return (
     <div className="page">
-      <PageHeader eyebrow="24 agosto 2026 · semana 35" title="Bom dia, João." description={`O pipeline ganhou 3 oportunidades esta semana. Há ${stalled.length} negócios que precisam de atenção.`} actions={<><Button variant="secondary"><CalendarCheck2 size={16} />Esta semana</Button><Link to="/pipeline"><Button>Ver pipeline<ArrowUpRight size={16} /></Button></Link></>} />
+      <PageHeader eyebrow={dateLabel} title={`Bom dia, ${currentName}.`} description={`${opportunities.length} empresas no CRM e ${stalled.length} negócios com 30 ou mais dias no estado atual.`} actions={<><Button variant="secondary"><CalendarCheck2 size={16} />Dados atuais</Button><Link to="/pipeline"><Button>Ver pipeline<ArrowUpRight size={16} /></Button></Link></>} />
       <section className="metric-grid">
-        <MetricCard label="Pipeline total" value={formatCurrency(pipeline, true)} change="+12,4%" detail="vs. mês anterior" icon={<Target size={17} />} />
-        <MetricCard label="Pipeline ponderado" value={formatCurrency(weighted, true)} change="+8,1%" detail={`${active.length} oportunidades ativas`} icon={<Activity size={17} />} />
-        <MetricCard label="Faturado este mês" value={formatCurrency(currentRevenue.faturado, true)} change="+6,9%" detail={`de ${formatCurrency(currentRevenue.objetivo, true)} objetivo`} icon={<CircleDollarSign size={17} />} />
-        <MetricCard label="Ciclo de venda mediano" value="4,8 meses" change="−0,6 mês" detail="últimos 12 meses" icon={<Clock3 size={17} />} />
+        <MetricCard label="Pipeline total" value={formatCurrency(pipeline, true)} detail={`${active.length} empresas no funil`} icon={<Target size={17} />} />
+        <MetricCard label="Pipeline ponderado" value={formatCurrency(weighted, true)} detail="com probabilidades por etapa" icon={<Activity size={17} />} />
+        <MetricCard label="Faturado sem IVA" value={formatCurrency(currentRevenue.faturado, true)} detail={currentRevenue.objetivo ? `de ${formatCurrency(currentRevenue.objetivo, true)} objetivo` : "objetivo mensal ainda não definido"} icon={<CircleDollarSign size={17} />} />
+        <MetricCard label="Ciclo de venda mediano" value={medianCycle === null ? "Sem amostra" : `${medianCycle} dias`} detail={`n=${closedCycles.length} negócios com datas completas`} icon={<Clock3 size={17} />} />
       </section>
 
       <section className="overview-grid">
@@ -32,7 +38,7 @@ export function OverviewPage() {
           <div className="chart-summary"><strong className="mono">{formatCurrency(currentRevenue.faturado + currentRevenue.contratualizado, true)}</strong><span>volume comercial em agosto</span></div>
           <div className="chart-wrap">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
+              <AreaChart data={revenueMonths} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
                 <defs><linearGradient id="areaBlue" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3b82f6" stopOpacity={0.24} /><stop offset="100%" stopColor="#3b82f6" stopOpacity={0} /></linearGradient></defs>
                 <CartesianGrid stroke="var(--line)" vertical={false} />
                 <XAxis dataKey="mes" axisLine={false} tickLine={false} tick={{ fill: "var(--muted)", fontSize: 11 }} />
@@ -55,7 +61,7 @@ export function OverviewPage() {
         </Card>
 
         <Card className="funnel-panel">
-          <div className="panel-header"><div><p className="eyebrow">Funil ativo</p><h2>Distribuição por etapa</h2></div><SampleBadge n={34} /></div>
+          <div className="panel-header"><div><p className="eyebrow">Funil ativo</p><h2>Distribuição por etapa</h2></div><SampleBadge n={opportunities.length} /></div>
           <div className="mini-funnel">
             {stageOrder.slice(1).map((stage, index) => {
               const count = opportunities.filter((item) => item.estado === stage).length;
@@ -66,7 +72,7 @@ export function OverviewPage() {
         </Card>
 
         <Card className="activity-panel">
-          <div className="panel-header"><div><p className="eyebrow">Tempo real</p><h2>Atividade recente</h2></div><span className="live-label"><i />Ao vivo</span></div>
+          <div className="panel-header"><div><p className="eyebrow">Histórico registado</p><h2>Atividade recente</h2></div><SampleBadge n={activities.length} /></div>
           <div className="timeline">
             {activities.slice(0, 5).map((item) => {
               const owner = team.find((value) => value.id === item.userId);

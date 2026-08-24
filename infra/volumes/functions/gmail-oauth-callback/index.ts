@@ -20,7 +20,7 @@ Deno.serve(async (request) => {
   const tokens = await tokenResponse.json();
   if (!tokens.refresh_token) return Response.json({ error: "Refresh token em falta" }, { status: 409 });
   const encrypted = await encryptToken(tokens.refresh_token);
-  const { error } = await admin.from("google_tokens").upsert({ user_id: stateRow.user_id, refresh_token_encrypted: encrypted, scopes: ["gmail.readonly", "gmail.compose"] }, { onConflict: "user_id" });
+  const { error } = await admin.from("google_tokens").upsert({ user_id: stateRow.user_id, refresh_token_encrypted: encrypted, scopes: ["gmail.readonly", "gmail.compose"], history_id: null, backfill_page_token: null, backfill_complete: false, backfill_started_at: null, last_sync_at: null, messages_synced: 0, contacts_created: 0, sync_error: null }, { onConflict: "user_id" });
   if (error) return Response.json({ error: error.message }, { status: 500 });
   return new Response("<!doctype html><html lang='pt'><meta charset='utf-8'><title>Gmail ligado</title><style>body{font:16px system-ui;background:#0e1116;color:#e4e7eb;display:grid;place-items:center;min-height:100vh;margin:0}main{max-width:460px;border:1px solid #2b313c;padding:32px}h1{font-size:24px}p{color:#929aa8;line-height:1.5}a{color:#60a5fa}</style><main><h1>Gmail ligado à Nikufra.</h1><p>A sincronização começou. Volta ao CRM para continuar.</p><a href='nikufra-crm://oauth/google?status=connected'>Abrir o CRM Nikufra</a></main></html>", { headers: { "content-type": "text/html; charset=utf-8" } });
 });

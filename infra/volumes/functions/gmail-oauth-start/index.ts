@@ -1,4 +1,4 @@
-import { adminClient, authenticatedUser, corsHeaders } from "../_shared/security.ts";
+import { activeUser, adminClient, corsHeaders } from "../_shared/security.ts";
 
 function base64Url(bytes: Uint8Array) {
   return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
@@ -7,7 +7,7 @@ function base64Url(bytes: Uint8Array) {
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   try {
-    const user = await authenticatedUser(request);
+    const { user } = await activeUser(request);
     const state = base64Url(crypto.getRandomValues(new Uint8Array(32)));
     const stateHash = base64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(state))));
     const { error } = await adminClient().from("google_oauth_states").insert({ user_id: user.id, state_hash: stateHash });

@@ -12,13 +12,6 @@ const templates = [
   { name: "Reativação", subject: "Retomar o tema de dados na {{empresa}}", body: "Olá {{nome}},\n\nRetomo o nosso contacto porque o contexto que discutimos pode ter mudado. Há disponibilidade para revermos o tema este mês?\n\nCumprimentos,\nJoão" },
 ];
 
-const threads = [
-  { company: "Ferrovia Norte", person: "Rui Correia", subject: "Re: proposta revista", snippet: "Obrigado João. A equipa de operações já reviu a fase inicial...", time: "09:42", unread: true },
-  { company: "Alumitech", person: "Ana Faria", subject: "Dados do piloto — semana 4", snippet: "Segue o export das duas linhas e a atualização do mapeamento...", time: "Ontem", unread: true },
-  { company: "CarbonForm", person: "Mónica Santos", subject: "Re: reunião de descoberta", snippet: "Perfeito, quinta às 11h funciona para toda a equipa.", time: "Ontem", unread: false },
-  { company: "Circuita", person: "Laura Viana", subject: "Documentação MES", snippet: "Conseguimos disponibilizar a especificação via VPN interna.", time: "22 ago", unread: false },
-];
-
 export function EmailPage() {
   const { leads, drafts, addDrafts, activities, dataMode, team, currentUserId, emailSelection, setEmailSelection } = useCRM();
   const [selected, setSelected] = useState<Set<string>>(() => new Set(emailSelection));
@@ -30,8 +23,12 @@ export function EmailPage() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const eligible = useMemo(() => leads.filter((lead) => !lead.optout && Boolean(lead.email) && `${lead.nome} ${lead.empresa}`.toLowerCase().includes(search.toLowerCase())), [leads, search]);
-  const visibleThreads = dataMode === "supabase" ? activities.filter((activity) => activity.tipo === "email").slice(0, 6).map((activity) => ({ company: activity.empresa, person: "Contacto", subject: activity.descricao, snippet: activity.descricao, time: new Date(activity.data).toLocaleDateString("pt-PT", { day: "2-digit", month: "short" }), unread: false })) : threads;
+  const visibleThreads = activities.filter((activity) => activity.tipo === "email").slice(0, 20).map((activity) => ({ company: activity.empresa, person: activity.contactoNome ?? activity.contactoEmail ?? "Contacto", subject: activity.assunto ?? activity.descricao, snippet: activity.snippet ?? (activity.direcao === "recebido" ? "Email recebido" : "Email enviado"), meeting: activity.reuniaoInferida, time: new Date(activity.data).toLocaleDateString("pt-PT", { day: "2-digit", month: "short" }), unread: activity.direcao === "recebido" }));
   const currentEmail = team.find((owner) => owner.id === currentUserId)?.email ?? team[0]?.email ?? "conta@nikufra.ai";
+  const sentEmails = activities.filter((activity) => activity.tipo === "email" && activity.direcao === "enviado");
+  const repliedContacts = new Set(activities.filter((activity) => activity.tipo === "email" && activity.direcao === "recebido").map((activity) => activity.contactoId).filter(Boolean));
+  const contacted = new Set(sentEmails.map((activity) => activity.contactoId).filter(Boolean));
+  const replyRate = contacted.size ? 100 * [...repliedContacts].filter((id) => contacted.has(id)).length / contacted.size : null;
 
   function chooseTemplate(index: number) { setTemplateIndex(index); setSubject(templates[index].subject); setBody(templates[index].body); setSent(false); }
   function renderTemplate(text: string, lead: typeof leads[number]) { return text.replaceAll("{{nome}}", lead.nome.split(" ")[0]).replaceAll("{{empresa}}", lead.empresa).replaceAll("{{vertical}}", lead.vertical); }
@@ -52,12 +49,12 @@ export function EmailPage() {
 
   return (
     <div className="page">
-      <PageHeader eyebrow="Gmail conectado" title="Email e rascunhos" description="Lê o contexto, personaliza templates e cria rascunhos. O envio é sempre manual no Gmail." actions={<Button variant="secondary" onClick={() => void handleOpenGmail()}><ExternalLink size={16} />Abrir Gmail</Button>} />
-      <div className="mail-status"><span><CheckCircle2 size={16} />{currentEmail}</span><span>Última sincronização há 4 min</span><span><Clock3 size={14} />Próxima em 11 min</span><b>gmail.readonly + gmail.compose</b></div>
+      <PageHeader eyebrow={dataMode === "supabase" ? "Histórico Gmail" : "Dados locais"} title="Email e rascunhos" description="Lê metadados das conversas, personaliza templates e cria rascunhos. O envio é sempre manual no Gmail." actions={<Button variant="secondary" onClick={() => void handleOpenGmail()}><ExternalLink size={16} />Abrir Gmail</Button>} />
+      <div className="mail-status"><span>{dataMode === "supabase" ? <CheckCircle2 size={16} /> : <Clock3 size={16} />}{currentEmail}</span><span>{dataMode === "supabase" ? `${sentEmails.length} emails indexados nesta sessão` : "A sincronização Gmail requer o servidor configurado"}</span><span><Clock3 size={14} />Atualização automática a cada 15 min</span><b>gmail.readonly + gmail.compose</b></div>
       <div className="email-layout">
         <Card className="inbox-panel">
-          <div className="panel-header"><div><p className="eyebrow">Caixa de entrada</p><h2>Conversas recentes</h2></div><span className="counter">2</span></div>
-          <div className="inbox-list">{visibleThreads.map((thread, index) => <button key={`${thread.company}-${index}`} className={thread.unread ? "is-unread" : ""}><span className="company-monogram">{thread.company.slice(0, 2).toUpperCase()}</span><span><strong>{thread.company}<small>{thread.time}</small></strong><b>{thread.subject}</b><p>{thread.snippet}</p></span><ChevronRight size={15} /></button>)}</div>
+          <div className="panel-header"><div><p className="eyebrow">Histórico indexado</p><h2>Conversas recentes</h2></div><span className="counter">{visibleThreads.filter((thread) => thread.unread).length}</span></div>
+          <div className="inbox-list">{visibleThreads.length ? visibleThreads.map((thread, index) => <button key={`${thread.company}-${index}`} className={thread.unread ? "is-unread" : ""}><span className="company-monogram">{thread.company.slice(0, 2).toUpperCase()}</span><span><strong>{thread.company}<small>{thread.time}</small></strong><b>{thread.subject}</b><p>{thread.person} · {thread.snippet}{thread.meeting ? " · possível reunião" : ""}</p></span><ChevronRight size={15} /></button>) : <div className="empty-state">Ainda não existem emails reais indexados. Liga ou sincroniza o Gmail nas Definições.</div>}</div>
           <button className="panel-link"><Inbox size={15} />Ver toda a caixa de entrada</button>
         </Card>
 
@@ -86,7 +83,7 @@ export function EmailPage() {
         <Card className="drafts-panel">
           <div className="panel-header"><div><p className="eyebrow">Preparados</p><h2>Rascunhos recentes</h2></div><button className="icon-button"><Plus size={16} /></button></div>
           <div className="draft-list">{drafts.slice(0, 6).map((draft) => <button key={draft.id}><span className="draft-icon"><FilePenLine size={15} /></span><span><strong>{draft.empresa}</strong><b>{draft.assunto}</b><small>{draft.criadoEm} · {draft.destinatario}</small></span><Send size={14} /></button>)}</div>
-          <div className="draft-footer"><span><Archive size={14} />{drafts.length} rascunhos</span><span><Users size={14} />Taxa de resposta 34%</span></div>
+          <div className="draft-footer"><span><Archive size={14} />{drafts.length} rascunhos</span><span><Users size={14} />{replyRate === null ? "Taxa de resposta sem amostra" : `Taxa de resposta ${replyRate.toLocaleString("pt-PT", { maximumFractionDigits: 1 })}%`}</span></div>
         </Card>
       </div>
     </div>

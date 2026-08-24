@@ -36,11 +36,11 @@ export async function requestMagicLink(email: string) {
   if (!email.toLowerCase().endsWith("@nikufra.ai")) {
     throw new Error("Usa um endereço @nikufra.ai.");
   }
-  if (!supabase) return { demo: true };
+  if (!supabase) return { local: true };
   const { error } = await supabase.auth.signInWithOtp({
     email,
     options: { emailRedirectTo: isTauri ? "nikufra-crm://auth/callback" : window.location.origin },
   });
   if (error) throw error;
-  return { demo: false };
+  return { local: false };
 }

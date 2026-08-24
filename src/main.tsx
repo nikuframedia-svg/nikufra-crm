@@ -13,9 +13,7 @@ const queryClient = new QueryClient({
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <CRMProvider>
-        <AuthGate><App /></AuthGate>
-      </CRMProvider>
+      <AuthGate><CRMProvider><App /></CRMProvider></AuthGate>
     </QueryClientProvider>
   </React.StrictMode>,
 );

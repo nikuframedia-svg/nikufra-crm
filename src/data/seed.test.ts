@@ -1,17 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { initialLeads, initialOpportunities, stageOrder, stageProbability } from "./seed";
+import { initialActivities, initialDrafts, initialLeads, initialOpportunities, owners, stageOrder, stageProbability } from "./seed";
 
-describe("dados comerciais de demonstração", () => {
-  it("cobre todas as etapas do funil", () => {
-    const present = new Set(initialOpportunities.map((item) => item.estado));
-    for (const stage of stageOrder) expect(present.has(stage)).toBe(true);
+describe("configuração comercial segura", () => {
+  it("mantém a progressão do funil e probabilidades válidas", () => {
+    expect(stageOrder).toEqual(["nao_contactado", "contactado", "reuniao_marcada", "reuniao_feita", "proposta", "piloto", "cliente"]);
+    for (const probability of Object.values(stageProbability)) expect(probability).toBeGreaterThanOrEqual(0);
   });
 
-  it("mantém contacto e oportunidade alinhados", () => {
-    expect(initialLeads).toHaveLength(initialOpportunities.length);
-    for (const opportunity of initialOpportunities) {
-      expect(initialLeads.some((lead) => lead.id === opportunity.leadId)).toBe(true);
-      expect(opportunity.probabilidade).toBe(stageProbability[opportunity.estado]);
-    }
+  it("não embebe contactos, negócios ou atividades na configuração de produção", () => {
+    expect(initialLeads).toEqual([]);
+    expect(initialOpportunities).toEqual([]);
+    expect(initialActivities).toEqual([]);
+    expect(initialDrafts).toEqual([]);
+  });
+
+  it("só mantém o operador local de desenvolvimento", () => {
+    expect(owners).toHaveLength(1);
+    expect(owners[0].nome).toBe("João Milhazes");
   });
 });

@@ -215,6 +215,45 @@ main { height: calc(100vh - 70px); overflow: auto; }
 input, select, textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: 4px; color: var(--ink); background: var(--surface-soft); }
 input, select { height: 35px; padding: 0 10px; }
 textarea { padding: 9px 10px; resize: vertical; line-height: 1.45; }
+.drag-handle { display: grid; place-items: center; padding: 2px; border: 0; color: inherit; background: transparent; cursor: grab; }
+.opportunity-card__link { color: inherit; text-decoration: none; }
+.opportunity-card__link:hover h3 { text-decoration: underline; text-underline-offset: 3px; }
+.company-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.company-summary-grid .card { display: grid; gap: 7px; min-height: 118px; }
+.company-summary-grid span { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }
+.company-summary-grid strong { font-size: 21px; }
+.company-summary-grid small { color: var(--muted); }
+.company-layout { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(320px, .75fr); gap: 12px; align-items: start; }
+.company-form-card { padding: 22px; }
+.company-side-stack { display: grid; gap: 12px; }
+.company-side-stack > .card { padding: 18px; }
+.milestone-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.company-contact-list { display: grid; gap: 6px; }
+.company-contact-list > div { display: grid; grid-template-columns: 34px 1fr; gap: 9px; padding: 9px 0; border-top: 1px solid var(--line); }
+.company-contact-list input { width: 100%; padding: 0; border: 0; font-weight: 650; background: transparent; }
+.company-contact-list small { display: flex; align-items: center; gap: 5px; margin-top: 4px; color: var(--muted); }
+.billing-mini-list { display: grid; }
+.billing-mini-list > div { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.billing-mini-list span { display: grid; gap: 3px; }
+.billing-mini-list small { color: var(--muted); }
+.company-cell-edit { display: grid; gap: 2px; }
+.company-cell-edit > a { color: var(--ink); font-weight: 650; text-decoration: none; }
+.company-cell-edit > a:hover { text-decoration: underline; }
+.company-cell-edit > input { color: var(--muted); font-size: 9px; }
+.mapping-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin: 10px 0 14px; }
+.mapping-grid label { display: grid; gap: 4px; min-width: 0; }
+.mapping-grid label > span { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.mapping-grid select { width: 100%; }
+.integration-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.gmail-progress { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 10px 0; }
+.gmail-progress > span { display: grid; gap: 5px; padding: 12px; border: 1px solid var(--line); }
+.gmail-progress small { color: var(--muted); }
+.vat-detail { display: block; margin-top: 4px; color: var(--muted); }
+.show-more { width: 100%; padding: 10px; border: 1px dashed var(--line-strong); color: var(--muted); background: transparent; cursor: pointer; }
+.pagination-controls { display: flex; align-items: center; gap: 6px; }
+.pagination-controls .button { min-height: 28px; padding: 4px 8px; }
+@media (max-width: 1050px) { .company-summary-grid { grid-template-columns: repeat(2, 1fr); } .company-layout { grid-template-columns: 1fr; } }
+@media (max-width: 680px) { .company-summary-grid, .milestone-grid, .mapping-grid, .gmail-progress { grid-template-columns: 1fr; } }
 input::placeholder, textarea::placeholder { color: var(--muted-2); }
 input:hover, select:hover, textarea:hover { border-color: var(--muted-2); }
 input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: none; }

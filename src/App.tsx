@@ -10,6 +10,7 @@ const MetricsPage = lazy(() => import("./pages/MetricsPage").then((module) => ({
 const RevenuePage = lazy(() => import("./pages/RevenuePage").then((module) => ({ default: module.RevenuePage })));
 const TeamPage = lazy(() => import("./pages/TeamPage").then((module) => ({ default: module.TeamPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
+const CompanyPage = lazy(() => import("./pages/CompanyPage").then((module) => ({ default: module.CompanyPage })));
 
 const rootRoute = createRootRoute({ component: AppShell });
 const routes = [
@@ -21,6 +22,7 @@ const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/faturacao", component: RevenuePage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/equipa", component: TeamPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/definicoes", component: SettingsPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/empresas/$companyId", component: CompanyPage }),
 ];
 
 const routeTree = rootRoute.addChildren(routes);

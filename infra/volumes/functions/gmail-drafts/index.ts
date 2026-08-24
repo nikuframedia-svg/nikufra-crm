@@ -1,4 +1,4 @@
-import { adminClient, authenticatedUser, corsHeaders, decryptToken, gmailAccessToken } from "../_shared/security.ts";
+import { activeUser, adminClient, corsHeaders, decryptToken, gmailAccessToken } from "../_shared/security.ts";
 
 type DraftRequest = { contactoId: string; destinatario: string; assunto: string; mensagem: string };
 
@@ -10,7 +10,7 @@ function base64Url(value: string) {
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   try {
-    const user = await authenticatedUser(request);
+    const { user } = await activeUser(request);
     const { drafts } = await request.json() as { drafts: DraftRequest[] };
     if (!Array.isArray(drafts) || drafts.length === 0 || drafts.length > 100) return Response.json({ error: "Seleciona entre 1 e 100 destinatários" }, { status: 400, headers: corsHeaders });
     const admin = adminClient();

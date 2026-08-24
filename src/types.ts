@@ -9,7 +9,7 @@ export type Stage =
   | "perdido"
   | "adiado";
 
-export type Vertical = "Metalomecânica" | "Automóvel" | "Alumínio" | "Cortiça" | "Compósitos" | "Eletrónica";
+export type Vertical = "Metalomecânica" | "Automóvel" | "Alumínio" | "Cortiça" | "Compósitos" | "Eletrónica" | "Outro";
 
 export interface Owner {
   id: string;
@@ -35,6 +35,7 @@ export interface Lead {
   estado: Stage;
   ownerId: string;
   optout?: boolean;
+  dataReuniao?: string;
 }
 
 export interface Opportunity {
@@ -50,8 +51,14 @@ export interface Opportunity {
   ownerId: string;
   diasNoEstado: number;
   dataPrimeiroContacto: string;
+  dataReuniao?: string;
+  dataProposta?: string;
+  dataPiloto?: string;
+  dataFecho?: string;
   dataFechoPrevista: string;
   recorrenteAnual?: number;
+  avaliacao?: number;
+  notas?: string;
 }
 
 export interface Activity {
@@ -62,6 +69,14 @@ export interface Activity {
   tipo: "email" | "chamada" | "reuniao" | "proposta" | "nota";
   descricao: string;
   data: string;
+  direcao?: "enviado" | "recebido";
+  reuniaoInferida?: boolean;
+  contactoId?: string;
+  threadId?: string;
+  assunto?: string;
+  snippet?: string;
+  contactoNome?: string;
+  contactoEmail?: string;
 }
 
 export interface RevenueMonth {
@@ -70,6 +85,21 @@ export interface RevenueMonth {
   faturado: number;
   recebido: number;
   objetivo: number;
+}
+
+export interface RevenueEntry {
+  id: string;
+  empresaId?: string;
+  oportunidadeId?: string;
+  data: string;
+  empresa: string;
+  descricao: string;
+  tipo: "Contratualizado" | "Faturado" | "Recebido";
+  valor: number;
+  valorBruto?: number;
+  iva?: number;
+  taxaIva?: number;
+  ref: string;
 }
 
 export interface Draft {

@@ -19,6 +19,13 @@ export async function authenticatedUser(request: Request) {
   return data.user;
 }
 
+export async function activeUser(request: Request) {
+  const user = await authenticatedUser(request);
+  const { data: profile, error } = await adminClient().from("profiles").select("id,role,ativo").eq("id", user.id).single();
+  if (error || !profile?.ativo) throw new Error("Conta ainda não aprovada");
+  return { user, profile };
+}
+
 function bytesToBase64(bytes: Uint8Array) {
   return btoa(String.fromCharCode(...bytes));
 }

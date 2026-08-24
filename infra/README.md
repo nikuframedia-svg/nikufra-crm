@@ -23,7 +23,7 @@ Esta pasta descreve o deployment self-hosted. O `docker-compose.yml` é uma vari
    done
    ```
 
-6. Em desenvolvimento, carregar dados fictícios com `psql ... < ../supabase/seed.sql`. Nunca executar seed em produção.
+6. Não carregar seeds: `supabase/seed.sql` está intencionalmente vazio. A base real é importada na aplicação por um administrador e a importação elimina duplicados.
 7. Confirmar `https://crm.nikufra.ai/auth/v1/health` e entrar no Studio com o basic auth definido no `.env`.
 
 Para ativar o sync Gmail de 15 em 15 minutos, guardar os dois valores no Vault após aplicar as migrations:
@@ -33,7 +33,7 @@ select vault.create_secret('https://crm.nikufra.ai/functions/v1/gmail-sync', 'gm
 select vault.create_secret('<SERVICE_ROLE_KEY>', 'gmail_sync_service_key');
 ```
 
-O refresh token de cada pessoa é cifrado com AES-GCM antes de chegar à tabela. O sync guarda apenas headers, assunto, snippet, IDs e associação CRM — nunca o corpo completo.
+O refresh token de cada pessoa é cifrado com AES-GCM antes de chegar à tabela. O sync guarda apenas headers, assunto, um excerto curto, IDs e associação CRM — nunca o corpo completo. O backfill inicial guarda o cursor, o número de mensagens associadas, contactos criados, último erro e data da execução, para poder retomar sem recomeçar.
 
 O `.env` real não entra no Git, em backups de código ou em mensagens. `SERVICE_ROLE_KEY`, segredo Google e chave de encriptação vivem apenas no servidor.
 
