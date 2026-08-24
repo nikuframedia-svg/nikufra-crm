@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Nikufra CRM",
+  "version": "0.1.0",
+  "identifier": "ai.nikufra.crm",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{
+      "title": "Nikufra CRM",
+      "width": 1440,
+      "height": 920,
+      "minWidth": 1180,
+      "minHeight": 720,
+      "resizable": true,
+      "fullscreen": false
+    }],
+    "security": { "csp": "default-src 'self'; connect-src 'self' https://crm.nikufra.ai wss://crm.nikufra.ai; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:" }
+  },
+  "bundle": { "active": true, "targets": "all", "createUpdaterArtifacts": true, "icon": [] },
+  "plugins": {
+    "updater": {
+      "pubkey": "INJECTED_BY_RELEASE_WORKFLOW",
+      "endpoints": ["https://crm.nikufra.ai/updates/{{target}}/{{arch}}/{{current_version}}"]
+    }
+  }
+}
