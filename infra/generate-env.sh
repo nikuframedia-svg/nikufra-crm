@@ -11,7 +11,8 @@ fi
 
 command -v openssl >/dev/null || { echo "openssl é obrigatório" >&2; exit 1; }
 
-POSTGRES_SECRET="$(openssl rand -base64 48 | tr -d '\n')"
+# Hex evita caracteres reservados na password embebida em DATABASE_URL.
+POSTGRES_SECRET="$(openssl rand -hex 48)"
 JWT_SECRET_VALUE="$(openssl rand -base64 48 | tr -d '\n')"
 SECRET_BASE="$(openssl rand -base64 64 | tr -d '\n')"
 REALTIME_KEY="$(openssl rand -hex 16)"

@@ -11,7 +11,7 @@ select policies_are('public', 'objetivos', array['objetivos_read','objetivos_adm
 select policies_are('public', 'estado_historico', array['estado_historico_read']);
 
 set local role anon;
-select is_empty('select * from public.empresas', 'anon não lê empresas');
+select throws_ok('select * from public.empresas', '42501', null, 'anon não lê empresas');
 select throws_ok($$insert into public.empresas(nome, origem) values ('Intruso', 'inbound')$$, '42501', null, 'anon não escreve empresas');
 
 reset role;

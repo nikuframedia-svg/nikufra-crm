@@ -20,7 +20,7 @@ pnpm install
 pnpm dev
 ```
 
-Sem `.env`, a app usa dados fictícios persistidos em `localStorage`. Com `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`, ativa o Auth real e bloqueia o CRM até existir sessão por magic link.
+Sem `.env`, a app usa dados fictícios persistidos em `localStorage`. Com `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`, ativa o Auth real e bloqueia o CRM até existir sessão por magic link. A build instalada regista `nikufra-crm://` para receber magic links e o retorno OAuth; no desenvolvimento web usa a origem local.
 
 ```bash
 pnpm build

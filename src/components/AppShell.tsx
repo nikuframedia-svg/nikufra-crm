@@ -20,6 +20,7 @@ import {
   Users,
 } from "lucide-react";
 import { useCRM } from "../state/crm-context";
+import { supabase } from "../lib/supabase";
 import { Wordmark } from "./Logo";
 import { Button, Modal, StageChip } from "./ui";
 
@@ -35,7 +36,7 @@ const navItems = [
 
 export function AppShell() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const { leads, opportunities, addActivity, team, dataMode } = useCRM();
+  const { leads, opportunities, addActivity, team, dataMode, currentUserId } = useCRM();
   const [collapsed, setCollapsed] = useState(false);
   const [dark, setDark] = useState(true);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -66,7 +67,7 @@ export function AppShell() {
   }, [leads, query]);
 
   const activeLabel = navItems.find((item) => item.to === pathname)?.label ?? "Definições";
-  const currentUser = team.find((owner) => owner.email === "joao@nikufra.ai") ?? team[0];
+  const currentUser = team.find((owner) => owner.id === currentUserId) ?? team[0];
 
   function handleNewActivity(formData: FormData) {
     const opportunityId = String(formData.get("opportunityId"));
@@ -75,7 +76,7 @@ export function AppShell() {
       id: crypto.randomUUID(),
       oportunidadeId: opportunity.id,
       empresa: opportunity.empresa,
-      userId: "o1",
+      userId: currentUser?.id ?? currentUserId,
       tipo: String(formData.get("tipo")) as "email" | "chamada" | "reuniao" | "proposta" | "nota",
       descricao: String(formData.get("descricao")),
       data: new Date().toISOString(),
@@ -98,7 +99,7 @@ export function AppShell() {
           <Link to="/definicoes" className="nav-item" activeProps={{ className: "nav-item nav-item--active" }}><Settings size={17} /><span>Definições</span></Link>
         </nav>
         <div className="sidebar__footer">
-          <button className="user-card"><span className="avatar avatar--md" style={{ "--avatar": currentUser?.cor ?? "#3b82f6" } as React.CSSProperties}>{currentUser?.iniciais ?? "N"}</span><span><strong>{currentUser?.nome ?? "Nikufra"}</strong><small>{currentUser?.role === "admin" ? "Administrador" : "Membro"}</small></span><ChevronDown size={15} /></button>
+          <button className="user-card" onClick={() => { if (supabase) void supabase.auth.signOut(); }} title={supabase ? "Terminar sessão" : "Modo de demonstração"}><span className="avatar avatar--md" style={{ "--avatar": currentUser?.cor ?? "#3b82f6" } as React.CSSProperties}>{currentUser?.iniciais ?? "N"}</span><span><strong>{currentUser?.nome ?? "Nikufra"}</strong><small>{supabase ? "Terminar sessão" : currentUser?.role === "admin" ? "Administrador" : "Membro"}</small></span><ChevronDown size={15} /></button>
         </div>
       </aside>
       <div className="workspace">

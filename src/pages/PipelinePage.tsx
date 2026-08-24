@@ -66,7 +66,7 @@ export function PipelinePage() {
     const empresa = String(formData.get("empresa"));
     const contact = String(formData.get("contacto"));
     const lead: Lead = { id: leadId, nome: contact, cargo: String(formData.get("cargo")), empresa, email: String(formData.get("email")), telefone: String(formData.get("telefone")), vertical: String(formData.get("vertical")) as Vertical, cidade: "", pais: "PT", origem: "Registo manual", estado, ownerId };
-    const opportunity: Opportunity = { id, leadId, empresa, titulo: String(formData.get("titulo")), estado, tipo: String(formData.get("tipo")) as Opportunity["tipo"], valor: Number(formData.get("valor")), probabilidade: stageProbability[estado], ownerId, diasNoEstado: 0, dataPrimeiroContacto: new Date().toISOString().slice(0, 10), dataFechoPrevista: String(formData.get("fecho")) };
+    const opportunity: Opportunity = { id, leadId, empresa, titulo: String(formData.get("titulo")), estado, tipo: String(formData.get("tipo")) as Opportunity["tipo"], valor: Number(formData.get("valor")), probabilidade: stageProbability[estado], ownerId, diasNoEstado: 0, dataPrimeiroContacto: estado === "nao_contactado" ? "" : new Date().toISOString().slice(0, 10), dataFechoPrevista: String(formData.get("fecho")) };
     addOpportunity(opportunity, lead);
     setNewOpen(false);
   }
@@ -92,7 +92,7 @@ export function PipelinePage() {
       </Modal>
 
       <Modal open={Boolean(lostPending)} onClose={() => setLostPending(null)} title="Marcar como perdido" description="O motivo é obrigatório para manter as métricas honestas.">
-        <form onSubmit={(event) => { event.preventDefault(); if (lostPending) moveOpportunity(lostPending, "perdido"); setLostPending(null); }} className="form-stack"><label>Motivo<select name="motivo" required><option value="">Selecionar...</option><option>Preço</option><option>Timing</option><option>Sem orçamento</option><option>Concorrente</option><option>Sem resposta</option><option>Não prioritário</option><option>Outro</option></select></label><label>Notas<textarea rows={3} placeholder="Contexto útil para uma futura reativação." /></label><div className="modal__actions"><Button type="button" variant="secondary" onClick={() => setLostPending(null)}>Cancelar</Button><Button type="submit" variant="danger">Confirmar perda</Button></div></form>
+        <form onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); if (lostPending) moveOpportunity(lostPending, "perdido", { motivo: String(data.get("motivo")), notas: String(data.get("notas")) }); setLostPending(null); }} className="form-stack"><label>Motivo<select name="motivo" required><option value="">Selecionar...</option><option value="preco">Preço</option><option value="timing">Timing</option><option value="sem_orcamento">Sem orçamento</option><option value="concorrente">Concorrente</option><option value="sem_resposta">Sem resposta</option><option value="nao_prioritario">Não prioritário</option><option value="outro">Outro</option></select></label><label>Notas<textarea name="notas" rows={3} placeholder="Contexto útil para uma futura reativação." /></label><div className="modal__actions"><Button type="button" variant="secondary" onClick={() => setLostPending(null)}>Cancelar</Button><Button type="submit" variant="danger">Confirmar perda</Button></div></form>
       </Modal>
     </div>
   );

@@ -104,6 +104,7 @@ services:
     environment:
       JWT_SECRET: ${JWT_SECRET}
       SUPABASE_URL: http://kong:8000
+      SUPABASE_PUBLIC_URL: https://${CRM_DOMAIN}
       SUPABASE_ANON_KEY: ${ANON_KEY}
       SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
       SUPABASE_DB_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
@@ -147,7 +148,7 @@ services:
     networks: [backend]
 
   kong:
-    image: kong:2.8.1
+    image: kong/kong:3.9.1
     restart: unless-stopped
     depends_on:
       auth: { condition: service_healthy }

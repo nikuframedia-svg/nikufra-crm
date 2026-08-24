@@ -261,6 +261,7 @@ do $$ declare t text; begin
 end $$;
 
 create policy profiles_read on public.profiles for select to authenticated using (public.is_active_member());
+create policy profiles_read_self on public.profiles for select to authenticated using (id = auth.uid());
 create policy profiles_update_self on public.profiles for update to authenticated using (id = auth.uid() and public.is_active_member()) with check (id = auth.uid() and public.is_active_member());
 create policy profiles_admin_all on public.profiles for all to authenticated using (public.is_admin()) with check (public.is_admin());
 
