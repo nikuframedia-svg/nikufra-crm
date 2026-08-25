@@ -27,8 +27,8 @@
       "desktop": { "schemes": ["nikufra-crm"] }
     },
     "updater": {
-      "pubkey": "INJECTED_BY_RELEASE_WORKFLOW",
-      "endpoints": ["https://crm.nikufra.ai/updates/{{target}}/{{arch}}/{{current_version}}"]
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM4RkM4NTY2MDNCRDQwRgpSV1FQMUR0Z1ZzaVBBeEkzMUFDY2VUYzVBa0M2WTZOcUJqQ01zVXFxTzZWT2JzRHlONzA1d0VPeQo=",
+      "endpoints": ["https://crm.nikufra.ai/updates/latest.json"]
     }
   }
 }

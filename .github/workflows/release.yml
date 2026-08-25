@@ -15,10 +15,10 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: --target universal-apple-darwin
+            args: --target universal-apple-darwin --bundles app,dmg
             target: universal-apple-darwin
           - platform: windows-latest
-            args: ""
+            args: --bundles nsis
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.platform }}
     steps:
@@ -50,4 +50,52 @@ jobs:
           releaseBody: "Release interno do CRM Nikufra."
           releaseDraft: true
           prerelease: false
+          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
+
+  publish:
+    name: Publicar canal interno
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Descarregar artefactos assinados
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          tag="v$(node -p "require('./package.json').version")"
+          mkdir -p release payload/assets
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir release
+          test -s release/latest.json
+          find release -maxdepth 1 -type f ! -name latest.json -exec cp -- {} payload/assets/ \;
+          jq --arg base "https://crm.nikufra.ai/updates/assets/" \
+            '.platforms |= with_entries(.value.url = ($base + (.value.url | split("/") | last)))' \
+            release/latest.json > payload/latest.json
+      - name: Preparar SSH restrito
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          install -d -m 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Publicar atomicamente no servidor
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -Eeuo pipefail
+          tar -C payload -czf - latest.json assets | \
+            ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 "$DEPLOY_USER@$DEPLOY_HOST" publish
+      - name: Publicar release no GitHub
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
