@@ -1,11 +1,8 @@
-do $$ begin
-  if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin noinherit; end if;
-  if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin noinherit; end if;
-  if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin bypassrls; end if;
-exception when duplicate_object then null;
-end $$;
+-- Corre depois do bootstrap assinado que cria estas roles reservadas.
+-- A password nunca fica neste ficheiro: é lida do ambiente do contentor.
+\set pgpass `echo "$POSTGRES_PASSWORD"`
 
-grant usage on schema public to anon, authenticated, service_role;
-alter default privileges in schema public grant select, insert, update on tables to authenticated;
-alter default privileges in schema public grant all on tables to service_role;
-alter default privileges in schema public grant usage, select on sequences to authenticated, service_role;
+alter user authenticator with password :'pgpass';
+alter user pgbouncer with password :'pgpass';
+alter user supabase_auth_admin with password :'pgpass';
+alter user supabase_storage_admin with password :'pgpass';

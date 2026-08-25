@@ -39,6 +39,7 @@ Deno.serve(async (request) => {
     const body = await request.json();
     const leads = (Array.isArray(body.leads) ? body.leads.slice(0, 1000) : []) as Array<Record<string, unknown>>;
     const incomingOpportunities = (Array.isArray(body.opportunities) ? body.opportunities.slice(0, 1000) : []) as Array<Record<string, unknown>>;
+    const incomingActivities = (Array.isArray(body.activities) ? body.activities.slice(0, 2000) : []) as Array<Record<string, unknown>>;
     const revenueEntries = (Array.isArray(body.revenueEntries) ? body.revenueEntries.slice(0, 1000) : []) as Array<Record<string, unknown>>;
     const requestedNikufraFinancials = body.includeNikufraFinancials === true;
     if (!leads.length) return Response.json({ error: "Sem contactos para importar" }, { status: 400, headers: corsHeaders });
@@ -157,6 +158,32 @@ Deno.serve(async (request) => {
     const insertedOpportunities = await insertChunks(admin, "oportunidades", opportunitiesToInsert);
     for (const opportunity of insertedOpportunities) opportunityByCompany.set(String(opportunity.empresa_id), opportunity);
 
+    const allowedActivityTypes = new Set(["email", "chamada", "reuniao", "proposta", "nota"]);
+    const activityRows: Array<Record<string, unknown>> = [];
+    for (const activity of incomingActivities) {
+      const company = companyByName.get(normalize(clean(activity.empresa, 240)));
+      if (!company) continue;
+      const opportunity = opportunityByCompany.get(String(company.id));
+      const contactId = clean(activity.contactoId, 36);
+      const contact = [...contactByEmail.values()].find((candidate) => String(candidate.id) === contactId);
+      const activityType = clean(activity.tipo, 40);
+      const date = clean(activity.data, 40);
+      activityRows.push({
+        id: validUuid(activity.id),
+        oportunidade_id: opportunity?.id ?? null,
+        empresa_id: company.id,
+        contacto_id: contact?.id ?? null,
+        user_id: user.id,
+        tipo: allowedActivityTypes.has(activityType) ? activityType : "nota",
+        data: date || new Date().toISOString(),
+        descricao: clean(activity.descricao, 4000) || "Atividade importada",
+      });
+    }
+    for (let index = 0; index < activityRows.length; index += 250) {
+      const { error } = await admin.from("atividades").upsert(activityRows.slice(index, index + 250), { onConflict: "id" });
+      if (error) throw error;
+    }
+
     const billingRows: Array<Record<string, unknown>> = [];
     for (const entry of revenueEntries) {
       const company = companyByName.get(normalize(clean(entry.empresa, 240))); const type = clean(entry.tipo).toLowerCase();
@@ -180,7 +207,7 @@ Deno.serve(async (request) => {
       ));
       const error = results.find((result) => result.error)?.error; if (error) throw error;
     }
-    return Response.json({ contactsCreated: insertedContacts.length, contactsUpdated: contactsToUpdate.length, companiesCreated: insertedCompanies.length, opportunitiesCreated: insertedOpportunities.length, opportunitiesUpdated: opportunitiesToUpdate.length, revenueImported: billingRows.length }, { headers: corsHeaders });
+    return Response.json({ contactsCreated: insertedContacts.length, contactsUpdated: contactsToUpdate.length, companiesCreated: insertedCompanies.length, opportunitiesCreated: insertedOpportunities.length, opportunitiesUpdated: opportunitiesToUpdate.length, activitiesImported: activityRows.length, revenueImported: billingRows.length }, { headers: corsHeaders });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400, headers: corsHeaders });
   }

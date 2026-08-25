@@ -1,0 +1,41 @@
+services:
+  auth:
+    depends_on:
+      db: { condition: service_healthy }
+      mailpit: { condition: service_started }
+    environment:
+      API_EXTERNAL_URL: http://localhost:8000/auth/v1
+      GOTRUE_SITE_URL: http://127.0.0.1:1420
+      GOTRUE_URI_ALLOW_LIST: nikufra-crm://auth/callback,http://localhost:1420,http://127.0.0.1:1420,http://localhost:1423,http://127.0.0.1:1423
+      GOTRUE_SMTP_ADMIN_EMAIL: hello@nikufra.ai
+      GOTRUE_SMTP_HOST: mailpit
+      GOTRUE_SMTP_PORT: 1025
+      GOTRUE_SMTP_USER: ""
+      GOTRUE_SMTP_PASS: ""
+
+  functions:
+    environment:
+      SUPABASE_PUBLIC_URL: http://localhost:8000
+
+  studio:
+    environment:
+      SUPABASE_PUBLIC_URL: http://localhost:8000
+
+  kong:
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  mailpit:
+    image: axllent/mailpit:v1.31.0
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: 100
+      MP_DATABASE: /data/mailpit.db
+    ports:
+      - "127.0.0.1:8025:8025"
+    volumes:
+      - mailpit-data:/data
+    networks: [backend]
+
+volumes:
+  mailpit-data:

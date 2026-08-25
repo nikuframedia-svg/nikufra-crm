@@ -13,9 +13,9 @@ create trigger set_updated_at before update on public.pipeline_settings for each
 insert into public.pipeline_settings(estado,probabilidade_padrao,ordem) values
 ('nao_contactado',0,1),('contactado',5,2),('reuniao_marcada',15,3),('reuniao_feita',30,4),('proposta',50,5),('piloto',75,6),('cliente',100,7),('perdido',0,8),('adiado',10,9);
 
-create or replace function public.probabilidade_padrao(target public.oportunidade_estado)
+create or replace function public.probabilidade_padrao(estado public.oportunidade_estado)
 returns integer language sql stable strict security definer set search_path = public as $$
-  select probabilidade_padrao from public.pipeline_settings where estado = target;
+  select settings.probabilidade_padrao from public.pipeline_settings settings where settings.estado = $1;
 $$;
 
 alter table public.pipeline_settings enable row level security;

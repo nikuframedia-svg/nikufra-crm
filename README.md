@@ -20,6 +20,17 @@ pnpm install
 pnpm dev
 ```
 
+### Instalação local completa no Mac
+
+Com Docker Desktop aberto, o perfil local cria segredos fortes, liga o frontend à API, arranca o Supabase e aplica apenas as migrations ainda em falta:
+
+```bash
+pnpm local:up
+pnpm dev
+```
+
+Os magic links locais ficam em `http://127.0.0.1:8025`; nenhum email de teste sai do Mac. A primeira conta `@nikufra.ai` autenticada torna-se o administrador inicial. Para parar os serviços sem apagar dados, usar `pnpm local:down`. Para gerar a aplicação nativa, usar `pnpm desktop:build`.
+
 No desenvolvimento sem `.env`, a app pode abrir uma cópia local da base fornecida, gerada por `scripts/generate-real-data.mjs`. Esse ficheiro e a cópia do CSV estão no `.gitignore`: nunca entram no Git nem nos assets públicos. Não existem utilizadores, leads ou métricas fictícias. Com `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`, ativa o Auth real e bloqueia o CRM até existir sessão por magic link. A build instalada regista `nikufra-crm://` para receber magic links e o retorno OAuth; no desenvolvimento web usa a origem local.
 
 No servidor, abre “Leads → Importar CSV” e seleciona o ficheiro fornecido. A operação autenticada é idempotente: associa contactos por email, consolida empresas, cria uma única oportunidade base por empresa e reconhece esta base para importar também os movimentos financeiros comunicados, sem duplicar IDs. Para qualquer outro CSV, a pré-visualização mostra o mapeamento inferido e permite corrigir cada coluna.

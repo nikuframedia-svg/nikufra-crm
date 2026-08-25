@@ -110,6 +110,8 @@ const realMeetingMonths = [...meetingsByMonth.entries()].toSorted().map(([month,
 const output = `// Gerado mecanicamente a partir do CSV real fornecido em 2026-08-25.\nimport type { Activity, Lead, Opportunity, RevenueEntry, RevenueMonth } from "../types";\n\nexport const realLeads: Lead[] = ${JSON.stringify(realLeads, null, 2)};\n\nexport const realOpportunities: Opportunity[] = ${JSON.stringify(realOpportunities, null, 2)};\n\nexport const realActivities: Activity[] = ${JSON.stringify(realActivities, null, 2)};\n\nexport const realRevenueEntries: RevenueEntry[] = ${JSON.stringify(realRevenueEntries, null, 2)};\n\nexport const realRevenueMonths: RevenueMonth[] = ${JSON.stringify(realRevenueMonths, null, 2)};\n\nexport const realConversionData = ${JSON.stringify(realConversionData, null, 2)};\n\nexport const realMeetingMonths = ${JSON.stringify(realMeetingMonths, null, 2)};\n`;
 const generatedPath = resolve("src/data/real-data.generated.ts");
 const csvCopyPath = resolve("supabase/imports/nikufra_leads.csv");
+const importPayloadPath = resolve("supabase/imports/nikufra_import_payload.json");
 await mkdir(dirname(generatedPath), { recursive: true }); await mkdir(dirname(csvCopyPath), { recursive: true });
 await writeFile(generatedPath, output); await writeFile(csvCopyPath, `${sourceText}\n`);
+await writeFile(importPayloadPath, `${JSON.stringify({ leads: realLeads, opportunities: realOpportunities, activities: realActivities, includeNikufraFinancials: true })}\n`);
 console.log(JSON.stringify({ contacts: realLeads.length, companies: realOpportunities.length, meetings: realActivities.length, clients, invoicedNet: 13675, contracted: 51500 }));

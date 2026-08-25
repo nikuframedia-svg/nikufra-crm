@@ -2,6 +2,12 @@
 
 Esta pasta descreve o deployment self-hosted. O `docker-compose.yml` é uma variante reduzida do snapshot oficial Supabase: mantém Postgres, Auth, PostgREST, Realtime, Edge Runtime, Meta, Studio e Kong; não inclui Storage, imgproxy, analytics nem Supavisor. As imagens têm tags fixas e o Postgres permanece em 15 (`15.8.1.085`) por decisão de arquitetura.
 
+## Perfil local no macOS
+
+`docker-compose.local.yml` é um override exclusivamente local: publica a API apenas em `127.0.0.1:8000` e usa Mailpit em `127.0.0.1:8025` para capturar magic links. Não arranca Caddy nem publica a base de dados. O bootstrap de roles e schemas é o que vem assinado na imagem oficial `supabase/postgres`; o projeto aplica apenas o schema CRM depois de o stack estar saudável. `./local-up.sh` gera `infra/.env` e `.env.local` com modo `600`, inicia os serviços, aplica migrations uma única vez e configura o scheduler Gmail. `./local-down.sh` para os contentores sem eliminar volumes.
+
+As credenciais Google são a única configuração partilhada entre local e servidor que não pode ser gerada automaticamente. No desenvolvimento, o callback é `http://localhost:8000/functions/v1/gmail-oauth-callback`; no servidor passa a ser `https://crm.nikufra.ai/functions/v1/gmail-oauth-callback`.
+
 ## Pré-requisitos
 
 - Ubuntu LTS atualizado, 4 vCPU, 8 GB RAM e 80 GB SSD.

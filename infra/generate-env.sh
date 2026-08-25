@@ -15,7 +15,8 @@ command -v openssl >/dev/null || { echo "openssl é obrigatório" >&2; exit 1; }
 POSTGRES_SECRET="$(openssl rand -hex 48)"
 JWT_SECRET_VALUE="$(openssl rand -base64 48 | tr -d '\n')"
 SECRET_BASE="$(openssl rand -base64 64 | tr -d '\n')"
-REALTIME_KEY="$(openssl rand -hex 16)"
+# Realtime usa AES-128 e exige exatamente 16 bytes/caracteres nesta variável.
+REALTIME_KEY="$(openssl rand -hex 8)"
 META_KEY="$(openssl rand -base64 32 | tr -d '\n')"
 TOKEN_KEY="$(openssl rand -base64 32 | tr -d '\n')"
 DASHBOARD_SECRET="$(openssl rand -base64 32 | tr -d '\n')"

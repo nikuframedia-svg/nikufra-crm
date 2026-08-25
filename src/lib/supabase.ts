@@ -4,7 +4,7 @@ const url = import.meta.env.VITE_SUPABASE_URL;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-export const supabase = url && anonKey ? createClient(url, anonKey, {
+export const supabase = typeof window !== "undefined" && url && anonKey ? createClient(url, anonKey, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: !isTauri },
 }) : null;
 
