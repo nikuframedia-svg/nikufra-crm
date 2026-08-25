@@ -32,6 +32,11 @@ for key in "${required[@]}"; do
   fi
 done
 
+if [[ "${AUTH_EMAIL_HOOK_ENABLED:-false}" == "true" && -z "${AUTH_EMAIL_HOOK_SECRET:-}" ]]; then
+  echo "AUTH_EMAIL_HOOK_SECRET é obrigatório quando AUTH_EMAIL_HOOK_ENABLED=true" >&2
+  exit 1
+fi
+
 if [[ "${CRM_DOMAIN}" == "localhost" || "${CRM_DOMAIN}" == 127.* ]]; then
   echo "CRM_DOMAIN tem de ser um domínio público de produção." >&2
   exit 1

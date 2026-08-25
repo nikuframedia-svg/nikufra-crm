@@ -258,7 +258,9 @@ Deno.serve(async (request) => {
         try {
           do {
             const historyUrl = new URL("https://gmail.googleapis.com/gmail/v1/users/me/history");
-            historyUrl.searchParams.set("startHistoryId", newestHistory);
+            const startHistoryId = newestHistory;
+            if (!startHistoryId) break;
+            historyUrl.searchParams.set("startHistoryId", startHistoryId);
             historyUrl.searchParams.set("historyTypes", "messageAdded");
             historyUrl.searchParams.set("maxResults", "100");
             if (pageToken) historyUrl.searchParams.set("pageToken", pageToken);

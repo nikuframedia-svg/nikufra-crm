@@ -1,10 +1,13 @@
+/// <reference path="./edge-runtime.d.ts" />
+
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
 const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
 const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 Deno.serve(async (request) => {
   const functionName = new URL(request.url).pathname.split("/").filter(Boolean)[0];
-  if (request.method !== "OPTIONS" && functionName !== "gmail-oauth-callback") {
+  const independentlyAuthenticated = new Set(["gmail-oauth-callback", "send-auth-email"]);
+  if (request.method !== "OPTIONS" && !independentlyAuthenticated.has(functionName)) {
     const authorization = request.headers.get("authorization") ?? "";
     const isServiceRequest = authorization === `Bearer ${serviceKey}`;
     if (!isServiceRequest) {

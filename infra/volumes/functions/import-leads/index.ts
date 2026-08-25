@@ -3,6 +3,9 @@ import { activeUser, adminClient, corsHeaders } from "../_shared/security.ts";
 const allowedStages = new Set(["nao_contactado", "contactado", "reuniao_marcada", "reuniao_feita", "proposta", "piloto", "cliente", "perdido", "adiado"]);
 const verticals: Record<string, string> = { "Metalomecânica": "metalomecanica", "Automóvel": "automovel", "Alumínio": "aluminio", "Cortiça": "cortica", "Compósitos": "compositos", "Eletrónica": "eletronica", Outro: "outro" };
 const publicEmailDomains = new Set(["gmail.com", "hotmail.com", "hotmail.pt", "outlook.com", "outlook.pt", "icloud.com", "me.com", "live.com", "live.pt", "yahoo.com", "yahoo.es", "sapo.pt"]);
+type CompanyRow = Record<string, unknown> & { id: string; nome: string; nome_normalizado: string | null; email_domain: string | null };
+type ContactRow = Record<string, unknown> & { id: string; email: string | null; empresa_id: string };
+type OpportunityRow = Record<string, unknown> & { id: string; empresa_id: string; import_key: string | null };
 
 function normalize(value: string) {
   return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
@@ -52,8 +55,9 @@ Deno.serve(async (request) => {
     const firstError = companyLoadError ?? contactLoadError ?? opportunityLoadError;
     if (firstError) throw firstError;
 
-    const companyByName = new Map((existingCompanies ?? []).map((company) => [company.nome_normalizado || normalize(company.nome), company]));
-    const companyByDomain = new Map((existingCompanies ?? []).filter((company) => company.email_domain && !publicEmailDomains.has(String(company.email_domain).toLowerCase())).map((company) => [String(company.email_domain).toLowerCase(), company]));
+    const companyRows = (existingCompanies ?? []) as CompanyRow[];
+    const companyByName = new Map<string, CompanyRow>(companyRows.map((company) => [company.nome_normalizado || normalize(company.nome), company]));
+    const companyByDomain = new Map<string, CompanyRow>(companyRows.filter((company) => company.email_domain && !publicEmailDomains.has(company.email_domain.toLowerCase())).map((company) => [String(company.email_domain).toLowerCase(), company]));
     const leadByCompany = new Map<string, Record<string, unknown>>();
     for (const lead of leads) {
       const companyName = clean(lead.empresa, 240); const email = clean(lead.email, 320).toLowerCase();
@@ -88,10 +92,10 @@ Deno.serve(async (request) => {
     const companyUpdateError = companyUpdates.find((result) => result.error)?.error;
     if (companyUpdateError) throw companyUpdateError;
     const insertedCompanies = await insertChunks(admin, "empresas", companiesToInsert);
-    for (const company of insertedCompanies) companyByName.set(String(company.nome_normalizado), company);
+    for (const company of insertedCompanies as CompanyRow[]) companyByName.set(String(company.nome_normalizado), company);
     const newCompanyIds = new Set(insertedCompanies.map((company) => String(company.id)));
 
-    const contactByEmail = new Map((existingContacts ?? []).filter((contact) => contact.email).map((contact) => [String(contact.email).toLowerCase(), contact]));
+    const contactByEmail = new Map<string, ContactRow>(((existingContacts ?? []) as ContactRow[]).filter((contact) => contact.email).map((contact) => [String(contact.email).toLowerCase(), contact]));
     const firstNewContactByCompany = new Set<string>();
     const contactsToInsert: Array<Record<string, unknown>> = [];
     const contactsToUpdate: Array<{ id: unknown; changes: Record<string, unknown> }> = [];
@@ -118,9 +122,9 @@ Deno.serve(async (request) => {
       const error = results.find((result) => result.error)?.error; if (error) throw error;
     }
     const insertedContacts = await insertChunks(admin, "contactos", contactsToInsert);
-    for (const contact of insertedContacts) contactByEmail.set(String(contact.email).toLowerCase(), contact);
+    for (const contact of insertedContacts as ContactRow[]) contactByEmail.set(String(contact.email).toLowerCase(), contact);
 
-    const opportunityByCompany = new Map((existingOpportunities ?? []).map((opportunity) => [String(opportunity.empresa_id), opportunity]));
+    const opportunityByCompany = new Map<string, OpportunityRow>(((existingOpportunities ?? []) as OpportunityRow[]).map((opportunity) => [String(opportunity.empresa_id), opportunity]));
     const incomingOpportunityBySourceCompany = new Map(incomingOpportunities.map((opportunity) => [clean(opportunity.empresaId), opportunity]));
     const opportunitiesToInsert: Array<Record<string, unknown>> = [];
     const opportunitiesToUpdate: Array<{ id: unknown; changes: Record<string, unknown> }> = [];
@@ -156,7 +160,7 @@ Deno.serve(async (request) => {
       const error = results.find((result) => result.error)?.error; if (error) throw error;
     }
     const insertedOpportunities = await insertChunks(admin, "oportunidades", opportunitiesToInsert);
-    for (const opportunity of insertedOpportunities) opportunityByCompany.set(String(opportunity.empresa_id), opportunity);
+    for (const opportunity of insertedOpportunities as OpportunityRow[]) opportunityByCompany.set(String(opportunity.empresa_id), opportunity);
 
     const allowedActivityTypes = new Set(["email", "chamada", "reuniao", "proposta", "nota"]);
     const activityRows: Array<Record<string, unknown>> = [];

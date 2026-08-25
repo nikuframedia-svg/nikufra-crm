@@ -20,6 +20,7 @@ REALTIME_KEY="$(openssl rand -hex 8)"
 META_KEY="$(openssl rand -base64 32 | tr -d '\n')"
 TOKEN_KEY="$(openssl rand -base64 32 | tr -d '\n')"
 DASHBOARD_SECRET="$(openssl rand -base64 32 | tr -d '\n')"
+AUTH_EMAIL_HOOK_SECRET_VALUE="v1,whsec_$(openssl rand -base64 32 | tr -d '\n')"
 
 issue_jwt() {
   local role="$1"
@@ -31,6 +32,6 @@ issue_jwt() {
 }
 
 cp "${SCRIPT_DIR}/.env.example" "${TARGET}"
-perl -0pi -e "s|^POSTGRES_PASSWORD=.*$|POSTGRES_PASSWORD=${POSTGRES_SECRET}|m; s|^JWT_SECRET=.*$|JWT_SECRET=${JWT_SECRET_VALUE}|m; s|^ANON_KEY=.*$|ANON_KEY=$(issue_jwt anon)|m; s|^SERVICE_ROLE_KEY=.*$|SERVICE_ROLE_KEY=$(issue_jwt service_role)|m; s|^SECRET_KEY_BASE=.*$|SECRET_KEY_BASE=${SECRET_BASE}|m; s|^REALTIME_DB_ENC_KEY=.*$|REALTIME_DB_ENC_KEY=${REALTIME_KEY}|m; s|^PG_META_CRYPTO_KEY=.*$|PG_META_CRYPTO_KEY=${META_KEY}|m; s|^TOKEN_ENCRYPTION_KEY=.*$|TOKEN_ENCRYPTION_KEY=${TOKEN_KEY}|m; s|^DASHBOARD_PASSWORD=.*$|DASHBOARD_PASSWORD=${DASHBOARD_SECRET}|m" "${TARGET}"
+perl -0pi -e "s|^POSTGRES_PASSWORD=.*$|POSTGRES_PASSWORD=${POSTGRES_SECRET}|m; s|^JWT_SECRET=.*$|JWT_SECRET=${JWT_SECRET_VALUE}|m; s|^ANON_KEY=.*$|ANON_KEY=$(issue_jwt anon)|m; s|^SERVICE_ROLE_KEY=.*$|SERVICE_ROLE_KEY=$(issue_jwt service_role)|m; s|^SECRET_KEY_BASE=.*$|SECRET_KEY_BASE=${SECRET_BASE}|m; s|^REALTIME_DB_ENC_KEY=.*$|REALTIME_DB_ENC_KEY=${REALTIME_KEY}|m; s|^PG_META_CRYPTO_KEY=.*$|PG_META_CRYPTO_KEY=${META_KEY}|m; s|^TOKEN_ENCRYPTION_KEY=.*$|TOKEN_ENCRYPTION_KEY=${TOKEN_KEY}|m; s|^DASHBOARD_PASSWORD=.*$|DASHBOARD_PASSWORD=${DASHBOARD_SECRET}|m; s|^AUTH_EMAIL_HOOK_SECRET=.*$|AUTH_EMAIL_HOOK_SECRET=${AUTH_EMAIL_HOOK_SECRET_VALUE}|m" "${TARGET}"
 chmod 600 "${TARGET}"
 echo "Segredos gerados em ${TARGET} (modo 600). Preenche SMTP, rclone e Google antes de arrancar."

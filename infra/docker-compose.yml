@@ -53,6 +53,9 @@ services:
       GOTRUE_SMTP_USER: ${SMTP_USER}
       GOTRUE_SMTP_PASS: ${SMTP_PASS}
       GOTRUE_SMTP_SENDER_NAME: Nikufra CRM
+      GOTRUE_HOOK_SEND_EMAIL_ENABLED: ${AUTH_EMAIL_HOOK_ENABLED:-false}
+      GOTRUE_HOOK_SEND_EMAIL_URI: https://${CRM_DOMAIN}/functions/v1/send-auth-email
+      GOTRUE_HOOK_SEND_EMAIL_SECRETS: ${AUTH_EMAIL_HOOK_SECRET:-}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
       interval: 5s
@@ -118,6 +121,7 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
+      AUTH_EMAIL_HOOK_SECRET: ${AUTH_EMAIL_HOOK_SECRET:-}
     command: ["start", "--main-service", "/home/deno/functions/main"]
     networks: [backend]
 

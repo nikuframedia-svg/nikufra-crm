@@ -1,6 +1,6 @@
 # Infraestrutura Nikufra CRM
 
-Esta pasta descreve o deployment self-hosted. O `docker-compose.yml` é uma variante reduzida do snapshot oficial Supabase: mantém Postgres, Auth, PostgREST, Realtime, Edge Runtime, Meta, Studio e Kong; não inclui Storage, imgproxy, analytics nem Supavisor. As imagens têm tags fixas e o Postgres permanece em 15 (`15.8.1.085`) por decisão de arquitetura.
+Esta pasta descreve o deployment self-hosted. O `docker-compose.yml` é uma variante reduzida do snapshot oficial Supabase. O perfil de produção arranca apenas Postgres, Auth, PostgREST, Realtime, Edge Runtime e Kong; Meta e Studio ficam disponíveis para diagnóstico local, mas são omitidos no arranque normal. Não inclui Storage, imgproxy, analytics nem Supavisor. As imagens têm tags fixas e o Postgres permanece em 15 (`15.8.1.085`) por decisão de arquitetura.
 
 ## Perfil local no macOS
 
@@ -13,12 +13,12 @@ As credenciais Google são a única configuração partilhada entre local e serv
 - Ubuntu LTS atualizado, 4 vCPU, 8 GB RAM e 80 GB SSD.
 - DNS `crm.nikufra.ai` a apontar para o servidor.
 - Docker Engine + Compose, `openssl`, `rclone`, `mailutils`, `ufw` e `fail2ban`.
-- Relay SMTP Google Workspace ou Resend já testado.
+- Uma conta Gmail de administrador já autorizada na app, para enviar os emails de autenticação pelo Gmail API. SMTP pode ficar configurado como fallback enquanto o hook está desligado.
 
 ## Instalação
 
 1. Copiar `infra/` e `supabase/` para o servidor, mantendo a mesma relação entre pastas.
-2. Executar `./generate-env.sh`, preencher SMTP, rclone e Google, e confirmar `stat -c '%a' .env` = `600`. No projeto Google Cloud, ativar Gmail API, People API e Google Calendar API e registar o callback `https://crm.nikufra.ai/functions/v1/gmail-oauth-callback`.
+2. Executar `./generate-env.sh`, preencher SMTP de fallback, rclone e Google, e confirmar `stat -c '%a' .env` = `600`. No projeto Google Cloud, ativar Gmail API, People API e Google Calendar API e registar o callback `https://crm.nikufra.ai/functions/v1/gmail-oauth-callback`.
 3. Validar configuração: `docker compose --env-file .env config --quiet`.
 4. Arrancar: `docker compose --env-file .env up -d --wait`.
 5. Aplicar migrations por ordem, depois do Auth estar saudável:
@@ -81,9 +81,11 @@ dropdb nikufra_restore_test
 
 Registar data, duração, contagens e resultado do teste. Não promover uma atualização de imagens sem dump verificado e plano de rollback.
 
-## SMTP, convites e magic links
+## Convites e magic links
 
-O Auth não entrega magic links sem SMTP. Se for usado Google Workspace, limitar o relay ao IP do servidor. A primeira conta tem de ser `@nikufra.ai`; as seguintes podem ser Google Workspace ou `@gmail.com`, mas têm de corresponder a um convite ainda não usado, criado por um administrador. O trigger da base de dados repete esta verificação para que não possa ser contornada pelo cliente.
+Em produção, o Send Email Hook assinado substitui o SMTP do Auth e envia convites e magic links através do Gmail API da conta de administrador já autorizada. O endpoint rejeita payloads sem assinatura Standard Webhooks e usa um registo idempotente para não repetir mensagens. A chave do hook é criada por `generate-env.sh` e nunca entra no Git. Manter `AUTH_EMAIL_HOOK_ENABLED=false` até o domínio público responder por HTTPS; depois alterar para `true`, recriar `auth` e testar um magic link real. Se o hook estiver desligado, o SMTP configurado continua a ser o fallback.
+
+A primeira conta tem de ser `@nikufra.ai`; as seguintes podem ser Google Workspace ou `@gmail.com`, mas têm de corresponder a um convite ainda não usado, criado por um administrador. O trigger da base de dados repete esta verificação para que não possa ser contornada pelo cliente.
 
 ## Atualizações
 

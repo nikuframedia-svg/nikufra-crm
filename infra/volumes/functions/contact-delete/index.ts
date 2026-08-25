@@ -8,7 +8,7 @@ Deno.serve(async (request) => {
     const { user, profile } = await activeUser(request);
     if (profile.role !== "admin") return Response.json({ error: "Apenas administradores podem eliminar contactos" }, { status: 403, headers: corsHeaders });
     const body = await request.json();
-    const ids = [...new Set((Array.isArray(body.ids) ? body.ids : []).map(String))];
+    const ids: string[] = [...new Set<string>((Array.isArray(body.ids) ? body.ids : []).map((id: unknown) => String(id)))];
     if (!ids.length || ids.length > 200 || ids.some((id) => !uuidPattern.test(id))) throw new Error("Seleciona entre 1 e 200 contactos válidos");
     const admin = adminClient();
     const { data: contacts, error: readError } = await admin.from("contactos").select("id,email,google_resource_name").in("id", ids);
