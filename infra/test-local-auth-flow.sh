@@ -95,13 +95,41 @@ invite_link="$(jq -r '.HTML' <<<"${invite_json}" | rg -o 'http://localhost:8000/
 invite_status="$(curl -sS -o /dev/null -D /tmp/nikufra-auth-e2e-invite.headers -w '%{http_code}' "${invite_link}")"
 invite_location="$(extract_location /tmp/nikufra-auth-e2e-invite.headers)"
 deep_link_ok="$(INVITE_LOCATION="${invite_location}" node -e "const u=new URL(process.env.INVITE_LOCATION); process.stdout.write(u.protocol==='nikufra-crm:' && u.hostname==='auth' ? 'yes':'no')")"
+member_access_token="$(INVITE_LOCATION="${invite_location}" node -e "const u=new URL(process.env.INVITE_LOCATION); const p=new URLSearchParams(u.hash.slice(1)); process.stdout.write(p.get('access_token')||'')")"
+member_refresh_token="$(INVITE_LOCATION="${invite_location}" node -e "const u=new URL(process.env.INVITE_LOCATION); const p=new URLSearchParams(u.hash.slice(1)); process.stdout.write(p.get('refresh_token')||'')")"
 profile_state="$("${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc \
   "select role || ':' || ativo::text from public.profiles where email = '${test_email}'")"
 invitation_used="$("${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc \
   "select (used_at is not null)::text from public.user_invitations where email = '${test_email}'")"
 
-[[ "${invite_status}" == 303 && "${deep_link_ok}" == yes && "${profile_state}" == member:true && "${invitation_used}" == true ]] || {
+[[ "${invite_status}" == 303 && "${deep_link_ok}" == yes && -n "${member_access_token}" && -n "${member_refresh_token}" && "${profile_state}" == member:true && "${invitation_used}" == true ]] || {
   echo "O convite não concluiu o onboarding esperado" >&2
+  exit 1
+}
+
+member_user_status="$(curl -sS -o /tmp/nikufra-auth-e2e-member.json -w '%{http_code}' \
+  http://127.0.0.1:8000/auth/v1/user \
+  -H "apikey: ${ANON_KEY}" -H "Authorization: Bearer ${member_access_token}")"
+member_data_status="$(curl -sS -o /tmp/nikufra-auth-e2e-member-data.json -w '%{http_code}' \
+  'http://127.0.0.1:8000/rest/v1/empresas?select=id&limit=1' \
+  -H "apikey: ${ANON_KEY}" -H "Authorization: Bearer ${member_access_token}")"
+member_invite_status="$(curl -sS -o /tmp/nikufra-auth-e2e-member-invite.json -w '%{http_code}' \
+  -X POST http://127.0.0.1:8000/functions/v1/invite-user \
+  -H "Authorization: Bearer ${member_access_token}" -H 'Content-Type: application/json' \
+  --data '{"nome":"Não autorizado","email":"blocked@example.com"}')"
+member_promote_status="$(curl -sS -o /tmp/nikufra-auth-e2e-member-promote.json -w '%{http_code}' \
+  -X PATCH "http://127.0.0.1:8000/rest/v1/profiles?id=eq.${test_user_id}" \
+  -H "apikey: ${ANON_KEY}" -H "Authorization: Bearer ${member_access_token}" \
+  -H 'Content-Type: application/json' --data '{"role":"admin"}')"
+member_role_after_attempt="$("${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc \
+  "select role from public.profiles where id = '${test_user_id}'")"
+
+[[ "${member_user_status}" == 200 && "${member_data_status}" == 200 && "${member_invite_status}" == 403 ]] || {
+  echo "O membro não recebeu o acesso partilhado esperado ou conseguiu convidar utilizadores" >&2
+  exit 1
+}
+[[ "${member_promote_status}" == 400 || "${member_promote_status}" == 403 ]] && [[ "${member_role_after_attempt}" == member ]] || {
+  echo "O membro conseguiu alterar o próprio nível de acesso" >&2
   exit 1
 }
 
@@ -111,4 +139,4 @@ residual="$("${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc \
   "select (select count(*) from auth.users where email='${test_email}') + (select count(*) from public.user_invitations where email='${test_email}')")"
 [[ "${residual}" == 0 ]] || { echo "O teste deixou dados residuais" >&2; exit 1; }
 
-echo "OK login, sessão, convite por email, callback desktop, perfil member e limpeza"
+echo "OK login, sessão persistível, convite por email, callback desktop, acesso partilhado, isolamento member e limpeza"
