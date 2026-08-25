@@ -11,6 +11,9 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # Em SemVer 0.x, uma versão minor pode conter alterações incompatíveis.
+      - dependency-name: "lucide-react"
+        update-types: ["version-update:semver-minor"]
     groups:
       safe-updates:
         update-types: [minor, patch]
