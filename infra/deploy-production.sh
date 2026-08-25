@@ -63,7 +63,10 @@ for migration in "${PROJECT_DIR}"/supabase/migrations/*.sql; do
   "${COMPOSE[@]}" exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d postgres -c "insert into nikufra_meta.schema_migrations(name) values ('${name}')" >/dev/null
 done
 
-sync_url="https://${CRM_DOMAIN}/functions/v1/gmail-sync"
+# The scheduler runs inside Postgres on the private Compose network. Keeping
+# this call internal avoids a DNS/TLS round trip and never exposes the service
+# role credential outside the host.
+sync_url="http://kong:8000/functions/v1/gmail-sync"
 "${COMPOSE[@]}" exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d postgres \
   --set=sync_url="${sync_url}" --set=service_key="${SERVICE_ROLE_KEY}" <<'SQL'
 select vault.create_secret(:'sync_url', 'gmail_sync_url')
