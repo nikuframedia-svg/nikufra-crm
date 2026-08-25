@@ -77,7 +77,6 @@ services:
 
   realtime:
     image: supabase/realtime:v2.102.3
-    container_name: realtime-dev.supabase-realtime
     restart: unless-stopped
     depends_on:
       db: { condition: service_healthy }
@@ -160,7 +159,6 @@ services:
     depends_on:
       auth: { condition: service_healthy }
       rest: { condition: service_started }
-      studio: { condition: service_started }
     environment:
       KONG_DATABASE: "off"
       KONG_DECLARATIVE_CONFIG: /tmp/kong.yml

@@ -1,0 +1,7 @@
+services:
+  kong:
+    ports:
+      - "127.0.0.1:${CRM_API_PORT:-8800}:8000"
+    volumes:
+      - ./volumes/api/kong.production.yml:/home/kong/kong.template.yml:ro
+
