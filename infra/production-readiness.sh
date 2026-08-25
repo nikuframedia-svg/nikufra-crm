@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="${SCRIPT_DIR}/.env"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+COMPOSE=(docker compose --env-file "${ENV_FILE}" -f "${SCRIPT_DIR}/docker-compose.yml" -f "${SCRIPT_DIR}/docker-compose.production.yml")
+
+[[ -f "${ENV_FILE}" ]] || { echo "FAIL configuração: falta ${ENV_FILE}"; exit 1; }
+set -a
+# shellcheck disable=SC1090
+source "${ENV_FILE}"
+set +a
+
+failures=0
+pass() { printf 'OK   %s\n' "$1"; }
+fail() { printf 'FAIL %s\n' "$1"; failures=$((failures + 1)); }
+db_value() { "${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc "$1"; }
+
+if "${SCRIPT_DIR}/production-healthcheck.sh" >/dev/null; then pass "serviços internos"; else fail "serviços internos"; fi
+
+expected_ip="${CRM_PUBLIC_IP:-188.40.230.28}"
+resolved_ips="$(getent ahostsv4 "${CRM_DOMAIN}" 2>/dev/null | awk '{print $1}' | sort -u || true)"
+if [[ -n "${expected_ip}" && " ${resolved_ips//$'\n'/ } " == *" ${expected_ip} "* ]]; then
+  pass "DNS ${CRM_DOMAIN} -> ${expected_ip}"
+else
+  fail "DNS ${CRM_DOMAIN} ainda não aponta para ${expected_ip:-o IP configurado}"
+fi
+
+if curl --fail --silent --show-error --max-time 15 -H "apikey: ${ANON_KEY}" \
+  "https://${CRM_DOMAIN}/auth/v1/health" >/dev/null 2>&1; then
+  pass "HTTPS público e Auth"
+else
+  fail "HTTPS público e Auth"
+fi
+
+hook_enabled="$(docker inspect nikufra-crm-auth-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | sed -n 's/^GOTRUE_HOOK_SEND_EMAIL_ENABLED=//p')"
+if [[ "${hook_enabled}" == true ]]; then pass "hook de emails ativo"; else fail "hook de emails ainda está desligado"; fi
+
+email_delivery="$(db_value "select exists(select 1 from public.auth_email_deliveries where status='sent' and provider_message_id is not null);")"
+if [[ "${email_delivery}" == t ]]; then pass "envio Gmail API verificado"; else fail "envio Gmail API sem prova de entrega"; fi
+
+google_ready="$(db_value "select exists(select 1 from public.google_tokens gt join public.profiles p on p.id=gt.user_id where p.ativo and gt.import_confirmed_at is not null and 'gmail.compose'=any(gt.scopes));")"
+if [[ "${google_ready}" == t ]]; then pass "OAuth Google e importação confirmados"; else fail "OAuth Google/importação incompletos"; fi
+
+sync_recent="$(db_value "select exists(select 1 from public.google_tokens where last_sync_at > now() - interval '30 minutes' and sync_error is null);")"
+if [[ "${sync_recent}" == t ]]; then pass "sync Google recente"; else fail "sync Google não correu nos últimos 30 minutos"; fi
+
+real_data="$(db_value "select (select count(*) from public.empresas) > 0 and (select count(*) from public.contactos) > 0 and (select count(*) from public.oportunidades) > 0;")"
+if [[ "${real_data}" == t ]]; then pass "dados CRM reais presentes"; else fail "base CRM vazia"; fi
+
+if find "${PROJECT_DIR}/backups/daily" -maxdepth 1 -type f -name '*.dump' -mtime -2 -size +100k -print -quit 2>/dev/null | grep -q .; then
+  pass "backup diário recente"
+else
+  fail "backup diário recente"
+fi
+
+if curl --fail --silent --show-error --max-time 15 "https://${CRM_DOMAIN}/updates/latest.json" | \
+  grep -q '"platforms"'; then
+  pass "canal de updates publicado"
+else
+  fail "canal de updates ainda não publicado"
+fi
+
+if [[ "${failures}" -eq 0 ]]; then
+  echo "READY produção pronta para a equipa"
+  exit 0
+fi
+
+echo "NOT READY ${failures} verificação(ões) pendente(s)"
+exit 1
