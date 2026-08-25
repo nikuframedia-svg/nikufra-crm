@@ -32,7 +32,9 @@ fi
 "${SCRIPT_DIR}/configure-local.sh"
 
 COMPOSE=("${DOCKER_BIN}" compose --env-file "${SCRIPT_DIR}/.env" -f "${SCRIPT_DIR}/docker-compose.yml" -f "${SCRIPT_DIR}/docker-compose.local.yml")
-SERVICES=(db auth rest realtime meta studio kong functions mailpit)
+# Studio and Postgres Meta are administrative development tools, not required
+# by the CRM itself. Keeping them out saves roughly 2.2 GB on each Mac.
+SERVICES=(db auth rest realtime kong functions mailpit)
 "${COMPOSE[@]}" up -d --wait "${SERVICES[@]}"
 
 "${COMPOSE[@]}" exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL'
