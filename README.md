@@ -51,7 +51,8 @@ pnpm tauri dev
 - `supabase/migrations/`: schema, triggers, RLS e métricas SQL.
 - `supabase/tests/`: testes pgTAP das políticas críticas.
 - `infra/`: deployment, TLS, SMTP, segredos e backups.
-- `.github/workflows/release.yml`: builds universais macOS e MSI Windows assinados pelo updater Tauri.
+- `.github/workflows/release.yml`: builds universais macOS e NSIS Windows com assinatura nativa, notarização e assinatura independente do updater Tauri.
+- `docs/RELEASES.md`: configuração única e procedimento curto para publicar atualizações da equipa.
 
 ## Portão de produção
 

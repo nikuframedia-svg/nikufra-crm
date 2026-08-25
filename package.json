@@ -10,6 +10,8 @@
     "tauri": "tauri",
     "test": "vitest run",
     "test:e2e:auth": "./infra/test-local-auth-flow.sh",
+    "release:prepare": "node scripts/set-version.mjs",
+    "release:verify": "node scripts/release-preflight.mjs --local && pnpm test && pnpm build && cargo test --locked --manifest-path src-tauri/Cargo.toml",
     "local:configure": "./infra/configure-local.sh",
     "local:up": "./infra/local-up.sh",
     "local:down": "./infra/local-down.sh",

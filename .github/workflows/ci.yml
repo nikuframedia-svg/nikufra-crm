@@ -38,3 +38,20 @@ jobs:
         run: |
           bash -n infra/*.sh
           docker compose --env-file infra/.env.example -f infra/docker-compose.yml -f infra/docker-compose.production.yml config --quiet
+
+  desktop-platforms:
+    name: Compilar segurança nativa (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            platform: macos-14
+          - name: Windows
+            platform: windows-latest
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compilar aplicação desktop
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
