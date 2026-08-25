@@ -63,11 +63,11 @@ Deno.serve(async (request) => {
       && ["metalogalva", "nelo", "jorgepires", "ficosa"].every((company) => leadByCompany.has(company));
     if (includeNikufraFinancials) revenueEntries.push(
       { id: "fe60656b-6824-51bb-83be-1f32256f3ae1", empresa: "Metalogalva", data: "2026-08-25", tipo: "Contratualizado", valor: 5000, descricao: "Valor indicado: 5 mil euros", ref: "Entrada manual" },
-      { id: "f08868e1-99b5-57a9-a8f6-16cc05432988", empresa: "Metalogalva", data: "2026-08-25", tipo: "Faturado", valor: 2500, valorBruto: 2500, iva: 0, descricao: "Faturação indicada pelo utilizador", ref: "Entrada manual" },
+      { id: "f08868e1-99b5-57a9-a8f6-16cc05432988", empresa: "Metalogalva", data: "2026-07-15", tipo: "Faturado", valor: 2500, valorBruto: 2500, iva: 0, descricao: "Faturação indicada pelo utilizador", ref: "Entrada manual" },
       { id: "fad6ff7f-0e18-5ace-857f-e0fe8f42309c", empresa: "Nelo", data: "2026-08-25", tipo: "Contratualizado", valor: 40000, descricao: "Valor contratualizado indicado pelo utilizador", ref: "Entrada manual" },
-      { id: "6fa7335c-7fd3-50fd-bdbb-a8067bcfc675", empresa: "Nelo", data: "2026-08-25", tipo: "Faturado", valor: 10000, valorBruto: 10000, iva: 0, descricao: "Faturação indicada pelo utilizador", ref: "Entrada manual" },
-      { id: "69b1abf3-1ab9-5051-8995-97ff2a8444a4", empresa: "Jorge Pires", data: "2026-08-25", tipo: "Contratualizado", valor: 6500, descricao: "Valor contratualizado indicado pelo utilizador", ref: "Entrada manual" },
-      { id: "cc9f0090-b4a8-5c68-aca7-3157162ae5d4", empresa: "Ficosa", data: "2026-08-25", tipo: "Faturado", valor: 1175, valorBruto: 1445.25, iva: 270.25, taxaIva: 23, descricao: "Base sem IVA; total indicado de 1.445,25 € à taxa de 23%", ref: "Entrada manual" },
+      { id: "6fa7335c-7fd3-50fd-bdbb-a8067bcfc675", empresa: "Nelo", data: "2026-03-19", tipo: "Faturado", valor: 10000, valorBruto: 10000, iva: 0, descricao: "Faturação indicada pelo utilizador", ref: "Entrada manual" },
+      { id: "69b1abf3-1ab9-5051-8995-97ff2a8444a4", empresa: "Jorge Pires", data: "2026-05-25", tipo: "Contratualizado", valor: 6500, descricao: "Valor contratualizado indicado pelo utilizador", ref: "Entrada manual" },
+      { id: "cc9f0090-b4a8-5c68-aca7-3157162ae5d4", empresa: "Ficosa", data: "2026-06-18", tipo: "Faturado", valor: 1175, valorBruto: 1445.25, iva: 270.25, taxaIva: 23, descricao: "Base sem IVA; total indicado de 1.445,25 € à taxa de 23%", ref: "Entrada manual" },
     );
     const companiesToInsert: Array<Record<string, unknown>> = [];
     const companiesToUpdate: Array<Record<string, unknown>> = [];

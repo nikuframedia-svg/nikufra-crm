@@ -3,8 +3,9 @@ import { initialActivities, initialDrafts, initialLeads, initialOpportunities, o
 
 describe("configuração comercial segura", () => {
   it("mantém a progressão do funil e probabilidades válidas", () => {
-    expect(stageOrder).toEqual(["nao_contactado", "contactado", "reuniao_marcada", "reuniao_feita", "proposta", "piloto", "cliente"]);
+    expect(stageOrder).toEqual(["nao_contactado", "contactado", "reuniao_marcada", "reuniao_feita", "piloto", "proposta", "cliente"]);
     for (const probability of Object.values(stageProbability)) expect(probability).toBeGreaterThanOrEqual(0);
+    expect(stageProbability.piloto).toBeLessThan(stageProbability.proposta);
   });
 
   it("não embebe contactos, negócios ou atividades na configuração de produção", () => {

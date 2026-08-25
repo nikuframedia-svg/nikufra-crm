@@ -1,8 +1,40 @@
 import { activeUser, adminClient, corsHeaders, decryptToken, gmailAccessToken } from "../_shared/security.ts";
 
 type GmailHeader = { name: string; value: string };
-type TokenRow = { user_id: string; refresh_token_encrypted: string; history_id: string | null; backfill_page_token: string | null; backfill_complete: boolean; messages_synced: number; contacts_created: number; profiles: { email?: string } | Array<{ email?: string }> | null };
+type TokenRow = {
+  user_id: string;
+  refresh_token_encrypted: string;
+  history_id: string | null;
+  backfill_page_token: string | null;
+  backfill_complete: boolean;
+  messages_synced: number;
+  contacts_created: number;
+  people_sync_token: string | null;
+  other_contacts_sync_token: string | null;
+  calendar_sync_token: string | null;
+  people_contacts_synced: number;
+  calendar_events_synced: number;
+  profiles: { email?: string } | Array<{ email?: string }> | null;
+};
+type ContactSeed = {
+  userId: string;
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+  role?: string | null;
+  organization?: string | null;
+  googleResourceName?: string | null;
+  contacted: boolean;
+  firstContact?: string | null;
+  source: "Gmail" | "Google Contacts" | "Google Calendar";
+};
+
 const publicEmailDomains = new Set(["gmail.com", "hotmail.com", "hotmail.pt", "outlook.com", "outlook.pt", "icloud.com", "me.com", "live.com", "live.pt", "yahoo.com", "yahoo.es", "sapo.pt"]);
+const stageRank: Record<string, number> = { nao_contactado: 0, contactado: 1, reuniao_marcada: 2, reuniao_feita: 3, piloto: 4, proposta: 5, cliente: 6, perdido: -1, adiado: -1 };
+
+class GoogleApiError extends Error {
+  constructor(public status: number, api: string) { super(`${api} falhou (${status})`); }
+}
 
 function headerValue(headers: GmailHeader[], name: string) {
   return headers.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value ?? "";
@@ -25,6 +57,15 @@ function contactName(header: string, email: string) {
   return beforeAddress && !beforeAddress.includes("@") ? beforeAddress.slice(0, 240) : titleCase(email.split("@")[0]);
 }
 
+function clean(value: unknown, max = 500) {
+  return String(value ?? "").trim().slice(0, max);
+}
+
+function businessDomain(email?: string | null) {
+  const domain = email?.split("@")[1]?.toLowerCase() ?? "";
+  return domain && !publicEmailDomains.has(domain) ? domain : null;
+}
+
 function isAutomated(headers: GmailHeader[], email: string) {
   const local = email.split("@")[0] ?? "";
   const automatic = headerValue(headers, "Auto-Submitted").toLowerCase();
@@ -40,9 +81,9 @@ function meetingSignal(subject: string, snippet: string) {
   return /(reuniao|meeting|calendar|calendario|convite|invite|teams|googlemeet|zoom|agendamento|schedule|disponibilidade)/.test(text);
 }
 
-async function gmailJson(url: URL | string, accessToken: string) {
+async function googleJson(url: URL | string, accessToken: string, api = "Google API") {
   const response = await fetch(url, { headers: { authorization: `Bearer ${accessToken}` } });
-  if (!response.ok) throw new Error(`Gmail API falhou (${response.status})`);
+  if (!response.ok) throw new GoogleApiError(response.status, api);
   return response.json();
 }
 
@@ -53,6 +94,114 @@ async function mapLimit<T, R>(items: T[], limit: number, mapper: (item: T) => Pr
   return results;
 }
 
+async function ensureContact(admin: ReturnType<typeof adminClient>, seed: ContactSeed) {
+  const email = clean(seed.email, 320).toLowerCase() || null;
+  const resourceName = clean(seed.googleResourceName, 500) || null;
+  let contact = null;
+  if (email) ({ data: contact } = await admin.from("contactos").select("id,empresa_id,email,nome,estado,data_reuniao,google_resource_name").eq("email", email).maybeSingle());
+  if (!contact && resourceName) ({ data: contact } = await admin.from("contactos").select("id,empresa_id,email,nome,estado,data_reuniao,google_resource_name").eq("google_resource_name", resourceName).maybeSingle());
+  let created = false;
+
+  if (!contact) {
+    const domain = businessDomain(email);
+    const organization = clean(seed.organization, 240);
+    let company = null;
+    if (organization) ({ data: company } = await admin.from("empresas").select("id,nome").eq("nome_normalizado", normalized(organization)).limit(1).maybeSingle());
+    if (!company && domain) ({ data: company } = await admin.from("empresas").select("id,nome").eq("email_domain", domain).limit(1).maybeSingle());
+    if (!company) {
+      const companyName = organization || (domain ? titleCase(domain.split(".")[0]) : `${clean(seed.name, 220) || "Contacto"} (particular)`);
+      const { data, error } = await admin.from("empresas").insert({ nome: companyName, nome_normalizado: normalized(companyName), email_domain: domain, vertical: "outro", pais: "PT", origem: seed.source === "Gmail" ? "outbound_email" : "rede_pessoal", notas: `Criada automaticamente por ${seed.source}` }).select("id,nome").single();
+      if (error) throw error; company = data;
+    }
+    const payload = { empresa_id: company.id, nome: clean(seed.name, 240) || email || "Contacto Google", cargo: clean(seed.role, 240) || null, email, telefone: clean(seed.phone, 80) || null, google_resource_name: resourceName, principal: false, estado: seed.contacted ? "contactado" : "nao_contactado", notas: `Criado automaticamente por ${seed.source}` };
+    const { data, error } = await admin.from("contactos").insert(payload).select("id,empresa_id,email,nome,estado,data_reuniao,google_resource_name").single();
+    if (error) {
+      if (email) ({ data: contact } = await admin.from("contactos").select("id,empresa_id,email,nome,estado,data_reuniao,google_resource_name").eq("email", email).maybeSingle());
+      if (!contact && resourceName) ({ data: contact } = await admin.from("contactos").select("id,empresa_id,email,nome,estado,data_reuniao,google_resource_name").eq("google_resource_name", resourceName).maybeSingle());
+      if (!contact) throw error;
+    } else { contact = data; created = true; }
+  } else {
+    const changes: Record<string, unknown> = {};
+    if (resourceName && !contact.google_resource_name) changes.google_resource_name = resourceName;
+    if (seed.contacted && contact.estado === "nao_contactado") { changes.estado = "contactado"; contact.estado = "contactado"; }
+    if (clean(seed.phone, 80)) changes.telefone = clean(seed.phone, 80);
+    if (clean(seed.role, 240)) changes.cargo = clean(seed.role, 240);
+    if (Object.keys(changes).length) await admin.from("contactos").update(changes).eq("id", contact.id);
+  }
+
+  if (!contact) throw new Error("Não foi possível resolver o contacto Google");
+  let { data: opportunity } = await admin.from("oportunidades").select("id,estado,data_primeiro_contacto,data_reuniao").eq("empresa_id", contact.empresa_id).eq("arquivado", false).order("created_at").limit(1).maybeSingle();
+  if (!opportunity) {
+    const state = seed.contacted ? "contactado" : "nao_contactado";
+    const { data, error } = await admin.from("oportunidades").insert({ empresa_id: contact.empresa_id, contacto_principal_id: contact.id, owner_id: seed.userId, titulo: "Relação comercial", estado: state, tipo: "consultoria", valor_estimado: 0, data_primeiro_contacto: seed.firstContact || null, import_key: `${seed.source === "Gmail" ? "gmail" : "google"}:${contact.empresa_id}` }).select("id,estado,data_primeiro_contacto,data_reuniao").single();
+    if (error) throw error; opportunity = data;
+  } else if (seed.firstContact && (!opportunity.data_primeiro_contacto || seed.firstContact < opportunity.data_primeiro_contacto)) {
+    await admin.from("oportunidades").update({ data_primeiro_contacto: seed.firstContact }).eq("id", opportunity.id);
+    opportunity.data_primeiro_contacto = seed.firstContact;
+  }
+  return { contact, opportunity, created };
+}
+
+async function listPeople(accessToken: string, kind: "connections" | "other", syncToken: string | null) {
+  async function load(token: string | null) {
+    const people: Array<Record<string, any>> = []; let pageToken = ""; let nextSyncToken = token;
+    do {
+      const url = new URL(kind === "connections" ? "https://people.googleapis.com/v1/people/me/connections" : "https://people.googleapis.com/v1/otherContacts");
+      url.searchParams.set(kind === "connections" ? "personFields" : "readMask", kind === "connections" ? "names,emailAddresses,phoneNumbers,organizations,metadata" : "names,emailAddresses,phoneNumbers,metadata");
+      url.searchParams.set("pageSize", "1000");
+      if (kind === "connections") url.searchParams.set("sources", "READ_SOURCE_TYPE_CONTACT");
+      url.searchParams.set("requestSyncToken", "true");
+      if (token) url.searchParams.set("syncToken", token);
+      if (pageToken) url.searchParams.set("pageToken", pageToken);
+      const payload = await googleJson(url, accessToken, kind === "connections" ? "Google Contacts" : "Google Other Contacts");
+      people.push(...(kind === "connections" ? payload.connections ?? [] : payload.otherContacts ?? []));
+      pageToken = payload.nextPageToken ?? "";
+      nextSyncToken = payload.nextSyncToken ?? nextSyncToken;
+    } while (pageToken);
+    return { people, nextSyncToken };
+  }
+  try { return await load(syncToken); }
+  catch (error) { if (syncToken && error instanceof GoogleApiError && error.status === 400) return load(null); throw error; }
+}
+
+function personSeed(person: Record<string, any>, userId: string, source: "Google Contacts") {
+  const primaryName = person.names?.find((item: Record<string, any>) => item.metadata?.primary) ?? person.names?.[0];
+  const primaryEmail = person.emailAddresses?.find((item: Record<string, any>) => item.metadata?.primary) ?? person.emailAddresses?.[0];
+  const primaryPhone = person.phoneNumbers?.find((item: Record<string, any>) => item.metadata?.primary) ?? person.phoneNumbers?.[0];
+  const primaryOrganization = person.organizations?.find((item: Record<string, any>) => item.current) ?? person.organizations?.[0];
+  return {
+    userId,
+    name: clean(primaryName?.displayName, 240) || clean(primaryEmail?.value, 320) || "Contacto Google",
+    email: clean(primaryEmail?.value, 320) || null,
+    phone: clean(primaryPhone?.value, 80) || null,
+    role: clean(primaryOrganization?.title, 240) || null,
+    organization: clean(primaryOrganization?.name, 240) || null,
+    googleResourceName: clean(person.resourceName, 500) || null,
+    contacted: false,
+    source,
+  } satisfies ContactSeed;
+}
+
+async function listCalendarEvents(accessToken: string, syncToken: string | null) {
+  async function load(token: string | null) {
+    const events: Array<Record<string, any>> = []; let pageToken = ""; let nextSyncToken = token;
+    do {
+      const url = new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");
+      url.searchParams.set("maxResults", "2500");
+      url.searchParams.set("showDeleted", "true");
+      if (token) url.searchParams.set("syncToken", token);
+      if (pageToken) url.searchParams.set("pageToken", pageToken);
+      const payload = await googleJson(url, accessToken, "Google Calendar");
+      events.push(...(payload.items ?? []));
+      pageToken = payload.nextPageToken ?? "";
+      nextSyncToken = payload.nextSyncToken ?? nextSyncToken;
+    } while (pageToken);
+    return { events, nextSyncToken };
+  }
+  try { return await load(syncToken); }
+  catch (error) { if (syncToken && error instanceof GoogleApiError && error.status === 410) return load(null); throw error; }
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   const serviceRequest = request.headers.get("authorization") === `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`;
@@ -61,14 +210,15 @@ Deno.serve(async (request) => {
   catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Sessão inválida" }, { status: 401, headers: corsHeaders }); }
 
   const admin = adminClient();
-  let tokenQuery = admin.from("google_tokens").select("user_id,refresh_token_encrypted,history_id,backfill_page_token,backfill_complete,messages_synced,contacts_created,profiles(email)");
+  let tokenQuery = admin.from("google_tokens").select("user_id,refresh_token_encrypted,history_id,backfill_page_token,backfill_complete,messages_synced,contacts_created,people_sync_token,other_contacts_sync_token,calendar_sync_token,people_contacts_synced,calendar_events_synced,profiles(email)");
   if (requestedUserId) tokenQuery = tokenQuery.eq("user_id", requestedUserId);
   const { data: tokenRows, error: tokenError } = await tokenQuery;
   if (tokenError) return Response.json({ error: tokenError.message }, { status: 500, headers: corsHeaders });
-  let totalSynced = 0; let totalContactsCreated = 0;
+  let totalSynced = 0; let totalContactsCreated = 0; let totalMeetingsSynced = 0;
 
   for (const tokenRow of (tokenRows ?? []) as TokenRow[]) {
-    let batchSynced = 0; let batchContactsCreated = 0;
+    let batchSynced = 0; let batchContactsCreated = 0; let peopleProcessed = 0; let meetingsProcessed = 0;
+    const sourceErrors: string[] = [];
     try {
       await admin.from("google_tokens").update({ sync_error: null, ...(!tokenRow.backfill_complete ? { backfill_started_at: new Date().toISOString() } : {}) }).eq("user_id", tokenRow.user_id);
       const accessToken = await gmailAccessToken(await decryptToken(tokenRow.refresh_token_encrypted));
@@ -76,6 +226,7 @@ Deno.serve(async (request) => {
       const ownEmail = profile?.email?.toLowerCase() ?? "";
       const ownDomain = ownEmail.split("@")[1] ?? "nikufra.ai";
       const ownBusinessDomain = publicEmailDomains.has(ownDomain) ? null : ownDomain;
+      const isExternalEmail = (email?: string | null) => !email || (email.toLowerCase() !== ownEmail && (!ownBusinessDomain || email.split("@")[1]?.toLowerCase() !== ownBusinessDomain));
       const messageIds = new Set<string>();
       let newestHistory = tokenRow.history_id;
       let nextBackfillPage: string | null = tokenRow.backfill_page_token;
@@ -83,13 +234,13 @@ Deno.serve(async (request) => {
 
       if (!backfillComplete) {
         if (!newestHistory) {
-          const gmailProfile = await gmailJson("https://gmail.googleapis.com/gmail/v1/users/me/profile", accessToken);
+          const gmailProfile = await googleJson("https://gmail.googleapis.com/gmail/v1/users/me/profile", accessToken, "Gmail API");
           newestHistory = gmailProfile.historyId ?? null;
         }
         const listUrl = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
         listUrl.searchParams.set("maxResults", "100");
         if (nextBackfillPage) listUrl.searchParams.set("pageToken", nextBackfillPage);
-        const payload = await gmailJson(listUrl, accessToken);
+        const payload = await googleJson(listUrl, accessToken, "Gmail API");
         for (const message of payload.messages ?? []) messageIds.add(message.id);
         nextBackfillPage = payload.nextPageToken ?? null;
         backfillComplete = !nextBackfillPage;
@@ -102,7 +253,7 @@ Deno.serve(async (request) => {
             historyUrl.searchParams.set("historyTypes", "messageAdded");
             historyUrl.searchParams.set("maxResults", "100");
             if (pageToken) historyUrl.searchParams.set("pageToken", pageToken);
-            const payload = await gmailJson(historyUrl, accessToken);
+            const payload = await googleJson(historyUrl, accessToken, "Gmail API");
             for (const history of payload.history ?? []) for (const added of history.messagesAdded ?? []) messageIds.add(added.message.id);
             newestHistory = payload.historyId ?? newestHistory;
             pageToken = payload.nextPageToken ?? "";
@@ -116,7 +267,7 @@ Deno.serve(async (request) => {
         const messageUrl = new URL(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}`);
         messageUrl.searchParams.set("format", "metadata");
         for (const name of ["From", "To", "Cc", "Subject", "Date", "List-Unsubscribe", "Auto-Submitted", "Precedence"]) messageUrl.searchParams.append("metadataHeaders", name);
-        try { return await gmailJson(messageUrl, accessToken) as Record<string, any>; } catch { return null; }
+        try { return await googleJson(messageUrl, accessToken, "Gmail API") as Record<string, any>; } catch { return null; }
       });
       for (const message of fetchedMessages) {
         if (!message) continue;
@@ -131,46 +282,102 @@ Deno.serve(async (request) => {
         const inferredMeeting = meetingSignal(subject, String(message.snippet ?? ""));
 
         for (const externalEmail of externalEmails) {
-          let { data: contact } = await admin.from("contactos").select("id,empresa_id,email,nome,estado").eq("email", externalEmail).maybeSingle();
-          if (!contact) {
-            const domain = externalEmail.split("@")[1];
-            const isPublicDomain = publicEmailDomains.has(domain);
-            const displayName = contactName(headerValue(headers, sent ? "To" : "From"), externalEmail);
-            let company: { id: string; nome: string } | null = null;
-            if (!isPublicDomain) ({ data: company } = await admin.from("empresas").select("id,nome").eq("email_domain", domain).limit(1).maybeSingle());
-            if (!company) {
-              const companyName = isPublicDomain ? `${displayName} (particular)` : titleCase(domain.split(".")[0]);
-              const { data, error } = await admin.from("empresas").insert({ nome: companyName, nome_normalizado: normalized(companyName), email_domain: isPublicDomain ? null : domain, vertical: "outro", pais: "PT", origem: "outbound_email", notas: "Criada automaticamente pela sincronização Gmail" }).select("id,nome").single();
-              if (error) throw error; company = data;
-            }
-            const { data, error } = await admin.from("contactos").insert({ empresa_id: company.id, nome: displayName, email: externalEmail, principal: false, estado: "contactado", notas: "Criado automaticamente pelo Gmail" }).select("id,empresa_id,email,nome,estado").single();
-            if (error) {
-              const { data: racedContact } = await admin.from("contactos").select("id,empresa_id,email,nome,estado").eq("email", externalEmail).maybeSingle();
-              if (!racedContact) throw error;
-              contact = racedContact;
-            } else { contact = data; batchContactsCreated += 1; }
-          }
-          if (contact.estado === "nao_contactado") { await admin.from("contactos").update({ estado: "contactado" }).eq("id", contact.id); contact.estado = "contactado"; }
-          let { data: opportunity } = await admin.from("oportunidades").select("id,data_primeiro_contacto").eq("empresa_id", contact.empresa_id).eq("arquivado", false).order("created_at").limit(1).maybeSingle();
-          if (!opportunity) {
-            const { data, error } = await admin.from("oportunidades").insert({ empresa_id: contact.empresa_id, contacto_principal_id: contact.id, owner_id: tokenRow.user_id, titulo: "Relação comercial", estado: "contactado", tipo: "consultoria", valor_estimado: 0, data_primeiro_contacto: date.slice(0, 10), import_key: `gmail:${contact.empresa_id}` }).select("id,data_primeiro_contacto").single();
-            if (error) throw error; opportunity = data;
-          } else if (!opportunity.data_primeiro_contacto || date.slice(0, 10) < opportunity.data_primeiro_contacto) {
-            await admin.from("oportunidades").update({ data_primeiro_contacto: date.slice(0, 10) }).eq("id", opportunity.id);
-          }
-          const { error: activityError } = await admin.from("atividades").upsert({ oportunidade_id: opportunity.id, empresa_id: contact.empresa_id, contacto_id: contact.id, user_id: tokenRow.user_id, tipo: sent ? "email_enviado" : "email_recebido", direcao: sent ? "enviado" : "recebido", data, descricao: subject.slice(0, 500), message_id: message.id, thread_id: message.threadId, assunto: subject.slice(0, 500), snippet: String(message.snippet ?? "").slice(0, 240), reuniao_inferida: inferredMeeting }, { onConflict: "message_id,contacto_id", ignoreDuplicates: true });
+          const ensured = await ensureContact(admin, { userId: tokenRow.user_id, name: contactName(headerValue(headers, sent ? "To" : "From"), externalEmail), email: externalEmail, contacted: true, firstContact: date.slice(0, 10), source: "Gmail" });
+          if (ensured.created) batchContactsCreated += 1;
+          const { error: activityError } = await admin.from("atividades").upsert({ oportunidade_id: ensured.opportunity.id, empresa_id: ensured.contact.empresa_id, contacto_id: ensured.contact.id, user_id: tokenRow.user_id, tipo: sent ? "email_enviado" : "email_recebido", direcao: sent ? "enviado" : "recebido", data: date, descricao: subject.slice(0, 500), message_id: message.id, thread_id: message.threadId, assunto: subject.slice(0, 500), snippet: String(message.snippet ?? "").slice(0, 240), reuniao_inferida: inferredMeeting }, { onConflict: "message_id,contacto_id", ignoreDuplicates: true });
           if (!activityError) batchSynced += 1;
         }
       }
-      const { count: exactMessageCount } = await admin.from("atividades").select("id", { count: "exact", head: true }).eq("user_id", tokenRow.user_id).not("message_id", "is", null);
-      const update = { history_id: newestHistory, backfill_page_token: nextBackfillPage, backfill_complete: backfillComplete, last_sync_at: new Date().toISOString(), messages_synced: exactMessageCount ?? Number(tokenRow.messages_synced || 0), contacts_created: Number(tokenRow.contacts_created || 0) + batchContactsCreated, sync_error: null };
+
+      let peopleSyncToken = tokenRow.people_sync_token; let otherContactsSyncToken = tokenRow.other_contacts_sync_token;
+      try {
+        const saved = await listPeople(accessToken, "connections", peopleSyncToken);
+        for (const person of saved.people) {
+          if (person.metadata?.deleted) continue;
+          const seed = personSeed(person, tokenRow.user_id, "Google Contacts");
+          if (!isExternalEmail(seed.email)) continue;
+          const ensured = await ensureContact(admin, seed); peopleProcessed += 1;
+          if (ensured.created) batchContactsCreated += 1;
+        }
+        peopleSyncToken = saved.nextSyncToken;
+      } catch (error) { sourceErrors.push(error instanceof Error ? error.message : String(error)); }
+      try {
+        const other = await listPeople(accessToken, "other", otherContactsSyncToken);
+        for (const person of other.people) {
+          if (person.metadata?.deleted) continue;
+          const seed = personSeed(person, tokenRow.user_id, "Google Contacts");
+          if (!isExternalEmail(seed.email)) continue;
+          const ensured = await ensureContact(admin, seed); peopleProcessed += 1;
+          if (ensured.created) batchContactsCreated += 1;
+        }
+        otherContactsSyncToken = other.nextSyncToken;
+      } catch (error) { sourceErrors.push(error instanceof Error ? error.message : String(error)); }
+
+      let calendarSyncToken = tokenRow.calendar_sync_token; let calendarSucceeded = false;
+      try {
+        const calendar = await listCalendarEvents(accessToken, calendarSyncToken);
+        calendarSyncToken = calendar.nextSyncToken;
+        for (const event of calendar.events) {
+          if (!event.id || event.status === "cancelled") {
+            if (event.id) await admin.from("atividades").delete().eq("calendar_event_id", event.id).eq("user_id", tokenRow.user_id);
+            continue;
+          }
+          if (event.eventType && !["default", "fromGmail"].includes(event.eventType)) continue;
+          const start = event.start?.dateTime ?? (event.start?.date ? `${event.start.date}T09:00:00.000Z` : null);
+          if (!start) continue;
+          const participants = new Map<string, string>();
+          for (const attendee of event.attendees ?? []) if (attendee.email && attendee.responseStatus !== "declined" && isExternalEmail(attendee.email)) participants.set(attendee.email.toLowerCase(), attendee.displayName ?? attendee.email);
+          if (event.organizer?.email && isExternalEmail(event.organizer.email)) participants.set(event.organizer.email.toLowerCase(), event.organizer.displayName ?? event.organizer.email);
+          const seenCompanies = new Set<string>();
+          for (const [email, name] of participants) {
+            const ensured = await ensureContact(admin, { userId: tokenRow.user_id, name, email, contacted: true, source: "Google Calendar" });
+            if (ensured.created) batchContactsCreated += 1;
+            const meetingDate = start.slice(0, 10);
+            const contactChanges: Record<string, unknown> = {};
+            if ((stageRank[ensured.contact.estado] ?? 0) < stageRank.reuniao_marcada) contactChanges.estado = "reuniao_marcada";
+            if (!ensured.contact.data_reuniao) contactChanges.data_reuniao = meetingDate;
+            if (Object.keys(contactChanges).length) await admin.from("contactos").update(contactChanges).eq("id", ensured.contact.id);
+            const opportunityChanges: Record<string, unknown> = {};
+            if ((stageRank[ensured.opportunity.estado] ?? 0) < stageRank.reuniao_marcada) opportunityChanges.estado = "reuniao_marcada";
+            if (!ensured.opportunity.data_reuniao) opportunityChanges.data_reuniao = meetingDate;
+            if (Object.keys(opportunityChanges).length) await admin.from("oportunidades").update(opportunityChanges).eq("id", ensured.opportunity.id);
+            if (seenCompanies.has(ensured.contact.empresa_id)) continue;
+            seenCompanies.add(ensured.contact.empresa_id);
+            const summary = clean(event.summary, 500) || "Reunião Google Calendar";
+            const { error } = await admin.from("atividades").upsert({ oportunidade_id: ensured.opportunity.id, empresa_id: ensured.contact.empresa_id, contacto_id: ensured.contact.id, user_id: tokenRow.user_id, tipo: "reuniao", data: start, descricao: summary, calendar_event_id: event.id, assunto: summary, reuniao_inferida: false }, { onConflict: "calendar_event_id,contacto_id" });
+            if (!error) meetingsProcessed += 1;
+          }
+        }
+        calendarSucceeded = true;
+      } catch (error) { sourceErrors.push(error instanceof Error ? error.message : String(error)); }
+
+      const [{ count: exactMessageCount }, { data: calendarIds }] = await Promise.all([
+        admin.from("atividades").select("id", { count: "exact", head: true }).eq("user_id", tokenRow.user_id).not("message_id", "is", null),
+        admin.from("atividades").select("calendar_event_id").eq("user_id", tokenRow.user_id).not("calendar_event_id", "is", null).limit(10000),
+      ]);
+      const exactCalendarCount = new Set((calendarIds ?? []).map((row) => row.calendar_event_id)).size;
+      const update = {
+        history_id: newestHistory,
+        backfill_page_token: nextBackfillPage,
+        backfill_complete: backfillComplete,
+        last_sync_at: new Date().toISOString(),
+        messages_synced: exactMessageCount ?? Number(tokenRow.messages_synced || 0),
+        contacts_created: Number(tokenRow.contacts_created || 0) + batchContactsCreated,
+        people_sync_token: peopleSyncToken,
+        other_contacts_sync_token: otherContactsSyncToken,
+        calendar_sync_token: calendarSyncToken,
+        people_contacts_synced: Number(tokenRow.people_contacts_synced || 0) + peopleProcessed,
+        calendar_events_synced: exactCalendarCount,
+        calendar_last_sync_at: calendarSucceeded ? new Date().toISOString() : null,
+        sync_error: sourceErrors.length ? sourceErrors.join(" · ").slice(0, 1000) : null,
+      };
       await admin.from("google_tokens").update(update).eq("user_id", tokenRow.user_id);
-      totalSynced += batchSynced; totalContactsCreated += batchContactsCreated;
+      totalSynced += batchSynced; totalContactsCreated += batchContactsCreated; totalMeetingsSynced += meetingsProcessed;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await admin.from("google_tokens").update({ sync_error: message.slice(0, 1000), last_sync_at: new Date().toISOString() }).eq("user_id", tokenRow.user_id);
-      console.error(`Sync Gmail falhou para ${tokenRow.user_id}`, error);
+      console.error(`Sync Google falhou para ${tokenRow.user_id}`, error);
     }
   }
-  return Response.json({ synced: totalSynced, contactsCreated: totalContactsCreated, accounts: tokenRows?.length ?? 0 }, { headers: corsHeaders });
+  return Response.json({ synced: totalSynced, contactsCreated: totalContactsCreated, meetingsSynced: totalMeetingsSynced, accounts: tokenRows?.length ?? 0 }, { headers: corsHeaders });
 });

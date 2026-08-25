@@ -1,7 +1,7 @@
 import type { Activity, Draft, Lead, Opportunity, Owner, RevenueEntry, RevenueMonth, Stage } from "../types";
 
 export const stageOrder: Stage[] = [
-  "nao_contactado", "contactado", "reuniao_marcada", "reuniao_feita", "proposta", "piloto", "cliente",
+  "nao_contactado", "contactado", "reuniao_marcada", "reuniao_feita", "piloto", "proposta", "cliente",
 ];
 
 export const stageLabels: Record<Stage, string> = {
@@ -12,7 +12,7 @@ export const stageLabels: Record<Stage, string> = {
 
 export const stageProbability: Record<Stage, number> = {
   nao_contactado: 0, contactado: 5, reuniao_marcada: 15, reuniao_feita: 30,
-  proposta: 50, piloto: 75, cliente: 100, perdido: 0, adiado: 10,
+  piloto: 50, proposta: 75, cliente: 100, perdido: 0, adiado: 10,
 };
 
 // Fallback exclusivo de desenvolvimento. Em produção, os profiles vêm do servidor autenticado.

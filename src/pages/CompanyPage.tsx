@@ -74,8 +74,8 @@ export function CompanyPage() {
             <div className="milestone-grid">
               <label>Primeiro contacto<input name="primeiroContacto" type="date" defaultValue={opportunity.dataPrimeiroContacto} /></label>
               <label>Reunião realizada<input name="reuniao" type="date" defaultValue={opportunity.dataReuniao} /></label>
-              <label>Proposta enviada<input name="proposta" type="date" defaultValue={opportunity.dataProposta} /></label>
               <label>Piloto iniciado<input name="piloto" type="date" defaultValue={opportunity.dataPiloto} /></label>
+              <label>Proposta enviada<input name="proposta" type="date" defaultValue={opportunity.dataProposta} /></label>
               <label>Fecho real<input name="fecho" type="date" defaultValue={opportunity.dataFecho} /></label>
               <label>Fecho previsto<input name="fechoPrevisto" type="date" defaultValue={opportunity.dataFechoPrevista} /></label>
             </div>

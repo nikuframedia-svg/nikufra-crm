@@ -75,19 +75,25 @@ const opportunityByCompany = new Map(realOpportunities.map((item) => [item.empre
 const realActivities = realLeads.filter((lead) => lead.dataReuniao).map((lead) => ({ id: uuid(`meeting:${lead.id}:${lead.dataReuniao}`), oportunidadeId: opportunityByCompany.get(lead.empresaId).id, empresa: lead.empresa, userId: ownerId, tipo: "reuniao", descricao: `Reunião com ${lead.nome}`, data: `${lead.dataReuniao}T12:00:00Z`, contactoId: lead.id }));
 const companiesByName = new Map([...companies.values()].map((company) => [company.name.toLocaleLowerCase("pt"), company]));
 const billing = [
-  ["Metalogalva", "Contratualizado", 5000, undefined, undefined, "Valor indicado: 5 mil euros"],
-  ["Metalogalva", "Faturado", 2500, 2500, 0, "Faturação indicada pelo utilizador"],
-  ["Nelo", "Contratualizado", 40000, undefined, undefined, "Valor contratualizado indicado pelo utilizador"],
-  ["Nelo", "Faturado", 10000, 10000, 0, "Faturação indicada pelo utilizador"],
-  ["Jorge Pires", "Contratualizado", 6500, undefined, undefined, "Valor contratualizado indicado pelo utilizador"],
-  ["Ficosa", "Faturado", 1175, 1445.25, 270.25, "Base sem IVA; total indicado de 1.445,25 € à taxa de 23%"],
+  ["Metalogalva", "Contratualizado", 5000, undefined, undefined, "Valor indicado: 5 mil euros", "2026-08-25"],
+  ["Metalogalva", "Faturado", 2500, 2500, 0, "Faturação indicada pelo utilizador", "2026-07-15"],
+  ["Nelo", "Contratualizado", 40000, undefined, undefined, "Valor contratualizado indicado pelo utilizador", "2026-08-25"],
+  ["Nelo", "Faturado", 10000, 10000, 0, "Faturação indicada pelo utilizador", "2026-03-19"],
+  ["Jorge Pires", "Contratualizado", 6500, undefined, undefined, "Valor contratualizado indicado pelo utilizador", "2026-05-25"],
+  ["Ficosa", "Faturado", 1175, 1445.25, 270.25, "Base sem IVA; total indicado de 1.445,25 € à taxa de 23%", "2026-06-18"],
 ];
-const realRevenueEntries = billing.map(([companyName, type, value, gross, vat, description], index) => {
+const realRevenueEntries = billing.map(([companyName, type, value, gross, vat, description, date], index) => {
   const company = companiesByName.get(String(companyName).toLocaleLowerCase("pt"));
   const opportunity = company ? opportunityByCompany.get(company.id) : undefined;
-  return { id: uuid(`billing:${index}:${companyName}:${type}`), empresaId: company?.id, oportunidadeId: opportunity?.id, data: "2026-08-25", empresa: companyName, descricao: description, tipo: type, valor: value, valorBruto: gross, iva: vat, taxaIva: vat ? 23 : undefined, ref: "Entrada manual" };
+  return { id: uuid(`billing:${index}:${companyName}:${type}`), empresaId: company?.id, oportunidadeId: opportunity?.id, data: date, empresa: companyName, descricao: description, tipo: type, valor: value, valorBruto: gross, iva: vat, taxaIva: vat ? 23 : undefined, ref: "Entrada manual" };
 });
-const realRevenueMonths = ["Set", "Out", "Nov", "Dez", "Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago"].map((mes) => ({ mes, contratualizado: mes === "Ago" ? 51500 : 0, faturado: mes === "Ago" ? 13675 : 0, recebido: 0, objetivo: 0 }));
+const revenueMonthKeys = ["2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08"];
+const revenueByMonth = new Map(revenueMonthKeys.map((key) => [key, { contratualizado: 0, faturado: 0, recebido: 0 }]));
+for (const entry of realRevenueEntries) {
+  const month = revenueByMonth.get(String(entry.data).slice(0, 7));
+  if (month) month[String(entry.tipo).toLocaleLowerCase("pt")] += Number(entry.valor);
+}
+const realRevenueMonths = revenueMonthKeys.map((key) => ({ mes: new Date(`${key}-01T12:00:00Z`).toLocaleDateString("pt-PT", { month: "short" }).replace(".", ""), ...revenueByMonth.get(key), objetivo: 0 }));
 const companyList = [...companies.values()];
 const knownContacted = companyList.length;
 const knownMeetings = companyList.filter((company) => statusRank[company.status] >= 2).length;

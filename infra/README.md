@@ -12,7 +12,7 @@ Esta pasta descreve o deployment self-hosted. O `docker-compose.yml` é uma vari
 ## Instalação
 
 1. Copiar `infra/` e `supabase/` para o servidor, mantendo a mesma relação entre pastas.
-2. Executar `./generate-env.sh`, preencher SMTP, rclone e Google, e confirmar `stat -c '%a' .env` = `600`.
+2. Executar `./generate-env.sh`, preencher SMTP, rclone e Google, e confirmar `stat -c '%a' .env` = `600`. No projeto Google Cloud, ativar Gmail API, People API e Google Calendar API e registar o callback `https://crm.nikufra.ai/functions/v1/gmail-oauth-callback`.
 3. Validar configuração: `docker compose --env-file .env config --quiet`.
 4. Arrancar: `docker compose --env-file .env up -d --wait`.
 5. Aplicar migrations por ordem, depois do Auth estar saudável:
@@ -33,7 +33,7 @@ select vault.create_secret('https://crm.nikufra.ai/functions/v1/gmail-sync', 'gm
 select vault.create_secret('<SERVICE_ROLE_KEY>', 'gmail_sync_service_key');
 ```
 
-O refresh token de cada pessoa é cifrado com AES-GCM antes de chegar à tabela. O sync guarda apenas headers, assunto, um excerto curto, IDs e associação CRM — nunca o corpo completo. O backfill inicial guarda o cursor, o número de mensagens associadas, contactos criados, último erro e data da execução, para poder retomar sem recomeçar.
+O refresh token de cada pessoa é cifrado com AES-GCM antes de chegar à tabela. A mesma autorização usa `gmail.readonly`, `gmail.compose`, `contacts.readonly`, `contacts.other.readonly` e `calendar.events.readonly`. O sync guarda apenas headers, assunto, um excerto curto, IDs e associação CRM — nunca o corpo completo. Gmail, Contacts/“Outros contactos” e o calendário principal mantêm tokens incrementais separados, para retomarem sem recomeçar. Eventos confirmados criam atividades de reunião e avançam no máximo para “Reunião marcada”; nunca são assumidos como realizados.
 
 O `.env` real não entra no Git, em backups de código ou em mensagens. `SERVICE_ROLE_KEY`, segredo Google e chave de encriptação vivem apenas no servidor.
 

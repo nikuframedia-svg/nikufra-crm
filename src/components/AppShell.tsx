@@ -38,13 +38,14 @@ export function AppShell() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const { leads, opportunities, addActivity, team, dataMode, currentUserId } = useCRM();
   const [collapsed, setCollapsed] = useState(false);
-  const [dark, setDark] = useState(true);
+  const [dark, setDark] = useState(() => localStorage.getItem("nikufra:theme") === "dark");
   const [commandOpen, setCommandOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
   const [query, setQuery] = useState("");
 
   useEffect(() => {
-    document.documentElement.classList.toggle("light", !dark);
+    document.documentElement.classList.toggle("dark", dark);
+    localStorage.setItem("nikufra:theme", dark ? "dark" : "light");
   }, [dark]);
 
   useEffect(() => {

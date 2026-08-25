@@ -24,7 +24,9 @@ No desenvolvimento sem `.env`, a app pode abrir uma cópia local da base forneci
 
 No servidor, abre “Leads → Importar CSV” e seleciona o ficheiro fornecido. A operação autenticada é idempotente: associa contactos por email, consolida empresas, cria uma única oportunidade base por empresa e reconhece esta base para importar também os movimentos financeiros comunicados, sem duplicar IDs. Para qualquer outro CSV, a pré-visualização mostra o mapeamento inferido e permite corrigir cada coluna.
 
-Cada utilizador tem de consentir individualmente a integração Google. Depois de ligar o Gmail, o backfill começa automaticamente, percorre todas as mensagens disponíveis em páginas, ignora newsletters/no-reply, cria contactos externos sem duplicar emails e passa depois a sincronização incremental de 15 em 15 minutos. O CRM não consegue nem deve aceder à caixa de uma conta apenas por ela se registar: o OAuth da própria pessoa é obrigatório.
+Cada utilizador tem de consentir individualmente a integração Google. A autorização pede apenas Gmail em leitura/criação de rascunhos, Google Contacts/“Outros contactos” em leitura e eventos do Calendar em leitura. O backfill percorre todas as mensagens disponíveis em páginas, ignora newsletters/no-reply, importa contactos externos com ou sem email, regista reuniões confirmadas pelo calendário principal e passa depois a sincronização incremental de 15 em 15 minutos. Emails, recursos Google e eventos são deduplicados por identificadores estáveis. O CRM não consegue nem deve aceder à conta apenas por a pessoa se registar: o OAuth individual é obrigatório.
+
+Para ligar a conta, o servidor precisa de `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `TOKEN_ENCRYPTION_KEY` e `SUPABASE_PUBLIC_URL`; o frontend precisa de `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`. No projeto Google Cloud devem estar ativas Gmail API, People API e Google Calendar API, com o callback `https://<domínio-supabase>/functions/v1/gmail-oauth-callback`. Sem estes valores, a cópia local continua segura e funcional para consulta, mas o botão mostra que a API está indisponível em vez de simular uma ligação.
 
 ```bash
 pnpm build
