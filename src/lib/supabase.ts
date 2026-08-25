@@ -33,9 +33,6 @@ export async function consumeAppDeepLink(value: string): Promise<AppDeepLink> {
 }
 
 export async function requestMagicLink(email: string) {
-  if (!email.toLowerCase().endsWith("@nikufra.ai")) {
-    throw new Error("Usa um endereço @nikufra.ai.");
-  }
   if (!supabase) return { local: true };
   const { error } = await supabase.auth.signInWithOtp({
     email,

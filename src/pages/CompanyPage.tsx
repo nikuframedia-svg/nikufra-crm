@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import { ArrowLeft, Building2, CalendarDays, Check, CircleDollarSign, Mail, Phone, Save, UserRound } from "lucide-react";
 import { stageLabels } from "../data/seed";
-import { formatCurrency } from "../lib/format";
+import { formatCurrency, formatDecimal } from "../lib/format";
 import { useRevenueData } from "../hooks/use-revenue-data";
 import { useCRM } from "../state/crm-context";
 import type { Opportunity } from "../types";
@@ -30,7 +30,6 @@ export function CompanyPage() {
 
   const owner = team.find((item) => item.id === opportunity.ownerId);
   const meetingDays = daysBetween(opportunity.dataPrimeiroContacto, opportunity.dataReuniao);
-  const cycleDays = daysBetween(opportunity.dataPrimeiroContacto, opportunity.dataFecho);
   const invoiced = billing.filter((entry) => entry.tipo === "Faturado").reduce((sum, entry) => sum + entry.valor, 0);
   const contracted = billing.filter((entry) => entry.tipo === "Contratualizado").reduce((sum, entry) => sum + entry.valor, 0);
 
@@ -46,6 +45,7 @@ export function CompanyPage() {
       dataPiloto: String(formData.get("piloto") ?? ""),
       dataFecho: String(formData.get("fecho") ?? ""),
       dataFechoPrevista: String(formData.get("fechoPrevisto") ?? ""),
+      cicloAcordoMeses: Number(formData.get("cicloAcordoMeses") ?? 0) || undefined,
       avaliacao: Number(formData.get("avaliacao") ?? 0),
       notas: String(formData.get("notas") ?? ""),
     };
@@ -61,7 +61,7 @@ export function CompanyPage() {
         <Card><span><Building2 size={16} />Estado atual</span><strong>{stageLabels[opportunity.estado]}</strong><small>{companyOpportunities.length} oportunidade{companyOpportunities.length === 1 ? "" : "s"}</small></Card>
         <Card><span><CircleDollarSign size={16} />Contratualizado</span><strong className="mono">{formatCurrency(contracted || opportunity.valor)}</strong><small>valor registado</small></Card>
         <Card><span><CircleDollarSign size={16} />Faturado sem IVA</span><strong className="mono">{formatCurrency(invoiced)}</strong><small>{billing.filter((entry) => entry.tipo === "Faturado").length} movimento(s)</small></Card>
-        <Card><span><CalendarDays size={16} />Sales cycle</span><strong className="mono">{cycleDays === null ? "Sem amostra" : `${cycleDays} dias`}</strong><small>{meetingDays === null ? "Reunião sem intervalo completo" : `${meetingDays} dias até reunião`}</small></Card>
+        <Card><span><CalendarDays size={16} />Ciclo até acordo verbal</span><strong className="mono">{opportunity.cicloAcordoMeses == null ? "Sem amostra" : `${formatDecimal(opportunity.cicloAcordoMeses)} ${opportunity.cicloAcordoMeses === 1 ? "mês" : "meses"}`}</strong><small>{meetingDays === null ? "Reunião sem intervalo completo" : `${formatDecimal(meetingDays)} dias até reunião`}</small></Card>
       </section>
 
       <section className="company-layout">
@@ -70,13 +70,14 @@ export function CompanyPage() {
           <form className="form-stack" onSubmit={(event) => { event.preventDefault(); save(new FormData(event.currentTarget)); }}>
             <div className="form-grid"><label>Oportunidade<input name="titulo" defaultValue={opportunity.titulo} /></label><label>Responsável<select name="ownerId" defaultValue={opportunity.ownerId}>{team.map((item) => <option value={item.id} key={item.id}>{item.nome}</option>)}</select></label></div>
             <div className="form-grid form-grid--3"><label>Valor contratado / estimado<input className="mono" name="valor" type="number" min="0" step="0.01" defaultValue={opportunity.valor} /></label><label>Recorrente anual<input className="mono" name="recorrente" type="number" min="0" step="0.01" defaultValue={opportunity.recorrenteAnual ?? 0} /></label><label>Avaliação do cliente (1–5)<input name="avaliacao" type="number" min="1" max="5" defaultValue={opportunity.avaliacao ?? ""} /></label></div>
-            <h3 className="settings-subtitle">Marcos para calcular o sales cycle</h3>
+            <h3 className="settings-subtitle">Marcos comerciais</h3>
             <div className="milestone-grid">
+              <label>Ciclo: 1.º contacto → acordo verbal (meses)<input className="mono" name="cicloAcordoMeses" type="number" min="0" max="240" step="0.01" defaultValue={opportunity.cicloAcordoMeses ?? ""} placeholder="Ex.: 2" /></label>
               <label>Primeiro contacto<input name="primeiroContacto" type="date" defaultValue={opportunity.dataPrimeiroContacto} /></label>
               <label>Reunião realizada<input name="reuniao" type="date" defaultValue={opportunity.dataReuniao} /></label>
               <label>Piloto iniciado<input name="piloto" type="date" defaultValue={opportunity.dataPiloto} /></label>
               <label>Proposta enviada<input name="proposta" type="date" defaultValue={opportunity.dataProposta} /></label>
-              <label>Fecho real<input name="fecho" type="date" defaultValue={opportunity.dataFecho} /></label>
+              <label>Cliente desde / fecho administrativo<input name="fecho" type="date" defaultValue={opportunity.dataFecho} /></label>
               <label>Fecho previsto<input name="fechoPrevisto" type="date" defaultValue={opportunity.dataFechoPrevista} /></label>
             </div>
             <label>Notas internas<textarea name="notas" rows={5} defaultValue={opportunity.notas} placeholder="Contexto, próximos passos, riscos e informação do projeto." /></label>

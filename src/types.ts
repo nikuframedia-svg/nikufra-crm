@@ -56,6 +56,7 @@ export interface Opportunity {
   dataPiloto?: string;
   dataFecho?: string;
   dataFechoPrevista: string;
+  cicloAcordoMeses?: number;
   recorrenteAnual?: number;
   avaliacao?: number;
   notas?: string;

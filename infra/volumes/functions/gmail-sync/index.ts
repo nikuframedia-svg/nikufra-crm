@@ -14,6 +14,7 @@ type TokenRow = {
   calendar_sync_token: string | null;
   people_contacts_synced: number;
   calendar_events_synced: number;
+  import_confirmed_at: string;
   profiles: { email?: string } | Array<{ email?: string }> | null;
 };
 type ContactSeed = {
@@ -97,6 +98,14 @@ async function mapLimit<T, R>(items: T[], limit: number, mapper: (item: T) => Pr
 async function ensureContact(admin: ReturnType<typeof adminClient>, seed: ContactSeed) {
   const email = clean(seed.email, 320).toLowerCase() || null;
   const resourceName = clean(seed.googleResourceName, 500) || null;
+  if (email) {
+    const { data: suppressed } = await admin.from("contact_import_suppressions").select("id").eq("email", email).maybeSingle();
+    if (suppressed) return null;
+  }
+  if (resourceName) {
+    const { data: suppressed } = await admin.from("contact_import_suppressions").select("id").eq("google_resource_name", resourceName).maybeSingle();
+    if (suppressed) return null;
+  }
   let contact = null;
   if (email) ({ data: contact } = await admin.from("contactos").select("id,empresa_id,email,nome,estado,data_reuniao,google_resource_name").eq("email", email).maybeSingle());
   if (!contact && resourceName) ({ data: contact } = await admin.from("contactos").select("id,empresa_id,email,nome,estado,data_reuniao,google_resource_name").eq("google_resource_name", resourceName).maybeSingle());
@@ -210,7 +219,7 @@ Deno.serve(async (request) => {
   catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Sessão inválida" }, { status: 401, headers: corsHeaders }); }
 
   const admin = adminClient();
-  let tokenQuery = admin.from("google_tokens").select("user_id,refresh_token_encrypted,history_id,backfill_page_token,backfill_complete,messages_synced,contacts_created,people_sync_token,other_contacts_sync_token,calendar_sync_token,people_contacts_synced,calendar_events_synced,profiles(email)");
+  let tokenQuery = admin.from("google_tokens").select("user_id,refresh_token_encrypted,history_id,backfill_page_token,backfill_complete,messages_synced,contacts_created,people_sync_token,other_contacts_sync_token,calendar_sync_token,people_contacts_synced,calendar_events_synced,import_confirmed_at,profiles(email)").not("import_confirmed_at", "is", null);
   if (requestedUserId) tokenQuery = tokenQuery.eq("user_id", requestedUserId);
   const { data: tokenRows, error: tokenError } = await tokenQuery;
   if (tokenError) return Response.json({ error: tokenError.message }, { status: 500, headers: corsHeaders });
@@ -283,6 +292,7 @@ Deno.serve(async (request) => {
 
         for (const externalEmail of externalEmails) {
           const ensured = await ensureContact(admin, { userId: tokenRow.user_id, name: contactName(headerValue(headers, sent ? "To" : "From"), externalEmail), email: externalEmail, contacted: true, firstContact: date.slice(0, 10), source: "Gmail" });
+          if (!ensured) continue;
           if (ensured.created) batchContactsCreated += 1;
           const { error: activityError } = await admin.from("atividades").upsert({ oportunidade_id: ensured.opportunity.id, empresa_id: ensured.contact.empresa_id, contacto_id: ensured.contact.id, user_id: tokenRow.user_id, tipo: sent ? "email_enviado" : "email_recebido", direcao: sent ? "enviado" : "recebido", data: date, descricao: subject.slice(0, 500), message_id: message.id, thread_id: message.threadId, assunto: subject.slice(0, 500), snippet: String(message.snippet ?? "").slice(0, 240), reuniao_inferida: inferredMeeting }, { onConflict: "message_id,contacto_id", ignoreDuplicates: true });
           if (!activityError) batchSynced += 1;
@@ -297,6 +307,7 @@ Deno.serve(async (request) => {
           const seed = personSeed(person, tokenRow.user_id, "Google Contacts");
           if (!isExternalEmail(seed.email)) continue;
           const ensured = await ensureContact(admin, seed); peopleProcessed += 1;
+          if (!ensured) continue;
           if (ensured.created) batchContactsCreated += 1;
         }
         peopleSyncToken = saved.nextSyncToken;
@@ -308,6 +319,7 @@ Deno.serve(async (request) => {
           const seed = personSeed(person, tokenRow.user_id, "Google Contacts");
           if (!isExternalEmail(seed.email)) continue;
           const ensured = await ensureContact(admin, seed); peopleProcessed += 1;
+          if (!ensured) continue;
           if (ensured.created) batchContactsCreated += 1;
         }
         otherContactsSyncToken = other.nextSyncToken;
@@ -358,6 +370,7 @@ Deno.serve(async (request) => {
           const seenCompanies = new Set<string>();
           for (const [email, name] of participants) {
             const ensured = await ensureContact(admin, { userId: tokenRow.user_id, name, email, contacted: true, source: "Google Calendar" });
+            if (!ensured) continue;
             if (ensured.created) batchContactsCreated += 1;
             const meetingDate = start.slice(0, 10);
             const contactChanges: Record<string, unknown> = {};

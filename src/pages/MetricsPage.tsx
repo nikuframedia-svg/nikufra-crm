@@ -24,7 +24,7 @@ export function MetricsPage() {
     enabled: Boolean(supabase),
     queryFn: async () => {
       const [cohorts, noShow, cycle, pipeline, results, funnel, time, verticals, clients] = await Promise.all([
-        supabase!.from("metricas_taxa_reuniao_coorte").select("*"), supabase!.from("metricas_no_show").select("*"), supabase!.from("metricas_ciclo_venda").select("*"), supabase!.from("metricas_pipeline").select("*"), supabase!.from("metricas_resultados").select("*"), supabase!.from("metricas_funil").select("*").order("ordem"), supabase!.from("metricas_tempo_estado").select("*"), supabase!.from("metricas_distribuicao_vertical").select("*"), supabase!.from("metricas_cliente").select("*").order("faturacao_acumulada", { ascending: false }),
+        supabase!.from("metricas_taxa_reuniao_coorte").select("*"), supabase!.from("metricas_no_show").select("*"), supabase!.from("metricas_ciclo_acordo_verbal").select("*"), supabase!.from("metricas_pipeline").select("*"), supabase!.from("metricas_resultados").select("*"), supabase!.from("metricas_funil").select("*").order("ordem"), supabase!.from("metricas_tempo_estado").select("*"), supabase!.from("metricas_distribuicao_vertical").select("*"), supabase!.from("metricas_cliente").select("*").order("faturacao_acumulada", { ascending: false }),
       ]);
       const firstError = [cohorts, noShow, cycle, pipeline, results, funnel, time, verticals, clients].find((result) => result.error)?.error;
       if (firstError) throw firstError;
@@ -43,9 +43,9 @@ export function MetricsPage() {
   const meetingDenominator = hasCohortSample ? cohortTotals!.contacted : serverMetrics ? contacted.length : contactedLeads.length;
   const meetingNumerator = hasCohortSample ? cohortTotals!.meetings : serverMetrics ? met.length : metLeads.length;
   const meetingRate = meetingDenominator ? 100 * meetingNumerator / meetingDenominator : null;
-  const localCycleDays = opportunities.map((item) => item.dataPrimeiroContacto && item.dataFecho ? (new Date(item.dataFecho).getTime() - new Date(item.dataPrimeiroContacto).getTime()) / 86_400_000 : null).filter((value): value is number => value !== null && value >= 0);
-  const localCycleMedian = median(localCycleDays);
-  const localCycleAverage = localCycleDays.length ? localCycleDays.reduce((sum, value) => sum + value, 0) / localCycleDays.length : null;
+  const localCycleMonths = opportunities.map((item) => item.cicloAcordoMeses).filter((value): value is number => value != null && value >= 0);
+  const localCycleMedian = median(localCycleMonths);
+  const localCycleAverage = localCycleMonths.length ? localCycleMonths.reduce((sum, value) => sum + value, 0) / localCycleMonths.length : null;
 
   const localTime = stageOrder.slice(0, -1).map((stage) => {
     const values = opportunities.filter((item) => item.estado === stage).map((item) => item.diasNoEstado);
@@ -88,9 +88,9 @@ export function MetricsPage() {
   const averageObservedRevenue = displayClients.length ? displayClients.reduce((sum, client) => sum + Number(client.faturacao_acumulada), 0) / displayClients.length : 0;
   const pipelineValue = serverMetrics?.pipeline?.pipeline_ponderado !== undefined ? Number(serverMetrics.pipeline.pipeline_ponderado) : weighted;
   const noShowN = Number(serverMetrics?.noShow?.n_marcadas ?? 0);
-  const cycleN = Number(serverMetrics?.cycle?.n ?? localCycleDays.length);
-  const cycleMedian = cycleN ? (serverMetrics?.cycle?.mediana_dias != null ? Number(serverMetrics.cycle.mediana_dias) : localCycleMedian) : null;
-  const cycleAverage = cycleN ? (serverMetrics?.cycle?.media_dias != null ? Number(serverMetrics.cycle.media_dias) : localCycleAverage) : null;
+  const cycleN = Number(serverMetrics?.cycle?.n ?? localCycleMonths.length);
+  const cycleMedian = cycleN ? (serverMetrics?.cycle?.mediana_meses != null ? Number(serverMetrics.cycle.mediana_meses) : localCycleMedian) : null;
+  const cycleAverage = cycleN ? (serverMetrics?.cycle?.media_meses != null ? Number(serverMetrics.cycle.media_meses) : localCycleAverage) : null;
   const clientRate = contacted.length ? 100 * clients.length / contacted.length : null;
   const maxDistributionValue = Math.max(1, ...displayDistribution.map((item) => item.valor));
   const missingMeetingDates = leads.filter((lead) => lead.estado === "reuniao_feita" && !lead.dataReuniao).length;
@@ -102,7 +102,7 @@ export function MetricsPage() {
         <MetricCard label={serverMetrics ? "Taxa de reunião por empresa" : "Taxa de reunião por contacto"} value={meetingRate === null ? "Sem amostra" : formatPercentage(meetingRate)} detail={serverMetrics ? `${meetingNumerator} em ${meetingDenominator} empresas contactadas` : `${meetingNumerator} em ${meetingDenominator} contactos · ${met.length}/${contacted.length} empresas`} icon={<Users size={17} />} />
         <MetricCard label="No-show" value={noShowN ? formatPercentage(Number(serverMetrics?.noShow?.taxa_no_show)) : "Sem amostra"} detail={noShowN ? `n=${noShowN} reuniões marcadas` : "requer presenças registadas"} icon={<CalendarRange size={17} />} />
         <MetricCard label="Cliente / base contactada" value={clientRate === null ? "Sem amostra" : formatPercentage(clientRate)} detail={`${clients.length} clientes em ${contacted.length} empresas`} icon={<Target size={17} />} />
-        <MetricCard label="Ciclo mediano" value={cycleMedian === null ? "Sem amostra" : `${formatDecimal(cycleMedian)} dias`} detail={cycleN ? `média: ${formatDecimal(cycleAverage ?? 0)} dias · n=${cycleN}` : "requer primeiro contacto e fecho"} icon={<Clock3 size={17} />} />
+        <MetricCard label="1.º contacto → acordo verbal" value={cycleMedian === null ? "Sem amostra" : `${formatDecimal(cycleMedian)} ${cycleMedian === 1 ? "mês" : "meses"}`} detail={cycleN ? `média: ${formatDecimal(cycleAverage ?? 0)} meses · n=${cycleN} confirmados` : "requer duração confirmada na ficha"} icon={<Clock3 size={17} />} />
         <MetricCard label="Pipeline ponderado" value={formatCurrency(pipelineValue)} detail={`${opportunities.length} oportunidades`} icon={<CircleGauge size={17} />} />
       </section>
 

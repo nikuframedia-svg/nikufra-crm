@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { createColumnHelper, flexRender, getCoreRowModel, getFilteredRowModel, getPaginationRowModel, getSortedRowModel, useReactTable, type PaginationState, type SortingState } from "@tanstack/react-table";
-import { ArrowDownUp, Check, Download, MailPlus, Search, Upload, X } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, Check, Download, MailPlus, Search, Trash2, Upload, X } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { stageLabels, stageOrder, stageProbability } from "../data/seed";
 import { csvFieldLabels, csvRecord, parseCsv, stageFromText, verticalFromText, type CsvField, type ParsedCsv } from "../lib/csv-import";
@@ -11,7 +11,7 @@ import { Avatar, Button, Card, Modal, PageHeader } from "../components/ui";
 const helper = createColumnHelper<Lead>();
 
 export function LeadsPage() {
-  const { leads, opportunities, updateLead, team, importBatch, setEmailSelection, dataMode } = useCRM();
+  const { leads, opportunities, updateLead, deleteContacts, team, currentUserId, importBatch, setEmailSelection, dataMode } = useCRM();
   const [query, setQuery] = useState("");
   const [sorting, setSorting] = useState<SortingState>([]);
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
@@ -20,7 +20,11 @@ export function LeadsPage() {
   const [importData, setImportData] = useState<ParsedCsv | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [importError, setImportError] = useState("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const canDelete = team.find((owner) => owner.id === currentUserId)?.role === "admin";
 
   const columns = useMemo(() => [
     helper.display({ id: "select", header: () => <input type="checkbox" aria-label="Selecionar todos" checked={selected.size === leads.length && leads.length > 0} onChange={(event) => setSelected(event.target.checked ? new Set(leads.map((lead) => lead.id)) : new Set())} />, cell: ({ row }) => <input type="checkbox" aria-label={`Selecionar ${row.original.nome}`} checked={selected.has(row.original.id)} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(row.original.id); else next.delete(row.original.id); return next; })} /> }),
@@ -96,11 +100,21 @@ export function LeadsPage() {
     finally { setImportBusy(false); }
   }
 
+  async function handleDelete() {
+    setDeleteBusy(true); setDeleteError("");
+    try {
+      await deleteContacts([...selected]);
+      setSelected(new Set()); setDeleteOpen(false);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "Não foi possível eliminar os contactos.");
+    } finally { setDeleteBusy(false); }
+  }
+
   return (
     <div className="page">
       <PageHeader eyebrow="Base comercial" title="Empresas e leads" description={`${leads.length} contactos ativos. Clica numa célula para editar sem sair da tabela.`} actions={<><Button variant="secondary" onClick={() => setImportOpen(true)}><Upload size={16} />Importar CSV</Button><Button variant="secondary" onClick={handleExport}><Download size={16} />Exportar</Button></>} />
       <Card className="data-table-card">
-        <div className="table-toolbar"><div className="table-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Pesquisar nome, empresa, email..." /><kbd>/</kbd></div><div>{selected.size ? <><span className="selection-count"><Check size={14} />{selected.size} selecionados</span><Link to="/email" onClick={() => setEmailSelection([...selected])}><Button><MailPlus size={16} />Criar rascunhos</Button></Link><Button variant="ghost" onClick={() => setSelected(new Set())}><X size={16} /></Button></> : <span className="row-count mono">{table.getFilteredRowModel().rows.length} linhas</span>}</div></div>
+        <div className="table-toolbar"><div className="table-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Pesquisar nome, empresa, email..." /><kbd>/</kbd></div><div>{selected.size ? <><span className="selection-count"><Check size={14} />{selected.size} selecionados</span><Link to="/email" onClick={() => setEmailSelection([...selected])}><Button><MailPlus size={16} />Criar rascunhos</Button></Link>{canDelete ? <Button variant="danger" onClick={() => { setDeleteError(""); setDeleteOpen(true); }}><Trash2 size={16} />Apagar</Button> : null}<Button variant="ghost" onClick={() => setSelected(new Set())}><X size={16} /></Button></> : <span className="row-count mono">{table.getFilteredRowModel().rows.length} linhas</span>}</div></div>
         <div className="table-scroll"><table className="data-table"><thead>{table.getHeaderGroups().map((group) => <tr key={group.id}>{group.headers.map((header) => <th key={header.id} onClick={header.column.getToggleSortingHandler()}>{flexRender(header.column.columnDef.header, header.getContext())}{header.column.getCanSort() ? <ArrowDownUp size={12} /> : null}</th>)}</tr>)}</thead><tbody>{table.getRowModel().rows.map((row) => <tr key={row.id}>{row.getVisibleCells().map((cell) => <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}</tr>)}</tbody></table></div>
         <div className="table-footer"><span>A mostrar {pagination.pageIndex * pagination.pageSize + 1}–{Math.min((pagination.pageIndex + 1) * pagination.pageSize, table.getFilteredRowModel().rows.length)} de {table.getFilteredRowModel().rows.length}</span><span className="pagination-controls"><Button variant="ghost" disabled={!table.getCanPreviousPage()} onClick={() => table.previousPage()}>Anterior</Button><b className="mono">{pagination.pageIndex + 1}/{table.getPageCount()}</b><Button variant="ghost" disabled={!table.getCanNextPage()} onClick={() => table.nextPage()}>Seguinte</Button></span><span>{dataMode === "supabase" ? "Dados partilhados no servidor" : "Base Nikufra carregada localmente"}</span></div>
       </Card>
@@ -110,6 +124,11 @@ export function LeadsPage() {
         {importData ? <div className="import-preview"><div className="import-preview__head"><strong>{importData.rows.length} registos · separador {importData.delimiter === "\t" ? "tab" : importData.delimiter}</strong><span>{importData.mapping.filter(Boolean).length}/{importData.headers.length} campos reconhecidos</span></div><div className="mapping-grid">{importData.headers.map((header, index) => <label key={`${header}-${index}`}><span>{header}</span><select value={importData.mapping[index] ?? ""} onChange={(event) => setImportData((current) => current ? { ...current, mapping: current.mapping.map((field, fieldIndex) => fieldIndex === index ? (event.target.value || null) as CsvField | null : field) } : current)}><option value="">Ignorar coluna</option>{Object.entries(csvFieldLabels).map(([field, label]) => <option value={field} key={field}>{label}</option>)}</select></label>)}</div><table><thead><tr>{importData.headers.slice(0, 6).map((header, index) => <th key={`${header}-${index}`}>{header}</th>)}</tr></thead><tbody>{importData.rows.slice(0, 5).map((row, index) => <tr key={index}>{row.slice(0, 6).map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>)}</tbody></table></div> : null}
         {importError ? <div className="auth-error">{importError}</div> : null}
         <div className="modal__actions"><Button variant="secondary" onClick={() => setImportOpen(false)}>Cancelar</Button><Button disabled={!importData || importBusy} onClick={() => void handleImport()}>{importBusy ? "A importar…" : "Importar sem duplicados"}</Button></div>
+      </Modal>
+      <Modal open={deleteOpen} onClose={() => !deleteBusy && setDeleteOpen(false)} title={`Apagar ${selected.size} contacto${selected.size === 1 ? "" : "s"}?`} description="Esta ação remove os contactos selecionados da base comercial.">
+        <div className="delete-contact-warning"><AlertTriangle size={20} /><div><strong>Os contactos não voltarão a aparecer pela sincronização Google.</strong><p>As empresas, oportunidades e histórico comercial são preservados. A ligação pessoal ao contacto é removida e a operação fica no audit log.</p></div></div>
+        {deleteError ? <div className="auth-error">{deleteError}</div> : null}
+        <div className="modal__actions"><Button variant="secondary" disabled={deleteBusy} onClick={() => setDeleteOpen(false)}>Cancelar</Button><Button variant="danger" disabled={deleteBusy} onClick={() => void handleDelete()}>{deleteBusy ? "A apagar…" : "Apagar definitivamente"}</Button></div>
       </Modal>
     </div>
   );

@@ -139,6 +139,11 @@ main { height: calc(100vh - 70px); overflow: auto; }
 .auth-success strong { color: var(--ink); font-size: 11px; }
 .auth-success span { color: var(--muted); font-size: 9px; line-height: 1.45; }
 .auth-success .button { margin-top: 6px; }
+.google-import-review > .button { width: 100%; margin-top: 8px; }
+.google-import-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin: 18px 0 12px; }
+.google-import-stats > span { display: grid; gap: 6px; min-width: 0; padding: 11px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
+.google-import-stats small { color: var(--muted); font-size: 8.5px; }
+.google-import-stats strong { color: var(--ink-strong); font-size: 18px; }
 .auth-error { margin: 9px 0 0; padding: 8px; border: 1px solid color-mix(in srgb, var(--red), transparent 68%); color: var(--red); background: rgba(239,68,68,.07); font-size: 9px; }
 .page { min-width: 0; padding: 26px; }
 .page--pipeline { display: flex; height: 100%; min-width: 0; flex-direction: column; padding-right: 0; padding-bottom: 0; overflow: hidden; }
@@ -211,6 +216,12 @@ main { height: calc(100vh - 70px); overflow: auto; }
 .modal__header h2 { margin: 0; color: var(--ink-strong); font-size: 18px; letter-spacing: -.03em; }
 .modal__header p:last-child { margin: 6px 0 0; color: var(--muted); font-size: 11px; }
 .modal__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; padding-top: 16px; border-top: 1px solid var(--line); }
+.delete-contact-warning { display: flex; align-items: flex-start; gap: 12px; margin: 20px 21px; padding: 14px; border: 1px solid rgba(239,68,68,.22); border-radius: 5px; color: var(--red); background: rgba(239,68,68,.06); }
+.delete-contact-warning svg { flex: 0 0 auto; }
+.delete-contact-warning strong { display: block; color: var(--ink-strong); font-size: 11px; }
+.delete-contact-warning p { margin: 6px 0 0; color: var(--muted); font-size: 9.5px; line-height: 1.55; }
+.delete-contact-warning + .auth-error { margin: 0 21px; }
+.delete-contact-warning ~ .modal__actions { margin: 0 21px 20px; }
 .form-stack { display: flex; flex-direction: column; gap: 14px; padding: 20px 21px; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .form-grid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }

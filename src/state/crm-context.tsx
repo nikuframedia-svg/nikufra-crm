@@ -18,6 +18,7 @@ interface CRMState {
   importBatch: (leads: Lead[], opportunities: Opportunity[], options?: { includeNikufraFinancials?: boolean }) => Promise<void>;
   updateOpportunity: (id: string, changes: Partial<Opportunity>) => void;
   updateLead: (id: string, field: keyof Lead, value: string) => void;
+  deleteContacts: (ids: string[]) => Promise<number>;
   addDrafts: (drafts: Draft[]) => void;
   addActivity: (activity: Activity) => void;
 }
@@ -65,7 +66,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     async function loadServerState() {
       const [profilesResult, opportunitiesResult, activitiesResult, contactsResult, historyResult] = await Promise.all([
         supabase!.from("profiles").select("id,nome,email,role,cor").eq("ativo", true).order("nome"),
-        supabase!.from("oportunidades").select("id,titulo,estado,tipo,valor_estimado,valor_recorrente_anual,probabilidade,owner_id,data_primeiro_contacto,data_reuniao,data_proposta,data_piloto,data_fecho,data_prevista_fecho,avaliacao,notas,created_at,updated_at,empresa_id,contacto_principal_id,empresas(id,nome,vertical,cidade,pais,origem)").eq("arquivado", false).order("updated_at", { ascending: false }),
+        supabase!.from("oportunidades").select("id,titulo,estado,tipo,valor_estimado,valor_recorrente_anual,probabilidade,owner_id,data_primeiro_contacto,data_reuniao,data_proposta,data_piloto,data_fecho,data_prevista_fecho,ciclo_acordo_meses,avaliacao,notas,created_at,updated_at,empresa_id,contacto_principal_id,empresas(id,nome,vertical,cidade,pais,origem)").eq("arquivado", false).order("updated_at", { ascending: false }),
         supabase!.from("atividades").select("id,oportunidade_id,contacto_id,user_id,tipo,descricao,data,direcao,reuniao_inferida,thread_id,assunto,snippet,empresas(nome),contactos(nome,email)").order("data", { ascending: false }).limit(500),
         supabase!.from("contactos").select("id,empresa_id,nome,cargo,email,telefone,optout,estado,data_reuniao,empresas(id,nome,vertical,cidade,pais,origem)").order("updated_at", { ascending: false }),
         supabase!.from("estado_historico").select("oportunidade_id,changed_at").order("changed_at", { ascending: false }),
@@ -81,7 +82,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
         const serverOpportunities: Opportunity[] = opportunitiesResult.data.map((row) => {
           const company = Array.isArray(row.empresas) ? row.empresas[0] : row.empresas;
           const enteredAt = latestStateChange.get(row.id) ?? row.created_at;
-          return { id: row.id, leadId: row.contacto_principal_id ?? row.id, empresaId: row.empresa_id, empresa: company?.nome ?? "Empresa", titulo: row.titulo, estado: row.estado, tipo: opportunityTypeFromDb[row.tipo] ?? "Consultoria", valor: Number(row.valor_estimado), probabilidade: row.probabilidade, ownerId: row.owner_id, diasNoEstado: Math.max(0, Math.floor((Date.now() - new Date(enteredAt).getTime()) / 86400000)), dataPrimeiroContacto: row.data_primeiro_contacto ?? "", dataReuniao: row.data_reuniao ?? undefined, dataProposta: row.data_proposta ?? undefined, dataPiloto: row.data_piloto ?? undefined, dataFecho: row.data_fecho ?? undefined, dataFechoPrevista: row.data_prevista_fecho ?? "", recorrenteAnual: row.valor_recorrente_anual ? Number(row.valor_recorrente_anual) : undefined, avaliacao: row.avaliacao ?? undefined, notas: row.notas ?? "" };
+          return { id: row.id, leadId: row.contacto_principal_id ?? row.id, empresaId: row.empresa_id, empresa: company?.nome ?? "Empresa", titulo: row.titulo, estado: row.estado, tipo: opportunityTypeFromDb[row.tipo] ?? "Consultoria", valor: Number(row.valor_estimado), probabilidade: row.probabilidade, ownerId: row.owner_id, diasNoEstado: Math.max(0, Math.floor((Date.now() - new Date(enteredAt).getTime()) / 86400000)), dataPrimeiroContacto: row.data_primeiro_contacto ?? "", dataReuniao: row.data_reuniao ?? undefined, dataProposta: row.data_proposta ?? undefined, dataPiloto: row.data_piloto ?? undefined, dataFecho: row.data_fecho ?? undefined, dataFechoPrevista: row.data_prevista_fecho ?? "", cicloAcordoMeses: row.ciclo_acordo_meses == null ? undefined : Number(row.ciclo_acordo_meses), recorrenteAnual: row.valor_recorrente_anual ? Number(row.valor_recorrente_anual) : undefined, avaliacao: row.avaliacao ?? undefined, notas: row.notas ?? "" };
         });
         const serverLeads: Lead[] = (contactsResult.data ?? []).map((contact) => {
           const company = Array.isArray(contact.empresas) ? contact.empresas[0] : contact.empresas;
@@ -103,7 +104,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
 
     void loadServerState();
     void supabase.auth.getUser().then(({ data }) => { if (data.user) setCurrentUserId(data.user.id); });
-    const channel = supabase.channel("crm-live").on("postgres_changes", { event: "*", schema: "public", table: "oportunidades" }, () => void loadServerState()).on("postgres_changes", { event: "*", schema: "public", table: "atividades" }, () => void loadServerState()).subscribe();
+    const channel = supabase.channel("crm-live").on("postgres_changes", { event: "*", schema: "public", table: "oportunidades" }, () => void loadServerState()).on("postgres_changes", { event: "*", schema: "public", table: "atividades" }, () => void loadServerState()).on("postgres_changes", { event: "*", schema: "public", table: "contactos" }, () => void loadServerState()).subscribe();
     return () => { active = false; void supabase?.removeChannel(channel); };
   }, []);
 
@@ -165,6 +166,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     if (changes.dataPiloto !== undefined) payload.data_piloto = changes.dataPiloto || null;
     if (changes.dataFecho !== undefined) payload.data_fecho = changes.dataFecho || null;
     if (changes.dataFechoPrevista !== undefined) payload.data_prevista_fecho = changes.dataFechoPrevista || null;
+    if (changes.cicloAcordoMeses !== undefined) payload.ciclo_acordo_meses = changes.cicloAcordoMeses || null;
     if (changes.avaliacao !== undefined) payload.avaliacao = changes.avaliacao || null;
     if (changes.notas !== undefined) payload.notas = changes.notas;
     if (Object.keys(payload).length) void supabase.from("oportunidades").update(payload).eq("id", id).then(({ error }) => { if (error) console.error("Falha ao editar empresa", error.message); });
@@ -217,6 +219,24 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     }
   }, [leads, opportunities, persist]);
 
+  const deleteContacts = useCallback(async (ids: string[]) => {
+    const uniqueIds = [...new Set(ids)];
+    if (!uniqueIds.length) return 0;
+    let deleted = uniqueIds.length;
+    if (supabase) {
+      const { data, error } = await supabase.functions.invoke("contact-delete", { body: { ids: uniqueIds } });
+      if (error) throw new Error(error.message);
+      deleted = Number(data?.deleted ?? 0);
+    }
+    const idSet = new Set(uniqueIds);
+    setLeads((current) => {
+      const next = current.filter((lead) => !idSet.has(lead.id));
+      persist("nikufra:v2:leads", next);
+      return next;
+    });
+    return deleted;
+  }, [persist]);
+
   const value = useMemo(() => ({
     leads,
     opportunities,
@@ -232,6 +252,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     importBatch,
     updateOpportunity,
     updateLead,
+    deleteContacts,
     addDrafts: (items: Draft[]) => setDrafts((current) => [...items, ...current]),
     addActivity: (item: Activity) => {
       setActivities((current) => [item, ...current]);
@@ -240,7 +261,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
         if (opportunity?.empresaId) void supabase.from("atividades").insert({ oportunidade_id: item.oportunidadeId || null, empresa_id: opportunity.empresaId, user_id: item.userId, tipo: item.tipo === "email" ? "email_enviado" : item.tipo === "proposta" ? "proposta_enviada" : item.tipo, descricao: item.descricao, data: item.data }).then(({ error }) => { if (error) console.error("Falha ao criar atividade", error.message); });
       }
     },
-  }), [activities, addOpportunity, currentUserId, drafts, emailSelection, importBatch, leads, moveOpportunity, opportunities, team, updateLead, updateOpportunity]);
+  }), [activities, addOpportunity, currentUserId, deleteContacts, drafts, emailSelection, importBatch, leads, moveOpportunity, opportunities, team, updateLead, updateOpportunity]);
 
   return <CRMContext.Provider value={value}>{children}</CRMContext.Provider>;
 }

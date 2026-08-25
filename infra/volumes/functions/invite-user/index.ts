@@ -8,9 +8,15 @@ Deno.serve(async (request) => {
     const { data: profile } = await admin.from("profiles").select("role,ativo").eq("id", user.id).single();
     if (!profile?.ativo || profile.role !== "admin") return Response.json({ error: "Apenas administradores" }, { status: 403, headers: corsHeaders });
     const { email, nome } = await request.json();
-    if (!String(email).toLowerCase().endsWith("@nikufra.ai")) return Response.json({ error: "Usa um endereço @nikufra.ai" }, { status: 400, headers: corsHeaders });
-    const { error } = await admin.auth.admin.inviteUserByEmail(String(email).toLowerCase(), { data: { nome: String(nome ?? "") }, redirectTo: "nikufra-crm://auth/callback" });
-    if (error) throw error;
+    const normalizedEmail = String(email ?? "").trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return Response.json({ error: "Endereço de email inválido" }, { status: 400, headers: corsHeaders });
+    const { error: invitationError } = await admin.from("user_invitations").upsert({ email: normalizedEmail, nome: String(nome ?? "").trim(), invited_by: user.id, invited_at: new Date().toISOString(), used_at: null }, { onConflict: "email" });
+    if (invitationError) throw invitationError;
+    const { error } = await admin.auth.admin.inviteUserByEmail(normalizedEmail, { data: { nome: String(nome ?? "") }, redirectTo: "nikufra-crm://auth/callback" });
+    if (error) {
+      await admin.from("user_invitations").delete().eq("email", normalizedEmail).eq("invited_by", user.id);
+      throw error;
+    }
     return Response.json({ invited: true }, { headers: corsHeaders });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Falha ao convidar" }, { status: 400, headers: corsHeaders });

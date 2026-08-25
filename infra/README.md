@@ -41,6 +41,8 @@ select vault.create_secret('<SERVICE_ROLE_KEY>', 'gmail_sync_service_key');
 
 O refresh token de cada pessoa é cifrado com AES-GCM antes de chegar à tabela. A mesma autorização usa `gmail.readonly`, `gmail.compose`, `contacts.readonly`, `contacts.other.readonly` e `calendar.events.readonly`. O sync guarda apenas headers, assunto, um excerto curto, IDs e associação CRM — nunca o corpo completo. Gmail, Contacts/“Outros contactos” e o calendário principal mantêm tokens incrementais separados, para retomarem sem recomeçar. Eventos confirmados criam atividades de reunião e avançam no máximo para “Reunião marcada”; nunca são assumidos como realizados.
 
+O OAuth é individual e a conta Google devolvida pelo Gmail tem de coincidir com o email autenticado no CRM. Um estado OAuth de uso único e expiração curta protege o callback. Uma conta nova fica em modo de pré-visualização: o cron ignora tokens sem `import_confirmed_at`, e só a confirmação explícita desbloqueia o backfill. Os utilizadores partilham empresas, contactos e atividade comercial através das políticas RLS; cada token Google continua isolado ao respetivo titular. A eliminação de contactos é uma função administrativa, preserva a história sem a ligação pessoal, regista `RGPD_DELETE` e impede reimportação.
+
 O `.env` real não entra no Git, em backups de código ou em mensagens. `SERVICE_ROLE_KEY`, segredo Google e chave de encriptação vivem apenas no servidor.
 
 ## Rede e sistema operativo
@@ -79,9 +81,9 @@ dropdb nikufra_restore_test
 
 Registar data, duração, contagens e resultado do teste. Não promover uma atualização de imagens sem dump verificado e plano de rollback.
 
-## SMTP e magic links
+## SMTP, convites e magic links
 
-O Auth não entrega magic links sem SMTP. Se for usado Google Workspace, limitar o relay ao IP do servidor e ao domínio Nikufra. A aplicação só aceita `@nikufra.ai`; o trigger de base de dados repete a restrição e cria novas contas inativas. Um admin tem de as aprovar.
+O Auth não entrega magic links sem SMTP. Se for usado Google Workspace, limitar o relay ao IP do servidor. A primeira conta tem de ser `@nikufra.ai`; as seguintes podem ser Google Workspace ou `@gmail.com`, mas têm de corresponder a um convite ainda não usado, criado por um administrador. O trigger da base de dados repete esta verificação para que não possa ser contornada pelo cliente.
 
 ## Atualizações
 
