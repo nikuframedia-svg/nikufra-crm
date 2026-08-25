@@ -32,7 +32,7 @@ services:
       GOTRUE_DB_DRIVER: postgres
       GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@db:5432/postgres
       GOTRUE_SITE_URL: nikufra-crm://auth/callback
-      GOTRUE_URI_ALLOW_LIST: nikufra-crm://auth/callback,http://localhost:1420
+      GOTRUE_URI_ALLOW_LIST: nikufra-crm://auth/callback,nikufra-crm://auth/callback?*,http://localhost:1420
       GOTRUE_DISABLE_SIGNUP: "false"
       GOTRUE_JWT_ADMIN_ROLES: service_role
       GOTRUE_JWT_AUD: authenticated

@@ -61,18 +61,41 @@ extract_location() {
 }
 
 before_magic_id="$(latest_message_id)"
+pkce_verifier="nikufra-crm-e2e-verifier-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+pkce_challenge="$(PKCE_VERIFIER="${pkce_verifier}" node -e "const c=require('node:crypto'); process.stdout.write(c.createHash('sha256').update(process.env.PKCE_VERIFIER).digest('base64url'))")"
+pkce_flow_id="0123456789abcdef0123456789abcdef"
+pkce_redirect="nikufra-crm://auth/callback?sb_flow_id=${pkce_flow_id}"
+pkce_redirect_encoded="$(printf '%s' "${pkce_redirect}" | jq -sRr @uri)"
 otp_status="$(curl -sS -o /tmp/nikufra-auth-e2e-otp.json -w '%{http_code}' \
-  -X POST http://127.0.0.1:8000/auth/v1/otp \
+  -X POST "http://127.0.0.1:8000/auth/v1/otp?redirect_to=${pkce_redirect_encoded}" \
   -H "apikey: ${ANON_KEY}" -H 'Content-Type: application/json' \
-  --data "$(jq -cn --arg email "${admin_email}" '{email:$email,create_user:false}')")"
+  --data "$(jq -cn --arg email "${admin_email}" --arg challenge "${pkce_challenge}" \
+    '{email:$email,create_user:false,code_challenge:$challenge,code_challenge_method:"s256"}')")"
 [[ "${otp_status}" == 200 ]] || { echo "Magic link falhou (${otp_status})" >&2; exit 1; }
 
 magic_id="$(wait_for_new_message "${before_magic_id}")"
 magic_link="$(extract_verify_link "${magic_id}")"
 magic_status="$(curl -sS -o /dev/null -D /tmp/nikufra-auth-e2e-magic.headers -w '%{http_code}' "${magic_link}")"
 magic_location="$(extract_location /tmp/nikufra-auth-e2e-magic.headers)"
-access_token="$(MAGIC_LOCATION="${magic_location}" node -e "const u=new URL(process.env.MAGIC_LOCATION); const p=new URLSearchParams(u.hash.slice(1)); process.stdout.write(p.get('access_token')||'')")"
-[[ "${magic_status}" == 303 && -n "${access_token}" ]] || { echo "O magic link não criou sessão" >&2; exit 1; }
+auth_code="$(MAGIC_LOCATION="${magic_location}" node -e "const u=new URL(process.env.MAGIC_LOCATION); process.stdout.write(u.searchParams.get('code')||'')")"
+returned_flow_id="$(MAGIC_LOCATION="${magic_location}" node -e "const u=new URL(process.env.MAGIC_LOCATION); process.stdout.write(u.searchParams.get('sb_flow_id')||'')")"
+leaked_tokens="$(MAGIC_LOCATION="${magic_location}" node -e "const u=new URL(process.env.MAGIC_LOCATION); process.stdout.write(u.hash.includes('access_token')||u.searchParams.has('access_token')?'yes':'no')")"
+[[ "${magic_status}" == 303 && -n "${auth_code}" && "${returned_flow_id}" == "${pkce_flow_id}" && "${leaked_tokens}" == no ]] || {
+  echo "O magic link PKCE não devolveu o código isolado esperado" >&2
+  exit 1
+}
+
+token_status="$(curl -sS -o /tmp/nikufra-auth-e2e-token.json -w '%{http_code}' \
+  -X POST 'http://127.0.0.1:8000/auth/v1/token?grant_type=pkce' \
+  -H "apikey: ${ANON_KEY}" -H 'Content-Type: application/json' \
+  --data "$(jq -cn --arg code "${auth_code}" --arg verifier "${pkce_verifier}" \
+    '{auth_code:$code,code_verifier:$verifier}')")"
+access_token="$(jq -r '.access_token // ""' /tmp/nikufra-auth-e2e-token.json)"
+refresh_token="$(jq -r '.refresh_token // ""' /tmp/nikufra-auth-e2e-token.json)"
+[[ "${token_status}" == 200 && -n "${access_token}" && -n "${refresh_token}" ]] || {
+  echo "O código PKCE não criou uma sessão persistível" >&2
+  exit 1
+}
 
 user_status="$(curl -sS -o /tmp/nikufra-auth-e2e-user.json -w '%{http_code}' \
   http://127.0.0.1:8000/auth/v1/user -H "apikey: ${ANON_KEY}" -H "Authorization: Bearer ${access_token}")"
