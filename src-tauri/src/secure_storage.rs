@@ -1,13 +1,22 @@
 use keyring::{Entry, Error as KeyringError};
+#[cfg(not(target_os = "macos"))]
 use serde::{Deserialize, Serialize};
+#[cfg(not(target_os = "macos"))]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(not(target_os = "macos"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "macos")]
+const SERVICE: &str = "ai.nikufra.crm.auth.v2";
+#[cfg(not(target_os = "macos"))]
 const SERVICE: &str = "ai.nikufra.crm.auth";
+#[cfg(not(target_os = "macos"))]
 const CHUNK_BYTES: usize = 1_800;
 const MAX_SECRET_BYTES: usize = 128 * 1024;
+#[cfg(not(target_os = "macos"))]
 static GENERATION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(not(target_os = "macos"))]
 #[derive(Serialize, Deserialize)]
 struct SecretMetadata {
     generation: String,
@@ -32,11 +41,13 @@ fn metadata_entry(key: &str) -> Result<Entry, String> {
         .map_err(|error| format!("Não foi possível abrir o cofre do sistema: {error}"))
 }
 
+#[cfg(not(target_os = "macos"))]
 fn chunk_entry(key: &str, generation: &str, index: usize) -> Result<Entry, String> {
     Entry::new(SERVICE, &format!("{key}:{generation}:{index}"))
         .map_err(|error| format!("Não foi possível abrir o cofre do sistema: {error}"))
 }
 
+#[cfg(not(target_os = "macos"))]
 fn read_metadata(key: &str) -> Result<Option<SecretMetadata>, String> {
     match metadata_entry(key)?.get_password() {
         Ok(value) => serde_json::from_str(&value)
@@ -47,6 +58,7 @@ fn read_metadata(key: &str) -> Result<Option<SecretMetadata>, String> {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn delete_generation(key: &str, metadata: &SecretMetadata) -> Result<(), String> {
     let mut first_error = None;
     for index in 0..metadata.chunks {
@@ -63,6 +75,7 @@ fn delete_generation(key: &str, metadata: &SecretMetadata) -> Result<(), String>
     first_error.map_or(Ok(()), Err)
 }
 
+#[cfg(not(target_os = "macos"))]
 fn next_generation() -> String {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -72,6 +85,24 @@ fn next_generation() -> String {
     format!("{timestamp:x}{counter:x}")
 }
 
+#[cfg(target_os = "macos")]
+fn get_secret(key: &str) -> Result<Option<String>, String> {
+    validate_key(key)?;
+    match metadata_entry(key)?.get_secret() {
+        Ok(bytes) => {
+            if bytes.len() > MAX_SECRET_BYTES {
+                return Err("A sessão guardada excede o limite de segurança".into());
+            }
+            String::from_utf8(bytes)
+                .map(Some)
+                .map_err(|_| "A sessão guardada não contém texto válido".into())
+        }
+        Err(KeyringError::NoEntry) => Ok(None),
+        Err(error) => Err(format!("Não foi possível ler a sessão do cofre: {error}")),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
 fn get_secret(key: &str) -> Result<Option<String>, String> {
     validate_key(key)?;
     let Some(metadata) = read_metadata(key)? else {
@@ -99,6 +130,18 @@ fn get_secret(key: &str) -> Result<Option<String>, String> {
         .map_err(|_| "A sessão guardada não contém texto válido".into())
 }
 
+#[cfg(target_os = "macos")]
+fn set_secret(key: &str, value: &str) -> Result<(), String> {
+    validate_key(key)?;
+    if value.len() > MAX_SECRET_BYTES {
+        return Err("A sessão excede o limite de segurança".into());
+    }
+    metadata_entry(key)?
+        .set_secret(value.as_bytes())
+        .map_err(|error| format!("Não foi possível guardar a sessão no cofre: {error}"))
+}
+
+#[cfg(not(target_os = "macos"))]
 fn set_secret(key: &str, value: &str) -> Result<(), String> {
     validate_key(key)?;
     if value.len() > MAX_SECRET_BYTES {
@@ -140,6 +183,18 @@ fn set_secret(key: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn remove_secret(key: &str) -> Result<(), String> {
+    validate_key(key)?;
+    match metadata_entry(key)?.delete_credential() {
+        Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
+        Err(error) => Err(format!(
+            "Não foi possível remover a sessão do cofre: {error}"
+        )),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
 fn remove_secret(key: &str) -> Result<(), String> {
     validate_key(key)?;
     if let Some(metadata) = read_metadata(key)? {
@@ -189,10 +244,17 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn chunks_cover_windows_credential_limits() {
         let value = vec![b'x'; CHUNK_BYTES * 3 + 7];
         let chunks: Vec<&[u8]> = value.chunks(CHUNK_BYTES).collect();
         assert_eq!(chunks.len(), 4);
         assert_eq!(chunks.concat(), value);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_uses_one_separate_keychain_entry() {
+        assert_eq!(SERVICE, "ai.nikufra.crm.auth.v2");
     }
 }
