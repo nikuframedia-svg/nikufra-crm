@@ -6,6 +6,16 @@ import { supabase } from "../lib/supabase";
 import { startGoogleOAuth } from "../lib/google-oauth";
 import { Avatar, Button, Card, Modal, PageHeader } from "../components/ui";
 
+async function functionErrorMessage(error: unknown, fallback: string) {
+  if (error && typeof error === "object" && "context" in error && error.context instanceof Response) {
+    try {
+      const body = await error.context.clone().json() as { error?: unknown };
+      if (typeof body.error === "string" && body.error.trim()) return body.error;
+    } catch { /* The SDK message below remains a safe fallback. */ }
+  }
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 export function SettingsPage() {
   const { team, currentUserId } = useCRM();
   const [section, setSection] = useState("users");
@@ -17,11 +27,16 @@ export function SettingsPage() {
   const [probabilities, setProbabilities] = useState<Record<string, number>>(() => ({ ...stageProbability }));
   const [goals, setGoals] = useState({ annual: 0, monthly: 0, meetings: 0, proposals: 0 });
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [inviteMessage, setInviteMessage] = useState("");
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteNotice, setInviteNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const [teamError, setTeamError] = useState("");
+  const [roleBusyId, setRoleBusyId] = useState("");
+  const [roleOverrides, setRoleOverrides] = useState<Record<string, "admin" | "member">>({});
   const [pendingUsers, setPendingUsers] = useState<Array<{ id: string; nome: string; email: string }>>([]);
 
   const now = new Date(); const currentYear = now.getFullYear(); const currentMonth = now.getMonth() + 1;
   const localBackend = /localhost|127\.0\.0\.1/.test(import.meta.env.VITE_SUPABASE_URL ?? "");
+  const isAdmin = team.find((owner) => owner.id === currentUserId)?.role === "admin";
 
   async function loadGmailStatus() {
     if (!supabase) return;
@@ -63,20 +78,37 @@ export function SettingsPage() {
     setSaved(true); window.setTimeout(() => setSaved(false), 1800);
   }
 
-  function handleRoleChange(ownerId: string, role: "admin" | "member") {
-    if (supabase) void supabase.from("profiles").update({ role }).eq("id", ownerId);
+  async function handleRoleChange(ownerId: string, role: "admin" | "member") {
+    if (!supabase || !isAdmin) return;
+    const previousRole = roleOverrides[ownerId] ?? team.find((owner) => owner.id === ownerId)?.role ?? "member";
+    setTeamError(""); setRoleBusyId(ownerId); setRoleOverrides((current) => ({ ...current, [ownerId]: role }));
+    const { error } = await supabase.from("profiles").update({ role }).eq("id", ownerId);
+    if (error) {
+      setRoleOverrides((current) => ({ ...current, [ownerId]: previousRole }));
+      setTeamError(error.message);
+    }
+    setRoleBusyId("");
   }
 
-  async function handleInvite(formData: FormData) {
-    if (!supabase) { setInviteMessage("O servidor não está configurado neste ambiente; nenhum convite foi enviado."); return; }
-    const { error } = await supabase.functions.invoke("invite-user", { body: { nome: String(formData.get("nome")), email: String(formData.get("email")) } });
-    setInviteMessage(error ? error.message : "Convite enviado. O acesso fica autorizado apenas para este endereço.");
+  async function handleInvite(form: HTMLFormElement) {
+    setInviteNotice(null);
+    if (!supabase || !isAdmin) { setInviteNotice({ kind: "error", text: "Apenas um administrador pode enviar convites." }); return; }
+    const formData = new FormData(form);
+    setInviteBusy(true);
+    const { error } = await supabase.functions.invoke("invite-user", { body: { nome: String(formData.get("nome")).trim(), email: String(formData.get("email")).trim().toLowerCase() } });
+    if (error) setInviteNotice({ kind: "error", text: await functionErrorMessage(error, "Não foi possível enviar o convite.") });
+    else {
+      form.reset();
+      setInviteNotice({ kind: "success", text: "Convite enviado por email. O acesso fica autorizado apenas para esse endereço." });
+    }
+    setInviteBusy(false);
   }
 
   async function handleApproveUser(userId: string) {
-    if (supabase) {
+    setTeamError("");
+    if (supabase && isAdmin) {
       const { error } = await supabase.from("profiles").update({ ativo: true }).eq("id", userId);
-      if (error) return;
+      if (error) { setTeamError(error.message); return; }
     }
     setPendingUsers((current) => current.filter((user) => user.id !== userId));
   }
@@ -108,14 +140,14 @@ export function SettingsPage() {
           ["data", Database, "Dados e RGPD", "Exportação e retenção"],
         ].map(([id, Icon, label, detail]) => <button key={String(id)} className={section === id ? "is-active" : ""} onClick={() => setSection(String(id))}><Icon size={17} /><span><strong>{String(label)}</strong><small>{String(detail)}</small></span><ChevronRight size={15} /></button>)}</Card>
         <Card className="settings-content">
-          {section === "users" ? <><div className="settings-header"><div><p className="eyebrow">Acesso partilhado</p><h2>Utilizadores</h2><p>Cada pessoa entra pelo endereço Google previamente convidado por um administrador.</p></div><Button onClick={() => { setInviteOpen(true); setInviteMessage(""); }}><UserCheck size={16} />Convidar por email</Button></div><div className="user-list">{team.map((owner) => <div key={owner.id}><Avatar ownerId={owner.id} size="md" /><span><strong>{owner.nome}{owner.id === currentUserId ? <em>Tu</em> : null}</strong><small>{owner.email}</small></span><span className="user-status"><i />Ativo</span><select defaultValue={owner.role} onChange={(event) => handleRoleChange(owner.id, event.target.value as "admin" | "member")}><option value="admin">Administrador</option><option value="member">Membro</option></select><button className="icon-button"><ChevronRight size={15} /></button></div>)}</div>{pendingUsers.map((user) => <div className="pending-user" key={user.id}><span className="company-monogram">{user.nome.split(" ").map((part) => part[0]).slice(0,2).join("")}</span><span><strong>{user.nome}</strong><small>{user.email}</small></span><Button onClick={() => void handleApproveUser(user.id)}>Ativar conta</Button></div>)}<div className="pending-access"><span><KeyRound size={17} /></span><div><strong>Convite obrigatório</strong><p>São aceites contas Google empresariais ou @gmail.com, mas apenas se um administrador as tiver convidado.</p></div><span className="mono">{pendingUsers.length} pendentes</span></div></> : null}
+          {section === "users" ? <><div className="settings-header"><div><p className="eyebrow">Acesso partilhado</p><h2>Utilizadores</h2><p>Cada pessoa entra pelo endereço Google previamente convidado por um administrador.</p></div>{isAdmin ? <Button onClick={() => { setInviteOpen(true); setInviteNotice(null); }}><UserCheck size={16} />Convidar por email</Button> : null}</div>{teamError ? <div className="auth-error" role="alert">{teamError}</div> : null}<div className="user-list">{team.map((owner) => <div key={owner.id}><Avatar ownerId={owner.id} size="md" /><span><strong>{owner.nome}{owner.id === currentUserId ? <em>Tu</em> : null}</strong><small>{owner.email}</small></span><span className="user-status"><i />Ativo</span><select value={roleOverrides[owner.id] ?? owner.role} disabled={!isAdmin || roleBusyId === owner.id} aria-label={`Permissão de ${owner.nome}`} onChange={(event) => void handleRoleChange(owner.id, event.target.value as "admin" | "member")}><option value="admin">Administrador</option><option value="member">Membro</option></select><button className="icon-button" aria-label={`Ver ${owner.nome}`}><ChevronRight size={15} /></button></div>)}</div>{pendingUsers.map((user) => <div className="pending-user" key={user.id}><span className="company-monogram">{user.nome.split(" ").map((part) => part[0]).slice(0,2).join("")}</span><span><strong>{user.nome}</strong><small>{user.email}</small></span>{isAdmin ? <Button onClick={() => void handleApproveUser(user.id)}>Ativar conta</Button> : null}</div>)}<div className="pending-access"><span><KeyRound size={17} /></span><div><strong>Convite obrigatório</strong><p>São aceites contas Google empresariais ou @gmail.com, mas apenas se um administrador as tiver convidado.</p></div><span className="mono">{pendingUsers.length} pendentes</span></div></> : null}
           {section === "goals" ? <><div className="settings-header"><div><p className="eyebrow">Modelo comercial</p><h2>Objetivos e probabilidades</h2><p>Valores usados pelo pipeline ponderado e pela cobertura.</p></div>{saved ? <span className="saved-label"><Check size={15} />Guardado</span> : <Button onClick={handleSaveCommercialSettings}><Save size={15} />Guardar alterações</Button>}</div><div className="goal-grid"><label>Objetivo anual de faturação<input className="mono" type="number" value={goals.annual} onChange={(event) => setGoals((current) => ({ ...current, annual: Number(event.target.value) }))} /></label><label>Objetivo mensal atual<input className="mono" type="number" value={goals.monthly} onChange={(event) => setGoals((current) => ({ ...current, monthly: Number(event.target.value) }))} /></label><label>Objetivo mensal de reuniões<input className="mono" type="number" value={goals.meetings} onChange={(event) => setGoals((current) => ({ ...current, meetings: Number(event.target.value) }))} /></label><label>Objetivo mensal de propostas<input className="mono" type="number" value={goals.proposals} onChange={(event) => setGoals((current) => ({ ...current, proposals: Number(event.target.value) }))} /></label></div><h3 className="settings-subtitle">Probabilidade por estado</h3><div className="probability-list">{stageOrder.map((stage, index) => <div key={stage}><span className="mono">0{index + 1}</span><strong>{stageLabels[stage]}</strong><input type="range" min="0" max="100" value={probabilities[stage] ?? stageProbability[stage]} onChange={(event) => setProbabilities((current) => ({ ...current, [stage]: Number(event.target.value) }))} /><b className="mono">{probabilities[stage] ?? stageProbability[stage]}%</b></div>)}</div></> : null}
           {section === "security" ? <><div className="settings-header"><div><p className="eyebrow">Defesa em profundidade</p><h2>Segurança</h2><p>Convites, OAuth, RLS, sessões e registo de operações sensíveis.</p></div><span className="security-grade"><ShieldCheck size={17} />Protegido</span></div><div className="security-list"><div><span><KeyRound size={18} /></span><div><strong>Autenticação por convite</strong><p>Magic link para o endereço aprovado; a conta Google autorizada tem de corresponder ao login.</p></div><b>Ativo</b></div><div><span><Database size={18} /></span><div><strong>Row Level Security</strong><p>Ativa em todas as tabelas. A service role e os refresh tokens nunca chegam ao cliente.</p></div><b>Ativo</b></div><div><span><ShieldCheck size={18} /></span><div><strong>{localBackend ? "Servidor local" : "Servidor self-hosted"}</strong><p>{localBackend ? "A API está limitada a este Mac. TLS público, backups e recuperação ficam pendentes até à passagem para o servidor." : "Postgres isolado na rede privada; gateway público protegido por TLS."}</p></div><b>{localBackend ? "Local" : "Ativo"}</b></div></div></> : null}
           {section === "gmail" ? <><div className="settings-header"><div><p className="eyebrow">Google Workspace</p><h2>Integração Google</h2><p>Uma autorização segura importa o histórico Gmail, os contactos guardados e as reuniões do Calendar, sempre sem duplicar emails.</p></div>{gmailConnected ? <span className="saved-label"><Check size={15} />Ligado</span> : null}</div><div className="integration-card"><div className="gmail-mark">G</div><div><strong>{team.find((owner) => owner.id === currentUserId)?.email ?? "Conta Nikufra"}</strong><p>{gmailConnected ? gmailStatus?.backfill_complete && gmailStatus.people_sync_token && gmailStatus.other_contacts_sync_token && gmailStatus.calendar_sync_token ? "Histórico, contactos e calendário sincronizados; atualização incremental a cada 15 minutos." : "A importar Gmail, Google Contacts e Calendar em lotes seguros." : "Liga a conta Google para importar emails, contactos e reuniões."}</p><span>gmail.readonly</span><span>contacts.readonly</span><span>calendar.events.readonly</span><span>gmail.compose</span></div><div className="integration-actions"><Button variant="secondary" disabled={gmailBusy} onClick={handleConnectGmail}>{gmailBusy ? "A processar…" : gmailConnected ? "Voltar a autorizar" : "Ligar conta Google"}</Button>{gmailConnected ? <Button disabled={gmailBusy} onClick={() => void handleSyncGmail()}>Sincronizar agora</Button> : null}</div></div>{gmailStatus ? <div className="gmail-progress"><span><small>Mensagens associadas</small><strong className="mono">{gmailStatus.messages_synced.toLocaleString("pt-PT")}</strong></span><span><small>Contactos Google lidos</small><strong className="mono">{gmailStatus.people_contacts_synced.toLocaleString("pt-PT")}</strong></span><span><small>Contactos criados</small><strong className="mono">{gmailStatus.contacts_created.toLocaleString("pt-PT")}</strong></span><span><small>Reuniões Calendar</small><strong className="mono">{gmailStatus.calendar_events_synced.toLocaleString("pt-PT")}</strong></span><span><small>Última execução</small><strong>{gmailStatus.last_sync_at ? new Date(gmailStatus.last_sync_at).toLocaleString("pt-PT", { dateStyle: "short", timeStyle: "short" }) : "Ainda não executada"}</strong></span><span><small>Estado geral</small><strong>{gmailStatus.backfill_complete && gmailStatus.people_sync_token && gmailStatus.other_contacts_sync_token && gmailStatus.calendar_sync_token ? "Concluído" : "Em curso"}</strong></span></div> : null}{!supabase ? <div className="auth-error">API indisponível neste servidor local. É necessário configurar o Supabase e as credenciais OAuth Google no backend.</div> : null}{gmailStatus?.sync_error ? <div className="auth-error">Último erro: {gmailStatus.sync_error}. Se a conta foi ligada antes desta atualização, usa “Voltar a autorizar” para conceder Contacts e Calendar.</div> : null}{gmailError ? <div className="auth-error">{gmailError}</div> : null}<div className="integration-note"><ShieldCheck size={18} /><span><strong>Leitura abrangente sem guardar corpos completos.</strong> O CRM percorre todas as mensagens disponíveis, Google Contacts, “Outros contactos” e eventos do calendário principal. Guarda apenas identidade, contacto, assunto, data e excerto curto; os rascunhos continuam a exigir envio manual.</span></div></> : null}
           {section === "data" ? <><div className="settings-header"><div><p className="eyebrow">Privacidade</p><h2>Dados e RGPD</h2><p>Exporta ou elimina definitivamente os dados de um contacto.</p></div></div><div className="rgpd-search"><input placeholder="Pesquisar contacto por email..." /><Button>Pesquisar</Button></div><div className="integration-note"><Database size={18} /><span><strong>Backups locais diários verificados.</strong> Retenção automática de 31 dias e 12 meses no servidor privado; uma cópia externa continua recomendada para recuperação de desastre.</span></div></> : null}
         </Card>
       </div>
-      <Modal open={inviteOpen} onClose={() => setInviteOpen(false)} title="Convidar utilizador" description="Aceita Google Workspace ou @gmail.com. O endereço autorizado será o único que pode criar a conta."><form className="form-stack" onSubmit={(event) => { event.preventDefault(); void handleInvite(new FormData(event.currentTarget)); }}><label>Nome<input name="nome" required autoFocus /></label><label>Email Google<input name="email" type="email" required placeholder="nome@gmail.com" /></label>{inviteMessage ? <div className="success-banner">{inviteMessage}</div> : null}<div className="modal__actions"><Button type="button" variant="secondary" onClick={() => setInviteOpen(false)}>Fechar</Button><Button type="submit">Enviar convite</Button></div></form></Modal>
+      <Modal open={inviteOpen} onClose={() => { if (!inviteBusy) setInviteOpen(false); }} title="Convidar utilizador" description="Aceita Google Workspace ou @gmail.com. O endereço autorizado será o único que pode criar a conta."><form className="form-stack" onSubmit={(event) => { event.preventDefault(); void handleInvite(event.currentTarget); }}><label>Nome<input name="nome" minLength={2} maxLength={120} required autoFocus disabled={inviteBusy} /></label><label>Email Google<input name="email" type="email" maxLength={320} required placeholder="nome@gmail.com" disabled={inviteBusy} /></label>{inviteNotice ? <div className={inviteNotice.kind === "success" ? "success-banner" : "auth-error"} role={inviteNotice.kind === "error" ? "alert" : "status"} aria-live="polite">{inviteNotice.text}</div> : null}<div className="modal__actions"><Button type="button" variant="secondary" disabled={inviteBusy} onClick={() => setInviteOpen(false)}>Fechar</Button><Button type="submit" disabled={inviteBusy}>{inviteBusy ? "A enviar…" : "Enviar convite"}</Button></div></form></Modal>
     </div>
   );
 }

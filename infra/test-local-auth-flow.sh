@@ -15,6 +15,8 @@ set -a
 source "${ENV_FILE}"
 set +a
 
+TEST_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nikufra-auth-e2e.XXXXXX")"
+chmod 700 "${TEST_TEMP_DIR}"
 test_email="nikufra.crm.qa+$(date +%s).$$@gmail.com"
 [[ "${test_email}" =~ ^nikufra\.crm\.qa\+[0-9]+\.[0-9]+@gmail\.com$ ]]
 test_user_id=""
@@ -26,6 +28,10 @@ cleanup() {
   fi
   "${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
     -c "delete from public.user_invitations where email = '${test_email}';" >/dev/null || true
+  if [[ -d "${TEST_TEMP_DIR}" && "${TEST_TEMP_DIR}" == *'/nikufra-auth-e2e.'* ]]; then
+    find "${TEST_TEMP_DIR}" -maxdepth 1 -type f -delete
+    rmdir "${TEST_TEMP_DIR}" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT
 
@@ -66,7 +72,7 @@ pkce_challenge="$(PKCE_VERIFIER="${pkce_verifier}" node -e "const c=require('nod
 pkce_flow_id="0123456789abcdef0123456789abcdef"
 pkce_redirect="nikufra-crm://auth/callback?sb_flow_id=${pkce_flow_id}"
 pkce_redirect_encoded="$(printf '%s' "${pkce_redirect}" | jq -sRr @uri)"
-otp_status="$(curl -sS -o /tmp/nikufra-auth-e2e-otp.json -w '%{http_code}' \
+otp_status="$(curl -sS -o "${TEST_TEMP_DIR}/otp.json" -w '%{http_code}' \
   -X POST "http://127.0.0.1:8000/auth/v1/otp?redirect_to=${pkce_redirect_encoded}" \
   -H "apikey: ${ANON_KEY}" -H 'Content-Type: application/json' \
   --data "$(jq -cn --arg email "${admin_email}" --arg challenge "${pkce_challenge}" \
@@ -75,8 +81,8 @@ otp_status="$(curl -sS -o /tmp/nikufra-auth-e2e-otp.json -w '%{http_code}' \
 
 magic_id="$(wait_for_new_message "${before_magic_id}")"
 magic_link="$(extract_verify_link "${magic_id}")"
-magic_status="$(curl -sS -o /dev/null -D /tmp/nikufra-auth-e2e-magic.headers -w '%{http_code}' "${magic_link}")"
-magic_location="$(extract_location /tmp/nikufra-auth-e2e-magic.headers)"
+magic_status="$(curl -sS -o /dev/null -D "${TEST_TEMP_DIR}/magic.headers" -w '%{http_code}' "${magic_link}")"
+magic_location="$(extract_location "${TEST_TEMP_DIR}/magic.headers")"
 auth_code="$(MAGIC_LOCATION="${magic_location}" node -e "const u=new URL(process.env.MAGIC_LOCATION); process.stdout.write(u.searchParams.get('code')||'')")"
 returned_flow_id="$(MAGIC_LOCATION="${magic_location}" node -e "const u=new URL(process.env.MAGIC_LOCATION); process.stdout.write(u.searchParams.get('sb_flow_id')||'')")"
 leaked_tokens="$(MAGIC_LOCATION="${magic_location}" node -e "const u=new URL(process.env.MAGIC_LOCATION); process.stdout.write(u.hash.includes('access_token')||u.searchParams.has('access_token')?'yes':'no')")"
@@ -85,24 +91,24 @@ leaked_tokens="$(MAGIC_LOCATION="${magic_location}" node -e "const u=new URL(pro
   exit 1
 }
 
-token_status="$(curl -sS -o /tmp/nikufra-auth-e2e-token.json -w '%{http_code}' \
+token_status="$(curl -sS -o "${TEST_TEMP_DIR}/token.json" -w '%{http_code}' \
   -X POST 'http://127.0.0.1:8000/auth/v1/token?grant_type=pkce' \
   -H "apikey: ${ANON_KEY}" -H 'Content-Type: application/json' \
   --data "$(jq -cn --arg code "${auth_code}" --arg verifier "${pkce_verifier}" \
     '{auth_code:$code,code_verifier:$verifier}')")"
-access_token="$(jq -r '.access_token // ""' /tmp/nikufra-auth-e2e-token.json)"
-refresh_token="$(jq -r '.refresh_token // ""' /tmp/nikufra-auth-e2e-token.json)"
+access_token="$(jq -r '.access_token // ""' "${TEST_TEMP_DIR}/token.json")"
+refresh_token="$(jq -r '.refresh_token // ""' "${TEST_TEMP_DIR}/token.json")"
 [[ "${token_status}" == 200 && -n "${access_token}" && -n "${refresh_token}" ]] || {
   echo "O código PKCE não criou uma sessão persistível" >&2
   exit 1
 }
 
-user_status="$(curl -sS -o /tmp/nikufra-auth-e2e-user.json -w '%{http_code}' \
+user_status="$(curl -sS -o "${TEST_TEMP_DIR}/user.json" -w '%{http_code}' \
   http://127.0.0.1:8000/auth/v1/user -H "apikey: ${ANON_KEY}" -H "Authorization: Bearer ${access_token}")"
 [[ "${user_status}" == 200 ]] || { echo "A sessão criada não é válida" >&2; exit 1; }
 
 before_invite_id="$(latest_message_id)"
-invite_status="$(curl -sS -o /tmp/nikufra-auth-e2e-invite.json -w '%{http_code}' \
+invite_status="$(curl -sS -o "${TEST_TEMP_DIR}/invite.json" -w '%{http_code}' \
   -X POST http://127.0.0.1:8000/functions/v1/invite-user \
   -H "Authorization: Bearer ${access_token}" -H 'Content-Type: application/json' \
   --data "$(jq -cn --arg email "${test_email}" '{nome:"QA Team",email:$email}')")"
@@ -115,8 +121,8 @@ invite_json="$(curl -fsS "http://127.0.0.1:8025/api/v1/message/${invite_id}")"
 invite_recipient="$(jq -r '.To[0].Address // ""' <<<"${invite_json}")"
 [[ "${invite_recipient}" == "${test_email}" ]] || { echo "O convite chegou ao destinatário errado" >&2; exit 1; }
 invite_link="$(jq -r '.HTML' <<<"${invite_json}" | rg -o 'http://localhost:8000/auth/v1/verify[^"< ]+' | head -1 | sed 's/&amp;/\&/g')"
-invite_status="$(curl -sS -o /dev/null -D /tmp/nikufra-auth-e2e-invite.headers -w '%{http_code}' "${invite_link}")"
-invite_location="$(extract_location /tmp/nikufra-auth-e2e-invite.headers)"
+invite_status="$(curl -sS -o /dev/null -D "${TEST_TEMP_DIR}/invite.headers" -w '%{http_code}' "${invite_link}")"
+invite_location="$(extract_location "${TEST_TEMP_DIR}/invite.headers")"
 deep_link_ok="$(INVITE_LOCATION="${invite_location}" node -e "const u=new URL(process.env.INVITE_LOCATION); process.stdout.write(u.protocol==='nikufra-crm:' && u.hostname==='auth' ? 'yes':'no')")"
 member_access_token="$(INVITE_LOCATION="${invite_location}" node -e "const u=new URL(process.env.INVITE_LOCATION); const p=new URLSearchParams(u.hash.slice(1)); process.stdout.write(p.get('access_token')||'')")"
 member_refresh_token="$(INVITE_LOCATION="${invite_location}" node -e "const u=new URL(process.env.INVITE_LOCATION); const p=new URLSearchParams(u.hash.slice(1)); process.stdout.write(p.get('refresh_token')||'')")"
@@ -130,22 +136,30 @@ invitation_used="$("${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc 
   exit 1
 }
 
-member_user_status="$(curl -sS -o /tmp/nikufra-auth-e2e-member.json -w '%{http_code}' \
+member_user_status="$(curl -sS -o "${TEST_TEMP_DIR}/member.json" -w '%{http_code}' \
   http://127.0.0.1:8000/auth/v1/user \
   -H "apikey: ${ANON_KEY}" -H "Authorization: Bearer ${member_access_token}")"
-member_data_status="$(curl -sS -o /tmp/nikufra-auth-e2e-member-data.json -w '%{http_code}' \
+member_data_status="$(curl -sS -o "${TEST_TEMP_DIR}/member-data.json" -w '%{http_code}' \
   'http://127.0.0.1:8000/rest/v1/empresas?select=id&limit=1' \
   -H "apikey: ${ANON_KEY}" -H "Authorization: Bearer ${member_access_token}")"
-member_invite_status="$(curl -sS -o /tmp/nikufra-auth-e2e-member-invite.json -w '%{http_code}' \
+member_invite_status="$(curl -sS -o "${TEST_TEMP_DIR}/member-invite.json" -w '%{http_code}' \
   -X POST http://127.0.0.1:8000/functions/v1/invite-user \
   -H "Authorization: Bearer ${member_access_token}" -H 'Content-Type: application/json' \
   --data '{"nome":"Não autorizado","email":"blocked@example.com"}')"
-member_promote_status="$(curl -sS -o /tmp/nikufra-auth-e2e-member-promote.json -w '%{http_code}' \
+member_promote_status="$(curl -sS -o "${TEST_TEMP_DIR}/member-promote.json" -w '%{http_code}' \
   -X PATCH "http://127.0.0.1:8000/rest/v1/profiles?id=eq.${test_user_id}" \
   -H "apikey: ${ANON_KEY}" -H "Authorization: Bearer ${member_access_token}" \
   -H 'Content-Type: application/json' --data '{"role":"admin"}')"
 member_role_after_attempt="$("${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc \
   "select role from public.profiles where id = '${test_user_id}'")"
+duplicate_invite_status="$(curl -sS -o "${TEST_TEMP_DIR}/duplicate-invite.json" -w '%{http_code}' \
+  -X POST http://127.0.0.1:8000/functions/v1/invite-user \
+  -H "Authorization: Bearer ${access_token}" -H 'Content-Type: application/json' \
+  --data "$(jq -cn --arg email "${test_email}" '{nome:"QA Team repetido",email:$email}')")"
+duplicate_profile_state="$("${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc \
+  "select role || ':' || ativo::text from public.profiles where id = '${test_user_id}'")"
+duplicate_invitation_used="$("${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc \
+  "select (used_at is not null)::text from public.user_invitations where email = '${test_email}'")"
 
 [[ "${member_user_status}" == 200 && "${member_data_status}" == 200 && "${member_invite_status}" == 403 ]] || {
   echo "O membro não recebeu o acesso partilhado esperado ou conseguiu convidar utilizadores" >&2
@@ -155,6 +169,10 @@ member_role_after_attempt="$("${COMPOSE[@]}" exec -T db psql -U postgres -d post
   echo "O membro conseguiu alterar o próprio nível de acesso" >&2
   exit 1
 }
+[[ "${duplicate_invite_status}" == 409 && "${duplicate_profile_state}" == member:true && "${duplicate_invitation_used}" == true ]] || {
+  echo "Repetir um convite alterou ou removeu o acesso já existente" >&2
+  exit 1
+}
 
 cleanup
 trap - EXIT
@@ -162,4 +180,4 @@ residual="$("${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc \
   "select (select count(*) from auth.users where email='${test_email}') + (select count(*) from public.user_invitations where email='${test_email}')")"
 [[ "${residual}" == 0 ]] || { echo "O teste deixou dados residuais" >&2; exit 1; }
 
-echo "OK login, sessão persistível, convite por email, callback desktop, acesso partilhado, isolamento member e limpeza"
+echo "OK login, sessão persistível, convite por email, reinvite seguro, callback desktop, acesso partilhado, isolamento member e limpeza"
