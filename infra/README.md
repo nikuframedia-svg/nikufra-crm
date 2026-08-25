@@ -85,6 +85,8 @@ Registar data, duração, contagens e resultado do teste. Não promover uma atua
 
 Em produção, o Send Email Hook assinado substitui o SMTP do Auth e envia convites e magic links através do Gmail API da conta de administrador já autorizada. O endpoint rejeita payloads sem assinatura Standard Webhooks e usa um registo idempotente para não repetir mensagens. A chave do hook é criada por `generate-env.sh` e nunca entra no Git. Manter `AUTH_EMAIL_HOOK_ENABLED=false` até o domínio público responder por HTTPS; depois alterar para `true`, recriar `auth` e testar um magic link real. Se o hook estiver desligado, o SMTP configurado continua a ser o fallback.
 
+Numa instalação já existente, `./configure-auth-email-hook.sh prepare` acrescenta o segredo sem o revelar e mantém o hook desligado. Depois de DNS/TLS responderem, `./configure-auth-email-hook.sh enable` valida o endpoint HTTPS antes de o ativar; `disable` faz rollback imediato para SMTP.
+
 A primeira conta tem de ser `@nikufra.ai`; as seguintes podem ser Google Workspace ou `@gmail.com`, mas têm de corresponder a um convite ainda não usado, criado por um administrador. O trigger da base de dados repete esta verificação para que não possa ser contornada pelo cliente.
 
 ## Atualizações
