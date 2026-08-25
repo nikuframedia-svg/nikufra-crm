@@ -55,11 +55,29 @@ else
   fail "backup diário recente"
 fi
 
-if curl --fail --silent --show-error --max-time 15 "https://${CRM_DOMAIN}/updates/latest.json" | \
-  grep -q '"platforms"'; then
-  pass "canal de updates publicado"
+update_manifest="$(curl --fail --silent --show-error --max-time 15 "https://${CRM_DOMAIN}/updates/latest.json" 2>/dev/null || true)"
+if jq -e --argjson manifest "${update_manifest:-null}" '
+  ($manifest.version | type == "string" and length > 0) and
+  (["darwin-aarch64", "darwin-x86_64", "windows-x86_64"] | all(. as $platform |
+    $manifest.platforms[$platform].signature | type == "string" and length > 0
+  ))
+' >/dev/null 2>&1 <<<"${update_manifest:-null}"; then
+  pass "manifesto de updates assinado para Mac e Windows"
 else
-  fail "canal de updates ainda não publicado"
+  fail "manifesto de updates assinado ainda não publicado"
+fi
+
+installers_ready=true
+for installer in Nikufra-CRM-macOS.dmg Nikufra-CRM-Windows.exe; do
+  if ! curl --fail --silent --show-error --head --max-time 15 \
+    "https://${CRM_DOMAIN}/updates/assets/${installer}" >/dev/null 2>&1; then
+    installers_ready=false
+  fi
+done
+if [[ "${installers_ready}" == true ]]; then
+  pass "instaladores públicos estáveis para Mac e Windows"
+else
+  fail "instaladores públicos para Mac e Windows ainda não publicados"
 fi
 
 if [[ "${failures}" -eq 0 ]]; then

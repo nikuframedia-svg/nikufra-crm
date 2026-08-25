@@ -67,13 +67,11 @@ jobs:
         run: |
           set -Eeuo pipefail
           tag="v$(node -p "require('./package.json').version")"
-          mkdir -p release payload/assets
+          mkdir -p release payload
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir release
           test -s release/latest.json
-          find release -maxdepth 1 -type f ! -name latest.json -exec cp -- {} payload/assets/ \;
-          jq --arg base "https://crm.nikufra.ai/updates/assets/" \
-            '.platforms |= with_entries(.value.url = ($base + (.value.url | split("/") | last)))' \
-            release/latest.json > payload/latest.json
+          node scripts/prepare-updater-payload.mjs \
+            release payload "https://crm.nikufra.ai/updates/assets/" "${tag#v}"
       - name: Preparar SSH restrito
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -91,7 +89,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
           set -Eeuo pipefail
-          tar -C payload -czf - latest.json assets | \
+          tar -C payload -czf - latest.json downloads.json assets | \
             ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 "$DEPLOY_USER@$DEPLOY_HOST" publish
       - name: Publicar release no GitHub
         env:

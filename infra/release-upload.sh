@@ -21,7 +21,7 @@ timeout 120 dd bs=1M count=2048 iflag=fullblock of="${ARCHIVE}" status=none
 
 while IFS= read -r entry; do
   entry="${entry%/}"
-  [[ "${entry}" == "latest.json" || "${entry}" == "assets" || "${entry}" =~ ^assets/[A-Za-z0-9][A-Za-z0-9._+\ -]{0,180}$ ]] || {
+  [[ "${entry}" == "latest.json" || "${entry}" == "downloads.json" || "${entry}" == "assets" || "${entry}" =~ ^assets/[A-Za-z0-9][A-Za-z0-9._+\ -]{0,180}$ ]] || {
     echo "Caminho de release recusado: ${entry}" >&2
     exit 1
   }
@@ -33,8 +33,8 @@ if tar -tvzf "${ARCHIVE}" | awk '{ print substr($1, 1, 1) }' | grep -qvE '^[-d]$
 fi
 
 tar -xzf "${ARCHIVE}" --no-same-owner --no-same-permissions -C "${STAGE}"
-[[ -f "${STAGE}/latest.json" && -d "${STAGE}/assets" ]] || {
-  echo "latest.json ou assets em falta" >&2
+[[ -f "${STAGE}/latest.json" && -f "${STAGE}/downloads.json" && -d "${STAGE}/assets" ]] || {
+  echo "latest.json, downloads.json ou assets em falta" >&2
   exit 1
 }
 
@@ -61,6 +61,21 @@ for platform, release in platforms.items():
     filename = urllib.parse.unquote(url.removeprefix(prefix))
     if pathlib.Path(filename).name != filename or not (stage / "assets" / filename).is_file():
         raise SystemExit(f"Artefacto em falta para {platform}")
+
+downloads = json.loads((stage / "downloads.json").read_text(encoding="utf-8"))
+if downloads.get("version") != manifest["version"]:
+    raise SystemExit("Versão dos instaladores não corresponde ao manifesto")
+expected_installers = {
+    "macos": "Nikufra-CRM-macOS.dmg",
+    "windows": "Nikufra-CRM-Windows.exe",
+}
+for platform, filename in expected_installers.items():
+    release = downloads.get(platform)
+    installer = stage / "assets" / filename
+    if not isinstance(release, dict) or release.get("url") != prefix + filename:
+        raise SystemExit(f"URL público inválido para o instalador {platform}")
+    if not installer.is_file() or installer.stat().st_size != release.get("bytes"):
+        raise SystemExit(f"Instalador público ausente ou incompleto para {platform}")
 print(manifest["version"])
 PY
 )"
