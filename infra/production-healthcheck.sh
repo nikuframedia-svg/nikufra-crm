@@ -10,6 +10,8 @@ set -a
 source "${ENV_FILE}"
 set +a
 
+CRM_API_PORT="${CRM_API_PORT:-8800}"
+
 status=0
 for service in db auth rest realtime kong functions; do
   if [[ "$("${COMPOSE[@]}" ps --status running --services "${service}")" != "${service}" ]]; then
@@ -35,4 +37,3 @@ else
 fi
 
 exit "${status}"
-

@@ -23,7 +23,8 @@ set -a
 source "${ENV_FILE}"
 set +a
 
-required=(CRM_DOMAIN CRM_API_PORT POSTGRES_PASSWORD JWT_SECRET ANON_KEY SERVICE_ROLE_KEY SECRET_KEY_BASE REALTIME_DB_ENC_KEY TOKEN_ENCRYPTION_KEY SMTP_ADMIN_EMAIL SMTP_HOST SMTP_PORT GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET)
+CRM_API_PORT="${CRM_API_PORT:-8800}"
+required=(CRM_DOMAIN POSTGRES_PASSWORD JWT_SECRET ANON_KEY SERVICE_ROLE_KEY SECRET_KEY_BASE REALTIME_DB_ENC_KEY TOKEN_ENCRYPTION_KEY SMTP_ADMIN_EMAIL SMTP_HOST SMTP_PORT GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET)
 for key in "${required[@]}"; do
   if [[ -z "${!key:-}" ]]; then
     echo "Configuração obrigatória em falta: ${key}" >&2
@@ -83,4 +84,3 @@ curl --fail --silent --show-error \
 
 "${COMPOSE[@]}" ps
 echo "Backend Nikufra CRM pronto em 127.0.0.1:${CRM_API_PORT}; publica-o apenas através de HTTPS no proxy existente."
-
