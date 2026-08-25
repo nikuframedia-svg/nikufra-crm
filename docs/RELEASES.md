@@ -34,20 +34,21 @@ O portão CI recusa qualquer release se uma destas configurações estiver vazia
 
 ## Publicar uma atualização
 
-Partir sempre de `main` limpa e atualizada. Substituir `0.1.1` pela próxima versão:
+Partir sempre de `main` limpa e atualizada. Para a primeira publicação da versão atual:
 
 ```bash
-git pull --ff-only
-pnpm release:prepare 0.1.1
-pnpm release:verify
-git add package.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json
-git commit -m "release: v0.1.1"
-git tag -a v0.1.1 -m "Nikufra CRM v0.1.1"
-git push origin main
-git push origin v0.1.1
+pnpm release:publish 0.1.0
 ```
 
-`release:prepare` altera e volta a validar as quatro fontes de versão. A tag inicia automaticamente:
+Para cada atualização seguinte, substituir `0.1.1` pela nova versão:
+
+```bash
+pnpm release:publish 0.1.1
+```
+
+O comando exige a confirmação exata da tag, confirma que `main` está limpa e sincronizada e executa todos os testes. Na primeira publicação aplica a tag à versão atual; nas seguintes alinha as quatro fontes de versão e cria o commit. O envio de `main` e da tag é sempre um único push atómico. Se a ligação falhar depois de criar a tag local, apresenta o comando exato para retomar sem recriar a release.
+
+A tag inicia automaticamente:
 
 1. validação da tag e de todos os segredos obrigatórios;
 2. build universal macOS e x64 Windows;

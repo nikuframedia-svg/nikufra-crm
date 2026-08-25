@@ -2,7 +2,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertSynchronizedVersions, readProjectVersions, setProjectVersion } from "./set-version.mjs";
+import {
+  assertIncreasingStableVersion,
+  assertSynchronizedVersions,
+  classifyReleaseVersion,
+  readProjectVersions,
+  setProjectVersion,
+} from "./set-version.mjs";
 
 const temporaryDirectories = [];
 
@@ -51,5 +57,10 @@ describe("versionamento de releases", () => {
 
   it("expõe uma validação simples para os portões CI", () => {
     expect(assertSynchronizedVersions({ packageJson: "2.3.4", tauriConfig: "2.3.4" })).toBe("2.3.4");
+    expect(assertIncreasingStableVersion("2.3.4", "2.3.5")).toBe("2.3.5");
+    expect(() => assertIncreasingStableVersion("2.3.4", "v2.3.5")).toThrow("Versão inválida");
+    expect(classifyReleaseVersion("2.3.4", "2.3.4")).toBe("current");
+    expect(classifyReleaseVersion("2.3.4", "2.4.0")).toBe("upgrade");
+    expect(() => classifyReleaseVersion("2.3.4", "2.3.3")).toThrow("inferior");
   });
 });

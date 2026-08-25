@@ -13,13 +13,30 @@ function parseVersion(version) {
   return match.slice(1).map(Number);
 }
 
-function compareVersions(left, right) {
+export function compareStableVersions(left, right) {
   const a = parseVersion(left);
   const b = parseVersion(right);
   for (let index = 0; index < a.length; index += 1) {
     if (a[index] !== b[index]) return a[index] - b[index];
   }
   return 0;
+}
+
+export function assertIncreasingStableVersion(currentVersion, nextVersion) {
+  parseVersion(currentVersion);
+  parseVersion(nextVersion);
+  if (compareStableVersions(nextVersion, currentVersion) <= 0) {
+    throw new Error(`A nova versão (${nextVersion}) tem de ser superior à atual (${currentVersion}).`);
+  }
+  return nextVersion;
+}
+
+export function classifyReleaseVersion(currentVersion, releaseVersion) {
+  const comparison = compareStableVersions(releaseVersion, currentVersion);
+  if (comparison < 0) {
+    throw new Error(`A versão a publicar (${releaseVersion}) não pode ser inferior à atual (${currentVersion}).`);
+  }
+  return comparison === 0 ? "current" : "upgrade";
 }
 
 function cargoManifestVersion(source) {
@@ -61,11 +78,8 @@ export function assertSynchronizedVersions(versions) {
 }
 
 export async function setProjectVersion(rootDirectory, nextVersion) {
-  parseVersion(nextVersion);
   const currentVersion = assertSynchronizedVersions(await readProjectVersions(rootDirectory));
-  if (compareVersions(nextVersion, currentVersion) <= 0) {
-    throw new Error(`A nova versão (${nextVersion}) tem de ser superior à atual (${currentVersion}).`);
-  }
+  assertIncreasingStableVersion(currentVersion, nextVersion);
 
   const paths = {
     packageJson: join(rootDirectory, "package.json"),
