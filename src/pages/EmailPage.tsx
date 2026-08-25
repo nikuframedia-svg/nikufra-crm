@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { open } from "@tauri-apps/plugin-shell";
-import { Archive, CheckCircle2, ChevronRight, Clock3, ExternalLink, FilePenLine, Inbox, MailCheck, Plus, Search, Send, Sparkles, Users } from "lucide-react";
+import { Archive, CheckCircle2, ChevronRight, Clock3, ExternalLink, FilePenLine, Inbox, MailCheck, Plus, RefreshCw, Search, Send, Sparkles, Users } from "lucide-react";
 import { useCRM } from "../state/crm-context";
 import { supabase } from "../lib/supabase";
+import { formatPercentage } from "../lib/format";
 import type { Draft } from "../types";
 import { Button, Card, PageHeader, StageChip } from "../components/ui";
 
@@ -14,6 +16,7 @@ const templates = [
 
 export function EmailPage() {
   const { leads, drafts, addDrafts, activities, dataMode, team, currentUserId, emailSelection, setEmailSelection } = useCRM();
+  const queryClient = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(() => new Set(emailSelection));
   const [templateIndex, setTemplateIndex] = useState(0);
   const [subject, setSubject] = useState(templates[0].subject);
@@ -21,9 +24,39 @@ export function EmailPage() {
   const [sent, setSent] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
+  const [syncing, setSyncing] = useState(false);
   const [search, setSearch] = useState("");
   const eligible = useMemo(() => leads.filter((lead) => !lead.optout && Boolean(lead.email) && `${lead.nome} ${lead.empresa}`.toLowerCase().includes(search.toLowerCase())), [leads, search]);
-  const visibleThreads = activities.filter((activity) => activity.tipo === "email").slice(0, 20).map((activity) => ({ company: activity.empresa, person: activity.contactoNome ?? activity.contactoEmail ?? "Contacto", subject: activity.assunto ?? activity.descricao, snippet: activity.snippet ?? (activity.direcao === "recebido" ? "Email recebido" : "Email enviado"), meeting: activity.reuniaoInferida, time: new Date(activity.data).toLocaleDateString("pt-PT", { day: "2-digit", month: "short" }), unread: activity.direcao === "recebido" }));
+  const { data: recentEmailActivities = [], refetch: refetchRecentEmails } = useQuery({
+    queryKey: ["recent-email-activities"],
+    enabled: Boolean(supabase),
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const { data, error: queryError } = await supabase!.from("atividades")
+        .select("id,tipo,descricao,data,direcao,reuniao_inferida,assunto,snippet,empresas(nome),contactos(nome,email)")
+        .in("tipo", ["email_enviado", "email_recebido"])
+        .order("data", { ascending: false })
+        .limit(60);
+      if (queryError) throw queryError;
+      return (data ?? []).map((row) => {
+        const company = Array.isArray(row.empresas) ? row.empresas[0] : row.empresas;
+        const contact = Array.isArray(row.contactos) ? row.contactos[0] : row.contactos;
+        return { id: row.id, company: company?.nome ?? "Empresa", person: contact?.nome ?? contact?.email ?? "Contacto", subject: row.assunto ?? row.descricao, snippet: row.snippet ?? (row.direcao === "recebido" ? "Email recebido" : "Email enviado"), meeting: row.reuniao_inferida, time: new Date(row.data).toLocaleDateString("pt-PT", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }), unread: row.direcao === "recebido" };
+      });
+    },
+  });
+  const { data: gmailStatus } = useQuery({
+    queryKey: ["gmail-email-status", currentUserId],
+    enabled: Boolean(supabase),
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const { data, error: statusError } = await supabase!.from("google_tokens").select("messages_synced,last_sync_at").eq("user_id", currentUserId).maybeSingle();
+      if (statusError) throw statusError;
+      return data;
+    },
+  });
+  const fallbackThreads = activities.filter((activity) => activity.tipo === "email").slice(0, 60).map((activity) => ({ id: activity.id, company: activity.empresa, person: activity.contactoNome ?? activity.contactoEmail ?? "Contacto", subject: activity.assunto ?? activity.descricao, snippet: activity.snippet ?? (activity.direcao === "recebido" ? "Email recebido" : "Email enviado"), meeting: activity.reuniaoInferida, time: new Date(activity.data).toLocaleDateString("pt-PT", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }), unread: activity.direcao === "recebido" }));
+  const visibleThreads = (recentEmailActivities.length ? recentEmailActivities : fallbackThreads).slice(0, 20);
   const currentEmail = team.find((owner) => owner.id === currentUserId)?.email ?? team[0]?.email ?? "conta@nikufra.ai";
   const sentEmails = activities.filter((activity) => activity.tipo === "email" && activity.direcao === "enviado");
   const repliedContacts = new Set(activities.filter((activity) => activity.tipo === "email" && activity.direcao === "recebido").map((activity) => activity.contactoId).filter(Boolean));
@@ -46,15 +79,28 @@ export function EmailPage() {
     }
     addDrafts(newDrafts); setEmailSelection([]); setSent(true); setGenerating(false);
   }
+  async function handleSyncGmail() {
+    if (!supabase) return;
+    setSyncing(true); setError("");
+    try {
+      const { error: syncError } = await supabase.functions.invoke("gmail-sync", { body: {} });
+      if (syncError) throw syncError;
+      await Promise.all([refetchRecentEmails(), queryClient.invalidateQueries({ queryKey: ["google-team-calendar"] })]);
+    } catch (syncError) {
+      setError(syncError instanceof Error ? syncError.message : "Falha ao sincronizar Gmail");
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   return (
     <div className="page">
-      <PageHeader eyebrow={dataMode === "supabase" ? "Histórico Gmail" : "Dados locais"} title="Email e rascunhos" description="Lê metadados das conversas, personaliza templates e cria rascunhos. O envio é sempre manual no Gmail." actions={<Button variant="secondary" onClick={() => void handleOpenGmail()}><ExternalLink size={16} />Abrir Gmail</Button>} />
-      <div className="mail-status"><span>{dataMode === "supabase" ? <CheckCircle2 size={16} /> : <Clock3 size={16} />}{currentEmail}</span><span>{dataMode === "supabase" ? `${sentEmails.length} emails indexados nesta sessão` : "A sincronização Gmail requer o servidor configurado"}</span><span><Clock3 size={14} />Atualização automática a cada 15 min</span><b>gmail.readonly + gmail.compose</b></div>
+      <PageHeader eyebrow={dataMode === "supabase" ? "Histórico Gmail" : "Dados locais"} title="Email e rascunhos" description="Lê metadados das conversas, personaliza templates e cria rascunhos. O envio é sempre manual no Gmail." actions={<><Button variant="secondary" disabled={syncing} onClick={() => void handleSyncGmail()}><RefreshCw size={16} className={syncing ? "spin" : ""} />{syncing ? "A sincronizar…" : "Sincronizar"}</Button><Button variant="secondary" onClick={() => void handleOpenGmail()}><ExternalLink size={16} />Abrir Gmail</Button></>} />
+      <div className="mail-status"><span>{dataMode === "supabase" ? <CheckCircle2 size={16} /> : <Clock3 size={16} />}{currentEmail}</span><span>{dataMode === "supabase" ? `${Number(gmailStatus?.messages_synced ?? 0).toLocaleString("pt-PT")} emails associados` : "A sincronização Gmail requer o servidor configurado"}</span><span><Clock3 size={14} />Atualização automática a cada 15 min</span><b>gmail.readonly + gmail.compose</b></div>
       <div className="email-layout">
         <Card className="inbox-panel">
           <div className="panel-header"><div><p className="eyebrow">Histórico indexado</p><h2>Conversas recentes</h2></div><span className="counter">{visibleThreads.filter((thread) => thread.unread).length}</span></div>
-          <div className="inbox-list">{visibleThreads.length ? visibleThreads.map((thread, index) => <button key={`${thread.company}-${index}`} className={thread.unread ? "is-unread" : ""}><span className="company-monogram">{thread.company.slice(0, 2).toUpperCase()}</span><span><strong>{thread.company}<small>{thread.time}</small></strong><b>{thread.subject}</b><p>{thread.person} · {thread.snippet}{thread.meeting ? " · possível reunião" : ""}</p></span><ChevronRight size={15} /></button>) : <div className="empty-state">Ainda não existem emails reais indexados. Liga ou sincroniza o Gmail nas Definições.</div>}</div>
+          <div className="inbox-list">{visibleThreads.length ? visibleThreads.map((thread) => <button key={thread.id} className={thread.unread ? "is-unread" : ""}><span className="company-monogram">{thread.company.slice(0, 2).toUpperCase()}</span><span><strong>{thread.company}<small>{thread.time}</small></strong><b>{thread.subject}</b><p>{thread.person} · {thread.snippet}{thread.meeting ? " · possível reunião" : ""}</p></span><ChevronRight size={15} /></button>) : <div className="empty-state">Ainda não existem emails reais indexados. Liga ou sincroniza o Gmail nas Definições.</div>}</div>
           <button className="panel-link"><Inbox size={15} />Ver toda a caixa de entrada</button>
         </Card>
 
@@ -83,7 +129,7 @@ export function EmailPage() {
         <Card className="drafts-panel">
           <div className="panel-header"><div><p className="eyebrow">Preparados</p><h2>Rascunhos recentes</h2></div><button className="icon-button"><Plus size={16} /></button></div>
           <div className="draft-list">{drafts.slice(0, 6).map((draft) => <button key={draft.id}><span className="draft-icon"><FilePenLine size={15} /></span><span><strong>{draft.empresa}</strong><b>{draft.assunto}</b><small>{draft.criadoEm} · {draft.destinatario}</small></span><Send size={14} /></button>)}</div>
-          <div className="draft-footer"><span><Archive size={14} />{drafts.length} rascunhos</span><span><Users size={14} />{replyRate === null ? "Taxa de resposta sem amostra" : `Taxa de resposta ${replyRate.toLocaleString("pt-PT", { maximumFractionDigits: 1 })}%`}</span></div>
+          <div className="draft-footer"><span><Archive size={14} />{drafts.length} rascunhos</span><span><Users size={14} />{replyRate === null ? "Taxa de resposta sem amostra" : `Taxa de resposta ${formatPercentage(replyRate)}`}</span></div>
         </Card>
       </div>
     </div>

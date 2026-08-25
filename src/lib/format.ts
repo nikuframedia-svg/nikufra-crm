@@ -1,9 +1,20 @@
-export const formatCurrency = (value: number, compact = false) => new Intl.NumberFormat(compact ? "pt-PT" : "de-DE", {
+const currencyFormatter = new Intl.NumberFormat("de-DE", {
   style: "currency",
   currency: "EUR",
-  maximumFractionDigits: compact ? 0 : 2,
-  notation: compact ? "compact" : "standard",
-}).format(value);
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2,
+});
+
+const decimalFormatter = new Intl.NumberFormat("pt-PT", {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2,
+});
+
+export const formatCurrency = (value: number) => currencyFormatter.format(value);
+
+export const formatDecimal = (value: number) => decimalFormatter.format(value);
+
+export const formatPercentage = (value: number) => `${formatDecimal(value)}%`;
 
 export const formatNumber = (value: number) => new Intl.NumberFormat("pt-PT").format(value);
 

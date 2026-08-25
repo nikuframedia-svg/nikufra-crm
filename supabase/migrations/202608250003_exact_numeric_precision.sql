@@ -1,5 +1,7 @@
 begin;
 
+-- Preserve the full precision of calculated metrics in the data layer.
+-- Presentation precision is applied centrally by the frontend formatters.
 create or replace view public.metricas_taxa_reuniao_coorte
 with (security_invoker = true) as
 with hits as (
@@ -56,20 +58,14 @@ with marcos as (
     min(changed_at) filter (where estado_novo = 'cliente') as cliente
   from public.estado_historico group by oportunidade_id
 ), ciclos as (
-  select extract(epoch from (cliente - contacto)) / 86400.0 as dias from marcos where contacto is not null and cliente is not null
+  select extract(epoch from (cliente - contacto)) / 86400.0 as dias
+  from marcos where contacto is not null and cliente is not null
 )
-select count(*) as n, avg(dias)::numeric as media_dias,
+select count(*) as n,
+  avg(dias)::numeric as media_dias,
   percentile_cont(0.5) within group (order by dias)::numeric as mediana_dias,
   (count(*) < 5) as amostra_insuficiente
 from ciclos;
-
-create or replace view public.metricas_pipeline
-with (security_invoker = true) as
-select count(*) as n_ativas, sum(valor_estimado) as pipeline_total,
-  sum(valor_estimado * probabilidade / 100.0) as pipeline_ponderado,
-  avg(valor_estimado) as valor_medio
-from public.oportunidades
-where estado in ('nao_contactado','contactado','reuniao_marcada','reuniao_feita','proposta','piloto') and not arquivado;
 
 create or replace view public.metricas_resultados
 with (security_invoker = true) as
@@ -84,7 +80,7 @@ create or replace view public.metricas_funil
 with (security_invoker = true) as
 with etapas(estado, ordem) as (values
   ('nao_contactado'::public.oportunidade_estado, 1), ('contactado', 2), ('reuniao_marcada', 3),
-  ('reuniao_feita', 4), ('proposta', 5), ('piloto', 6), ('cliente', 7)
+  ('reuniao_feita', 4), ('piloto', 5), ('proposta', 6), ('cliente', 7)
 ), contagens as (
   select e.estado, e.ordem, count(distinct h.oportunidade_id) as n
   from etapas e left join public.estado_historico h on h.estado_novo = e.estado
@@ -97,32 +93,10 @@ select estado, ordem, n,
   (n < 5) as amostra_insuficiente
 from passos order by ordem;
 
-create or replace view public.metricas_distribuicao_vertical
-with (security_invoker = true) as
-select e.vertical, count(o.id) as n, sum(o.valor_estimado) as valor_total,
-  sum(o.valor_estimado * o.probabilidade / 100.0) as valor_ponderado
-from public.empresas e join public.oportunidades o on o.empresa_id = e.id
-where not e.arquivado and not o.arquivado group by e.vertical order by valor_total desc;
+grant select on public.metricas_taxa_reuniao_coorte, public.metricas_no_show,
+  public.metricas_tempo_estado, public.metricas_ciclo_venda,
+  public.metricas_resultados, public.metricas_funil to authenticated;
 
-create or replace view public.metricas_cliente
-with (security_invoker = true) as
-with carteira as (
-  select empresa_id, min(data_fecho) as primeiro_fecho,
-    coalesce(sum(valor_recorrente_anual), 0) as valor_recorrente_anual,
-    count(*) as numero_projetos
-  from public.oportunidades where estado = 'cliente' and not arquivado group by empresa_id
-), receita as (
-  select empresa_id, coalesce(sum(valor) filter (where tipo = 'faturado'), 0) as faturacao_acumulada
-  from public.faturacao group by empresa_id
-)
-select e.id as empresa_id, e.nome, coalesce(r.faturacao_acumulada, 0) as faturacao_acumulada,
-  extract(year from age(current_date, c.primeiro_fecho)) * 12 + extract(month from age(current_date, c.primeiro_fecho)) as meses_ativo,
-  c.valor_recorrente_anual, c.numero_projetos
-from carteira c join public.empresas e on e.id = c.empresa_id
-left join receita r on r.empresa_id = e.id;
-
-grant select on public.metricas_taxa_reuniao_coorte, public.metricas_no_show, public.metricas_tempo_estado,
-  public.metricas_ciclo_venda, public.metricas_pipeline, public.metricas_resultados, public.metricas_funil,
-  public.metricas_distribuicao_vertical, public.metricas_cliente to authenticated;
+notify pgrst, 'reload schema';
 
 commit;

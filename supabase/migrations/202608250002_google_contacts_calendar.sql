@@ -68,7 +68,7 @@ with etapas(estado, ordem) as (values
   select *, lag(n) over (order by ordem) as n_anterior from contagens
 )
 select estado, ordem, n,
-  case when n_anterior is null then 100.0 else round(100.0 * n / nullif(n_anterior, 0), 1) end as taxa_passo,
+  case when n_anterior is null then 100.0 else 100.0 * n / nullif(n_anterior, 0) end as taxa_passo,
   (n < 5) as amostra_insuficiente
 from passos order by ordem;
 

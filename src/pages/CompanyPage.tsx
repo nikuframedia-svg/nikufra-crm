@@ -10,7 +10,7 @@ import { Avatar, Button, Card, EmptyState, PageHeader, StageChip } from "../comp
 
 function daysBetween(start?: string, end?: string) {
   if (!start || !end) return null;
-  const days = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86_400_000);
+  const days = (new Date(end).getTime() - new Date(start).getTime()) / 86_400_000;
   return Number.isFinite(days) && days >= 0 ? days : null;
 }
 
