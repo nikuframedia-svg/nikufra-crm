@@ -79,7 +79,8 @@ curl --fail --silent --show-error \
   -H "apikey: ${ANON_KEY}" \
   "http://127.0.0.1:${CRM_API_PORT}/auth/v1/health" >/dev/null
 curl --fail --silent --show-error \
-  -H "apikey: ${ANON_KEY}" \
+  -H "apikey: ${SERVICE_ROLE_KEY}" \
+  -H "Authorization: Bearer ${SERVICE_ROLE_KEY}" \
   "http://127.0.0.1:${CRM_API_PORT}/rest/v1/profiles?select=id&limit=0" >/dev/null
 
 "${COMPOSE[@]}" ps
