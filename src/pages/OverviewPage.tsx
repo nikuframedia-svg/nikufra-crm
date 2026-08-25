@@ -16,9 +16,9 @@ export function OverviewPage() {
   const currentRevenue = revenueMonths.at(-1) ?? { mes: "", contratualizado: 0, faturado: 0, recebido: 0, objetivo: 0 };
   const stalled = active.filter((item) => item.diasNoEstado >= 30).sort((a, b) => b.diasNoEstado - a.diasNoEstado).slice(0, 4);
 
-  const closedCycles = opportunities.map((item) => item.dataPrimeiroContacto && item.dataFecho ? (new Date(item.dataFecho).getTime() - new Date(item.dataPrimeiroContacto).getTime()) / 86_400_000 : null).filter((value): value is number => value !== null && value >= 0).sort((a, b) => a - b);
-  const cycleMiddle = Math.floor(closedCycles.length / 2);
-  const medianCycle = !closedCycles.length ? null : closedCycles.length % 2 ? closedCycles[cycleMiddle] : (closedCycles[cycleMiddle - 1] + closedCycles[cycleMiddle]) / 2;
+  const confirmedCycles = opportunities.map((item) => item.cicloAcordoMeses).filter((value): value is number => value != null && value >= 0).sort((a, b) => a - b);
+  const cycleMiddle = Math.floor(confirmedCycles.length / 2);
+  const medianCycle = !confirmedCycles.length ? null : confirmedCycles.length % 2 ? confirmedCycles[cycleMiddle] : (confirmedCycles[cycleMiddle - 1] + confirmedCycles[cycleMiddle]) / 2;
   const currentName = team.find((item) => item.id === currentUserId)?.nome.split(" ")[0] ?? "João";
   const now = new Date();
   const dateLabel = now.toLocaleDateString("pt-PT", { day: "numeric", month: "long", year: "numeric" });
@@ -30,7 +30,7 @@ export function OverviewPage() {
         <MetricCard label="Pipeline total" value={formatCurrency(pipeline)} detail={`${active.length} empresas no funil`} icon={<Target size={17} />} />
         <MetricCard label="Pipeline ponderado" value={formatCurrency(weighted)} detail="com probabilidades por etapa" icon={<Activity size={17} />} />
         <MetricCard label="Faturado sem IVA" value={formatCurrency(currentRevenue.faturado)} detail={currentRevenue.objetivo ? `de ${formatCurrency(currentRevenue.objetivo)} objetivo` : "objetivo mensal ainda não definido"} icon={<CircleDollarSign size={17} />} />
-        <MetricCard label="Ciclo de venda mediano" value={medianCycle === null ? "Sem amostra" : `${formatDecimal(medianCycle)} dias`} detail={`n=${closedCycles.length} negócios com datas completas`} icon={<Clock3 size={17} />} />
+        <MetricCard label="1.º contacto → acordo verbal" value={medianCycle === null ? "Sem amostra" : `${formatDecimal(medianCycle)} ${medianCycle === 1 ? "mês" : "meses"}`} detail={`n=${confirmedCycles.length} negócios confirmados`} icon={<Clock3 size={17} />} />
       </section>
 
       <section className="overview-grid">
