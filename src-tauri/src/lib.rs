@@ -1,3 +1,6 @@
+#[cfg(any(target_os = "macos", windows))]
+mod secure_storage;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default();
@@ -11,6 +14,15 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }));
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    {
+        builder = builder.invoke_handler(tauri::generate_handler![
+            secure_storage::secure_storage_get,
+            secure_storage::secure_storage_set,
+            secure_storage::secure_storage_remove,
+        ]);
     }
 
     builder

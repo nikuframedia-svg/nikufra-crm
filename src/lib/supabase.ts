@@ -1,8 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
+import { createSecureAuthStorage } from "./secure-auth-storage";
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const secureAuthStorage = createSecureAuthStorage();
 
 export const supabase = typeof window !== "undefined" && url && anonKey ? createClient(url, anonKey, {
   auth: {
@@ -11,6 +13,7 @@ export const supabase = typeof window !== "undefined" && url && anonKey ? create
     detectSessionInUrl: !isTauri,
     flowType: "pkce",
     experimental: { appendPkceFlowIdToRedirects: true },
+    ...(secureAuthStorage ? { storage: secureAuthStorage } : {}),
   },
 }) : null;
 
