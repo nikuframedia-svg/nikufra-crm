@@ -1,6 +1,6 @@
 [package]
 name = "nikufra-crm"
-version = "0.1.1"
+version = "0.1.2"
 description = "CRM interno Nikufra"
 authors = ["Nikufra"]
 edition = "2021"
