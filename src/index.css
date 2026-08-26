@@ -149,6 +149,25 @@ main { height: calc(100vh - 70px); overflow: auto; }
 .google-import-stats small { color: var(--muted); font-size: 8.5px; }
 .google-import-stats strong { color: var(--ink-strong); font-size: 18px; }
 .auth-error { margin: 9px 0 0; padding: 8px; border: 1px solid color-mix(in srgb, var(--red), transparent 68%); color: var(--red); background: rgba(239,68,68,.07); font-size: 9px; }
+.update-overlay { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; padding: 32px; background: var(--canvas); }
+.update-panel { width: min(390px, calc(100vw - 64px)); color: var(--ink); }
+.update-panel .wordmark { margin-bottom: 58px; }
+.update-panel .wordmark__lockup { width: 156px; }
+.update-panel .eyebrow { margin-bottom: 12px; color: var(--accent); }
+.update-panel h1 { margin: 0; color: var(--ink-strong); font-size: 30px; font-weight: 650; letter-spacing: -.045em; line-height: 1.05; }
+.update-panel > p:not(.eyebrow) { margin: 13px 0 28px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.update-panel > p span { color: var(--ink); }
+.update-progress { height: 3px; overflow: hidden; background: var(--line); }
+.update-progress span { display: block; height: 100%; background: var(--accent); transition: width 160ms ease-out; }
+.update-progress span.is-indeterminate { animation: update-progress 1.15s ease-in-out infinite alternate; }
+.update-panel > small { display: block; margin-top: 9px; color: var(--muted-2); font-size: 8px; letter-spacing: .04em; }
+.update-error { position: fixed; z-index: 1001; right: 18px; bottom: 18px; display: grid; grid-template-columns: 20px minmax(190px, 1fr) auto 20px; align-items: center; gap: 10px; width: min(560px, calc(100vw - 36px)); padding: 12px; border: 1px solid color-mix(in srgb, var(--amber), transparent 55%); border-radius: 5px; color: var(--amber); background: var(--surface-raised); box-shadow: 0 12px 36px rgba(0,0,0,.22); }
+.update-error > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.update-error strong { color: var(--ink); font-size: 10px; }
+.update-error span { overflow: hidden; color: var(--muted); font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
+.update-error .button { min-height: 30px; font-size: 9px; }
+.update-error__dismiss { width: 20px; height: 20px; padding: 0; border: 0; color: var(--muted); background: transparent; cursor: pointer; font-size: 17px; line-height: 1; }
+@keyframes update-progress { from { transform: translateX(-35%); } to { transform: translateX(350%); } }
 .page { min-width: 0; padding: 26px; }
 .page--pipeline { display: flex; height: 100%; min-width: 0; flex-direction: column; padding-right: 0; padding-bottom: 0; overflow: hidden; }
 .page--pipeline .page-header { flex: 0 0 auto; padding-right: 26px; }
