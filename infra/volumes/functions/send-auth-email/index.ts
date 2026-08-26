@@ -45,6 +45,19 @@ function actionCopy(action: string) {
   }
 }
 
+function oneTimeSubject(subject: string) {
+  const issuedAt = new Intl.DateTimeFormat("pt-PT", {
+    timeZone: "Europe/Lisbon",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(new Date());
+  return `${subject} — ${issuedAt}`;
+}
+
 function verificationLink(action: string, tokenHash: string, redirectTo: string) {
   const publicUrl = Deno.env.get("SUPABASE_PUBLIC_URL");
   if (!publicUrl) throw new Error("SUPABASE_PUBLIC_URL não está configurado");
@@ -64,7 +77,9 @@ function linkedEmail(recipient: string, action: string, tokenHash: string, redir
   const link = verificationLink(action, tokenHash, redirectTo);
   const text = `${copy.heading}\n\nAbre este link seguro (válido por tempo limitado):\n${link}\n\nSe não pediste esta ação, ignora este email.`;
   const html = `<!doctype html><html lang="pt"><body style="margin:0;background:#0b0d10;color:#f7f7f7;font-family:Arial,sans-serif"><div style="max-width:560px;margin:0 auto;padding:48px 24px"><div style="font-size:13px;letter-spacing:.12em;color:#8fa8c8;text-transform:uppercase">Nikufra CRM</div><h1 style="font-size:28px;line-height:1.2;margin:24px 0 12px">${escapeHtml(copy.heading)}</h1><p style="color:#bbc2cc;line-height:1.6">Usa o botão abaixo para continuar. Este acesso é pessoal e válido por tempo limitado.</p><p style="margin:32px 0"><a href="${escapeHtml(link)}" style="display:inline-block;background:#2878ff;color:#fff;text-decoration:none;padding:14px 22px;border-radius:8px;font-weight:700">${escapeHtml(copy.button)}</a></p><p style="font-size:13px;color:#7f8792;line-height:1.5">Se não pediste esta ação, ignora este email.</p></div></body></html>`;
-  return { recipient, action, tokenHash, subject: copy.subject, text, html };
+  // A unique subject keeps Gmail from threading a fresh one-time link under an
+  // older, expired message whose button may point at a previous environment.
+  return { recipient, action, tokenHash, subject: oneTimeSubject(copy.subject), text, html };
 }
 
 function codeEmail(recipient: string, action: string, token: string): OutgoingEmail {
