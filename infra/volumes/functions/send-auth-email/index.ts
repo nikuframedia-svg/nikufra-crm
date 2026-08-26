@@ -47,8 +47,11 @@ function actionCopy(action: string) {
 
 function verificationLink(action: string, tokenHash: string, redirectTo: string) {
   const publicUrl = Deno.env.get("SUPABASE_PUBLIC_URL");
-  if (!publicUrl?.startsWith("https://")) throw new Error("SUPABASE_PUBLIC_URL tem de usar HTTPS");
-  const url = new URL("/auth/v1/verify", publicUrl);
+  if (!publicUrl) throw new Error("SUPABASE_PUBLIC_URL não está configurado");
+  const base = new URL(publicUrl);
+  const loopback = base.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(base.hostname);
+  if (base.protocol !== "https:" && !loopback) throw new Error("SUPABASE_PUBLIC_URL tem de usar HTTPS ou loopback local");
+  const url = new URL("/auth/v1/verify", base);
   url.searchParams.set("token", tokenHash);
   url.searchParams.set("type", action);
   if (redirectTo) url.searchParams.set("redirect_to", redirectTo);

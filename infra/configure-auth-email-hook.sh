@@ -9,8 +9,8 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   echo "Falta ${ENV_FILE}" >&2
   exit 1
 fi
-if [[ "${ACTION}" != "prepare" && "${ACTION}" != "enable" && "${ACTION}" != "disable" ]]; then
-  echo "Uso: $0 [prepare|enable|disable]" >&2
+if [[ "${ACTION}" != "prepare" && "${ACTION}" != "enable" && "${ACTION}" != "enable-local" && "${ACTION}" != "disable" ]]; then
+  echo "Uso: $0 [prepare|enable|enable-local|disable]" >&2
   exit 1
 fi
 command -v openssl >/dev/null || { echo "openssl é obrigatório" >&2; exit 1; }
@@ -21,17 +21,25 @@ if [[ ! "${secret}" =~ ^v1,whsec_[A-Za-z0-9+/]+={0,2}$ ]]; then
 fi
 
 enabled=false
-if [[ "${ACTION}" == "enable" ]]; then
+if [[ "${ACTION}" == "enable" || "${ACTION}" == "enable-local" ]]; then
   set -a
   # shellcheck disable=SC1090
   source "${ENV_FILE}"
   set +a
-  if [[ -z "${CRM_DOMAIN:-}" || -z "${ANON_KEY:-}" ]]; then
-    echo "CRM_DOMAIN e ANON_KEY são obrigatórios" >&2
+  if [[ -z "${ANON_KEY:-}" ]]; then
+    echo "ANON_KEY é obrigatória" >&2
     exit 1
   fi
+  if [[ "${ACTION}" == "enable" && -z "${CRM_DOMAIN:-}" ]]; then
+    echo "CRM_DOMAIN é obrigatório" >&2
+    exit 1
+  fi
+  health_url="http://127.0.0.1:8000/auth/v1/health"
+  if [[ "${ACTION}" == "enable" ]]; then
+    health_url="https://${CRM_DOMAIN}/auth/v1/health"
+  fi
   curl --fail --silent --show-error --max-time 15 \
-    -H "apikey: ${ANON_KEY}" "https://${CRM_DOMAIN}/auth/v1/health" >/dev/null
+    -H "apikey: ${ANON_KEY}" "${health_url}" >/dev/null
   enabled=true
 fi
 
