@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Forced command used by the GitHub Actions deploy key. It accepts a small,
+# Executable forced command used by the GitHub Actions deploy key. It accepts a small,
 # validated tar.gz on stdin and atomically publishes only desktop release
 # files. The key cannot execute arbitrary commands on the server.
 PUBLISH_ROOT="${NIKUFRA_RELEASE_PUBLISH_ROOT:-/home/luis/stacks/caddy/portal}"
