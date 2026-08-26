@@ -9,9 +9,9 @@ import type { Draft } from "../types";
 import { Button, Card, PageHeader, StageChip } from "../components/ui";
 
 const templates = [
-  { name: "Primeiro contacto industrial", subject: "{{empresa}} × Nikufra — uma hipótese concreta", body: "Olá {{nome}},\n\nTenho acompanhado o trabalho da {{empresa}} em {{vertical}}. Na Nikufra ajudamos fabricantes a transformar dados de ERP, MES e chão de fábrica em decisões operacionais mais rápidas.\n\nFaz sentido uma conversa de 20 minutos para perceber se existe um caso concreto?\n\nCumprimentos,\nJoão" },
-  { name: "Follow-up de reunião", subject: "Próximos passos — Nikufra × {{empresa}}", body: "Olá {{nome}},\n\nObrigado pela conversa. Deixo abaixo os próximos passos que alinhámos e o contexto técnico relevante.\n\nCumprimentos,\nJoão" },
-  { name: "Reativação", subject: "Retomar o tema de dados na {{empresa}}", body: "Olá {{nome}},\n\nRetomo o nosso contacto porque o contexto que discutimos pode ter mudado. Há disponibilidade para revermos o tema este mês?\n\nCumprimentos,\nJoão" },
+  { name: "Primeiro contacto industrial", subject: "{{empresa}} × Nikufra — uma hipótese concreta", body: "Olá {{nome}},\n\nTenho acompanhado o trabalho da {{empresa}} em {{vertical}}. Na Nikufra ajudamos fabricantes a transformar dados de ERP, MES e chão de fábrica em decisões operacionais mais rápidas.\n\nFaz sentido uma conversa de 20 minutos para perceber se existe um caso concreto?\n\nCumprimentos,\n{{remetente}}" },
+  { name: "Follow-up de reunião", subject: "Próximos passos — Nikufra × {{empresa}}", body: "Olá {{nome}},\n\nObrigado pela conversa. Deixo abaixo os próximos passos que alinhámos e o contexto técnico relevante.\n\nCumprimentos,\n{{remetente}}" },
+  { name: "Reativação", subject: "Retomar o tema de dados na {{empresa}}", body: "Olá {{nome}},\n\nRetomo o nosso contacto porque o contexto que discutimos pode ter mudado. Há disponibilidade para revermos o tema este mês?\n\nCumprimentos,\n{{remetente}}" },
 ];
 
 export function EmailPage() {
@@ -57,14 +57,21 @@ export function EmailPage() {
   });
   const fallbackThreads = activities.filter((activity) => activity.tipo === "email").slice(0, 60).map((activity) => ({ id: activity.id, company: activity.empresa, person: activity.contactoNome ?? activity.contactoEmail ?? "Contacto", subject: activity.assunto ?? activity.descricao, snippet: activity.snippet ?? (activity.direcao === "recebido" ? "Email recebido" : "Email enviado"), meeting: activity.reuniaoInferida, time: new Date(activity.data).toLocaleDateString("pt-PT", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }), unread: activity.direcao === "recebido" }));
   const visibleThreads = (recentEmailActivities.length ? recentEmailActivities : fallbackThreads).slice(0, 20);
-  const currentEmail = team.find((owner) => owner.id === currentUserId)?.email ?? team[0]?.email ?? "conta@nikufra.ai";
+  const currentOwner = team.find((owner) => owner.id === currentUserId) ?? team[0];
+  const currentEmail = currentOwner?.email ?? "Conta Google não identificada";
   const sentEmails = activities.filter((activity) => activity.tipo === "email" && activity.direcao === "enviado");
   const repliedContacts = new Set(activities.filter((activity) => activity.tipo === "email" && activity.direcao === "recebido").map((activity) => activity.contactoId).filter(Boolean));
   const contacted = new Set(sentEmails.map((activity) => activity.contactoId).filter(Boolean));
   const replyRate = contacted.size ? 100 * [...repliedContacts].filter((id) => contacted.has(id)).length / contacted.size : null;
 
   function chooseTemplate(index: number) { setTemplateIndex(index); setSubject(templates[index].subject); setBody(templates[index].body); setSent(false); }
-  function renderTemplate(text: string, lead: typeof leads[number]) { return text.replaceAll("{{nome}}", lead.nome.split(" ")[0]).replaceAll("{{empresa}}", lead.empresa).replaceAll("{{vertical}}", lead.vertical); }
+  function renderTemplate(text: string, lead: typeof leads[number]) {
+    return text
+      .replaceAll("{{nome}}", lead.nome.split(" ")[0])
+      .replaceAll("{{empresa}}", lead.empresa)
+      .replaceAll("{{vertical}}", lead.vertical)
+      .replaceAll("{{remetente}}", currentOwner?.nome ?? "Equipa Nikufra");
+  }
   async function handleOpenGmail() {
     if ("__TAURI_INTERNALS__" in window) await open("https://mail.google.com/mail/u/0/#drafts");
     else window.open("https://mail.google.com/mail/u/0/#drafts", "_blank", "noopener,noreferrer");
@@ -118,7 +125,7 @@ export function EmailPage() {
               <label>Template<select value={templateIndex} onChange={(event) => chooseTemplate(Number(event.target.value))}>{templates.map((template, index) => <option key={template.name} value={index}>{template.name}</option>)}</select></label>
               <label>Assunto<input value={subject} onChange={(event) => setSubject(event.target.value)} /></label>
               <label>Mensagem<textarea value={body} onChange={(event) => setBody(event.target.value)} rows={11} /></label>
-              <div className="variable-row"><button>{"{{nome}}"}</button><button>{"{{empresa}}"}</button><button>{"{{vertical}}"}</button></div>
+              <div className="variable-row"><button>{"{{nome}}"}</button><button>{"{{empresa}}"}</button><button>{"{{vertical}}"}</button><button>{"{{remetente}}"}</button></div>
               {sent ? <div className="success-banner"><CheckCircle2 size={17} /><span><strong>{selected.size} rascunhos criados.</strong> Revê e envia cada um no Gmail.</span></div> : null}
               {error ? <div className="auth-error">{error}. Confirma a ligação Gmail nas definições.</div> : null}
               <Button className="generate-button" disabled={!selected.size || generating} onClick={handleGenerate}><FilePenLine size={16} />{generating ? "A criar rascunhos…" : `Criar ${selected.size || ""} rascunhos`}</Button>
