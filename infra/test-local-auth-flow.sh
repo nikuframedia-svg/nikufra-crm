@@ -19,28 +19,80 @@ TEST_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nikufra-auth-e2e.XXXXXX")"
 chmod 700 "${TEST_TEMP_DIR}"
 test_email="nikufra.crm.qa+$(date +%s).$$@gmail.com"
 [[ "${test_email}" =~ ^nikufra\.crm\.qa\+[0-9]+\.[0-9]+@gmail\.com$ ]]
+test_admin_email="nikufra.crm.admin.qa+$(date +%s).$$@gmail.com"
+[[ "${test_admin_email}" =~ ^nikufra\.crm\.admin\.qa\+[0-9]+\.[0-9]+@gmail\.com$ ]]
 test_user_id=""
+test_admin_user_id=""
+restore_email_hook=false
+
+recreate_auth() {
+  # The environment was sourced before the temporary file change. Remove the
+  # exported override so Compose reads the current value from --env-file.
+  env -u AUTH_EMAIL_HOOK_ENABLED "${COMPOSE[@]}" up -d --no-deps --force-recreate auth >/dev/null
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if curl --fail --silent --max-time 2 -H "apikey: ${ANON_KEY}" \
+      http://127.0.0.1:8000/auth/v1/health >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "O serviço Auth não ficou saudável depois da alteração temporária" >&2
+  return 1
+}
 
 cleanup() {
-  if [[ -n "${test_user_id}" ]]; then
-    curl -sS -o /dev/null -X DELETE "http://127.0.0.1:8000/auth/v1/admin/users/${test_user_id}" \
-      -H "apikey: ${SERVICE_ROLE_KEY}" -H "Authorization: Bearer ${SERVICE_ROLE_KEY}" || true
-  fi
+  # Invitations keep a foreign key to the test administrator. Remove them
+  # before deleting that profile through the Auth Admin API.
   "${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
-    -c "delete from public.user_invitations where email = '${test_email}';" >/dev/null || true
+    -c "delete from public.user_invitations where email in ('${test_email}','${test_admin_email}');" >/dev/null || true
+  if [[ -n "${test_user_id}" ]]; then
+    member_delete_status="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "http://127.0.0.1:8000/auth/v1/admin/users/${test_user_id}" \
+      -H "apikey: ${SERVICE_ROLE_KEY}" -H "Authorization: Bearer ${SERVICE_ROLE_KEY}" || true)"
+    [[ "${member_delete_status}" == 200 ]] || echo "Aviso: limpeza do membro de teste devolveu ${member_delete_status}" >&2
+  fi
+  if [[ -n "${test_admin_user_id}" ]]; then
+    admin_delete_status="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "http://127.0.0.1:8000/auth/v1/admin/users/${test_admin_user_id}" \
+      -H "apikey: ${SERVICE_ROLE_KEY}" -H "Authorization: Bearer ${SERVICE_ROLE_KEY}" || true)"
+    [[ "${admin_delete_status}" == 200 ]] || echo "Aviso: limpeza do administrador de teste devolveu ${admin_delete_status}" >&2
+  fi
   if [[ -d "${TEST_TEMP_DIR}" && "${TEST_TEMP_DIR}" == *'/nikufra-auth-e2e.'* ]]; then
     find "${TEST_TEMP_DIR}" -maxdepth 1 -type f -delete
     rmdir "${TEST_TEMP_DIR}" 2>/dev/null || true
   fi
+  if [[ "${restore_email_hook}" == true ]]; then
+    "${SCRIPT_DIR}/configure-auth-email-hook.sh" enable-local >/dev/null || true
+    recreate_auth || true
+    restore_email_hook=false
+  fi
 }
 trap cleanup EXIT
+trap 'status=$?; if [[ "${BASH_SUBSHELL}" -eq 0 ]]; then printf "Falha interna no teste de autenticação (linha %s, código %s)\n" "${LINENO}" "${status}" >&2; fi; exit "${status}"' ERR
 
-admin_email="$("${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc \
-  "select email from public.profiles where role='admin' and ativo order by created_at limit 1")"
-[[ -n "${admin_email}" ]] || { echo "Não existe administrador local ativo" >&2; exit 1; }
+# The end-to-end suite must never send real authentication emails. When the
+# local Gmail hook is active, use Mailpit just for this test and restore the
+# previous configuration even if an assertion fails.
+email_hook_enabled="$(docker inspect nikufra-crm-auth-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | sed -n 's/^GOTRUE_HOOK_SEND_EMAIL_ENABLED=//p')"
+if [[ "${email_hook_enabled}" == true ]]; then
+  "${SCRIPT_DIR}/configure-auth-email-hook.sh" disable >/dev/null
+  restore_email_hook=true
+  recreate_auth
+fi
+
+"${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
+  -c "insert into public.user_invitations(email,nome,invited_by) select '${test_admin_email}','QA Admin',id from public.profiles where role='admin' and ativo order by created_at limit 1;" >/dev/null
+admin_create_status="$(curl -sS -o "${TEST_TEMP_DIR}/admin-create.json" -w '%{http_code}' \
+  -X POST http://127.0.0.1:8000/auth/v1/admin/users \
+  -H "apikey: ${SERVICE_ROLE_KEY}" -H "Authorization: Bearer ${SERVICE_ROLE_KEY}" \
+  -H 'Content-Type: application/json' \
+  --data "$(jq -cn --arg email "${test_admin_email}" '{email:$email,email_confirm:true,user_metadata:{nome:"QA Admin"}}')")"
+test_admin_user_id="$(jq -r '.id // ""' "${TEST_TEMP_DIR}/admin-create.json")"
+[[ "${admin_create_status}" == 200 && -n "${test_admin_user_id}" ]] || { echo "Não foi possível criar o administrador isolado de teste (${admin_create_status})" >&2; exit 1; }
+"${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
+  -c "begin; select set_config('request.jwt.claim.sub',(select id::text from public.profiles where role='admin' and ativo order by created_at limit 1),true); update public.profiles set role='admin', ativo=true where id='${test_admin_user_id}'; commit;" >/dev/null
+admin_email="${test_admin_email}"
 
 latest_message_id() {
-  curl -fsS http://127.0.0.1:8025/api/v1/messages | jq -r '.messages[0].ID // ""'
+  curl -fsS http://127.0.0.1:8025/api/v1/messages | jq -r '(.messages | max_by(.Created) | .ID) // ""'
 }
 
 wait_for_new_message() {
@@ -177,7 +229,7 @@ duplicate_invitation_used="$("${COMPOSE[@]}" exec -T db psql -U postgres -d post
 cleanup
 trap - EXIT
 residual="$("${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc \
-  "select (select count(*) from auth.users where email='${test_email}') + (select count(*) from public.user_invitations where email='${test_email}')")"
+  "select (select count(*) from auth.users where email in ('${test_email}','${test_admin_email}')) + (select count(*) from public.user_invitations where email='${test_email}')")"
 [[ "${residual}" == 0 ]] || { echo "O teste deixou dados residuais" >&2; exit 1; }
 
 echo "OK login, sessão persistível, convite por email, reinvite seguro, callback desktop, acesso partilhado, isolamento member e limpeza"
