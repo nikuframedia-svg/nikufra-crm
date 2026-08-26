@@ -85,10 +85,15 @@ function linkedEmail(recipient: string, action: string, tokenHash: string, redir
   const copy = actionCopy(action);
   const link = verificationLink(action, tokenHash, redirectTo);
   const downloadUrl = desktopDownloadUrl(action);
-  const installText = downloadUrl ? `\n\nAinda não tens a aplicação instalada? Descarrega-a primeiro:\n${downloadUrl}` : "";
-  const installHtml = downloadUrl ? `<p style="margin:0 0 28px;color:#bbc2cc;line-height:1.6">Ainda não tens a aplicação? <a href="${escapeHtml(downloadUrl)}" style="color:#8fb8ff;text-underline-offset:3px">Descarrega para macOS ou Windows</a>.</p>` : "";
-  const text = `${copy.heading}\n\nAbre este link seguro (válido por tempo limitado):\n${link}${installText}\n\nSe não pediste esta ação, ignora este email.`;
-  const html = `<!doctype html><html lang="pt"><body style="margin:0;background:#0b0d10;color:#f7f7f7;font-family:Arial,sans-serif"><div style="max-width:560px;margin:0 auto;padding:48px 24px"><div style="font-size:13px;letter-spacing:.12em;color:#8fa8c8;text-transform:uppercase">Nikufra CRM</div><h1 style="font-size:28px;line-height:1.2;margin:24px 0 12px">${escapeHtml(copy.heading)}</h1><p style="color:#bbc2cc;line-height:1.6">Usa o botão abaixo para continuar. Este acesso é pessoal e válido por tempo limitado.</p><p style="margin:32px 0"><a href="${escapeHtml(link)}" style="display:inline-block;background:#2878ff;color:#fff;text-decoration:none;padding:14px 22px;border-radius:8px;font-weight:700">${escapeHtml(copy.button)}</a></p>${installHtml}<p style="font-size:13px;color:#7f8792;line-height:1.5">Se não pediste esta ação, ignora este email.</p></div></body></html>`;
+  const firstAccess = ["invite", "signup"].includes(action);
+  const actionText = `Abre este link seguro (válido durante 30 minutos):\n${link}`;
+  const installText = downloadUrl ? `Instala primeiro a aplicação neste computador:\n${downloadUrl}` : "";
+  const textSteps = firstAccess && installText ? `${installText}\n\nDepois de instalar, volta a este email. ${actionText}` : `${actionText}${installText ? `\n\nAinda não tens a aplicação?\n${downloadUrl}` : ""}`;
+  const actionHtml = `<p style="margin:30px 0"><a href="${escapeHtml(link)}" style="display:inline-block;background:#2878ff;color:#fff;text-decoration:none;padding:14px 22px;border-radius:8px;font-weight:700">${escapeHtml(copy.button)}</a></p>`;
+  const installHtml = downloadUrl ? `<p style="margin:30px 0"><a href="${escapeHtml(downloadUrl)}" style="display:inline-block;border:1px solid #4e5968;color:#f7f7f7;text-decoration:none;padding:13px 21px;border-radius:8px;font-weight:700">Instalar Nikufra CRM</a></p>` : "";
+  const stepsHtml = firstAccess && installHtml ? `<p style="color:#bbc2cc;line-height:1.6">Instala primeiro a aplicação neste computador. Depois volta a este email para aceitar o convite.</p>${installHtml}${actionHtml}` : `<p style="color:#bbc2cc;line-height:1.6">Usa o botão abaixo para continuar. Este acesso é pessoal, de uso único e válido durante 30 minutos.</p>${actionHtml}${installHtml}`;
+  const text = `${copy.heading}\n\n${textSteps}\n\nSe não pediste esta ação, ignora este email.`;
+  const html = `<!doctype html><html lang="pt"><body style="margin:0;background:#0b0d10;color:#f7f7f7;font-family:Arial,sans-serif"><div style="max-width:560px;margin:0 auto;padding:48px 24px"><div style="font-size:13px;letter-spacing:.12em;color:#8fa8c8;text-transform:uppercase">Nikufra CRM</div><h1 style="font-size:28px;line-height:1.2;margin:24px 0 12px">${escapeHtml(copy.heading)}</h1>${stepsHtml}<p style="font-size:13px;color:#7f8792;line-height:1.5">Se não pediste esta ação, ignora este email.</p></div></body></html>`;
   // A unique subject keeps Gmail from threading a fresh one-time link under an
   // older, expired message whose button may point at a previous environment.
   return { recipient, action, tokenHash, subject: oneTimeSubject(copy.subject), text, html };

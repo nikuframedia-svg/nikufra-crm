@@ -44,7 +44,9 @@ services:
       GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
       GOTRUE_MAILER_AUTOCONFIRM: "false"
       GOTRUE_MAILER_SECURE_EMAIL_CHANGE_ENABLED: "true"
-      GOTRUE_MAILER_OTP_EXP: 600
+      # A first-time invite includes time to download and install the desktop
+      # app. Links remain single-use and expire after 30 minutes.
+      GOTRUE_MAILER_OTP_EXP: 1800
       GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
       GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
       GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
