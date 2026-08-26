@@ -15,8 +15,8 @@ describe("configuração comercial segura", () => {
     expect(initialDrafts).toEqual([]);
   });
 
-  it("só mantém o operador local de desenvolvimento", () => {
+  it("não embebe utilizadores reais ou fictícios na configuração", () => {
     expect(owners).toHaveLength(1);
-    expect(owners[0].nome).toBe("João Milhazes");
+    expect(owners[0]).toMatchObject({ id: "unassigned", nome: "Sem responsável", email: "" });
   });
 });

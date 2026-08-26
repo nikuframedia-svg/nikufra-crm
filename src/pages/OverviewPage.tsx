@@ -19,9 +19,10 @@ export function OverviewPage() {
   const confirmedCycles = opportunities.map((item) => item.cicloAcordoMeses).filter((value): value is number => value != null && value >= 0).sort((a, b) => a - b);
   const cycleMiddle = Math.floor(confirmedCycles.length / 2);
   const medianCycle = !confirmedCycles.length ? null : confirmedCycles.length % 2 ? confirmedCycles[cycleMiddle] : (confirmedCycles[cycleMiddle - 1] + confirmedCycles[cycleMiddle]) / 2;
-  const currentName = team.find((item) => item.id === currentUserId)?.nome.split(" ")[0] ?? "João";
+  const currentName = team.find((item) => item.id === currentUserId)?.nome.split(" ")[0] ?? "equipa";
   const now = new Date();
   const dateLabel = now.toLocaleDateString("pt-PT", { day: "numeric", month: "long", year: "numeric" });
+  const currentMonthLabel = now.toLocaleDateString("pt-PT", { month: "long" });
 
   return (
     <div className="page">
@@ -36,7 +37,7 @@ export function OverviewPage() {
       <section className="overview-grid">
         <Card className="chart-panel chart-panel--main">
           <div className="panel-header"><div><p className="eyebrow">Receita e compromisso</p><h2>Tração comercial</h2></div><div className="legend"><span><i className="legend-blue" />Faturado</span><span><i className="legend-white" />Contratualizado</span><span><i className="legend-dash" />Objetivo</span></div></div>
-          <div className="chart-summary"><strong className="mono">{formatCurrency(currentRevenue.faturado + currentRevenue.contratualizado)}</strong><span>volume comercial em agosto</span></div>
+          <div className="chart-summary"><strong className="mono">{formatCurrency(currentRevenue.faturado + currentRevenue.contratualizado)}</strong><span>volume comercial em {currentMonthLabel}</span></div>
           <div className="chart-wrap">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={revenueMonths} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>

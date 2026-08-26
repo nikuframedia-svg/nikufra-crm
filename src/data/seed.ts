@@ -15,9 +15,9 @@ export const stageProbability: Record<Stage, number> = {
   piloto: 50, proposta: 75, cliente: 100, perdido: 0, adiado: 10,
 };
 
-// Fallback exclusivo de desenvolvimento. Em produção, os profiles vêm do servidor autenticado.
+// Placeholder visual para referências sem responsável. Nunca representa um utilizador real.
 export const owners: Owner[] = [
-  { id: "local-owner", nome: "João Milhazes", email: "joao@nikufra.ai", iniciais: "JM", cor: "#3b82f6", role: "admin" },
+  { id: "unassigned", nome: "Sem responsável", email: "", iniciais: "—", cor: "#64748b", role: "member" },
 ];
 
 export const initialLeads: Lead[] = [];
