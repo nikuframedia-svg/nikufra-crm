@@ -7,7 +7,9 @@ permissions:
   contents: write
 
 concurrency:
-  group: internal-desktop-installers
+  # v2 leaves behind a stale scheduler lock from the retired channel without
+  # allowing two current installer publications to overlap.
+  group: internal-desktop-installers-v2
   cancel-in-progress: false
 
 jobs:
