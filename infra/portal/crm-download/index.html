@@ -266,7 +266,10 @@
         .then((release) => {
           if (release.macos?.url) mac.href = release.macos.url;
           if (release.windows?.url) windows.href = release.windows.url;
-          status.textContent = `Versão ${release.version} disponível para instalação.`;
+          const trusted = release.trust?.macosNotarized && release.trust?.windowsAuthenticode;
+          status.textContent = trusted
+            ? `Versão ${release.version} assinada e disponível para instalação.`
+            : `Versão interna ${release.version}. O sistema operativo pode pedir confirmação adicional na primeira instalação.`;
         })
         .catch(() => {
           mac.setAttribute("aria-disabled", "true");

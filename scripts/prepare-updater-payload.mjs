@@ -28,8 +28,9 @@ function selectSingle(files, pattern, label) {
   return matches[0];
 }
 
-export async function prepareUpdaterPayload({ releaseDir, payloadDir, baseUrl, expectedVersion }) {
+export async function prepareUpdaterPayload({ releaseDir, payloadDir, baseUrl, expectedVersion, releaseTrust = "production" }) {
   if (new URL(baseUrl).protocol !== "https:") throw new Error("O canal de updates tem de usar HTTPS");
+  if (!["production", "internal"].includes(releaseTrust)) throw new Error(`Nível de confiança inválido: ${releaseTrust}`);
 
   const sourceManifest = JSON.parse(await readFile(join(releaseDir, "latest.json"), "utf8"));
   if (sourceManifest.version !== expectedVersion) {
@@ -73,6 +74,11 @@ export async function prepareUpdaterPayload({ releaseDir, payloadDir, baseUrl, e
 
   const downloads = {
     version: expectedVersion,
+    trust: {
+      updaterSigned: true,
+      macosNotarized: releaseTrust === "production",
+      windowsAuthenticode: releaseTrust === "production",
+    },
     macos: {
       url: publicAssetUrl(baseUrl, stableInstallers.macos.name),
       bytes: await assertFile(join(assetsDir, stableInstallers.macos.name), "Instalador macOS"),
@@ -87,9 +93,9 @@ export async function prepareUpdaterPayload({ releaseDir, payloadDir, baseUrl, e
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const [releaseDir, payloadDir, baseUrl, expectedVersion] = process.argv.slice(2);
+  const [releaseDir, payloadDir, baseUrl, expectedVersion, releaseTrust = "production"] = process.argv.slice(2);
   if (!releaseDir || !payloadDir || !baseUrl || !expectedVersion) {
-    throw new Error("Uso: prepare-updater-payload.mjs <release> <payload> <base-url> <versão>");
+    throw new Error("Uso: prepare-updater-payload.mjs <release> <payload> <base-url> <versão> [production|internal]");
   }
-  await prepareUpdaterPayload({ releaseDir, payloadDir, baseUrl, expectedVersion });
+  await prepareUpdaterPayload({ releaseDir, payloadDir, baseUrl, expectedVersion, releaseTrust });
 }

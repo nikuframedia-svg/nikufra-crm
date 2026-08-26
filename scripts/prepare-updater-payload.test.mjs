@@ -45,8 +45,22 @@ describe("prepareUpdaterPayload", () => {
     expect(result.manifest.platforms["windows-x86_64"].signature).toBe("win-signature");
     expect(result.downloads.macos.url).toBe("https://crm.nikufra.ai/updates/assets/Nikufra-CRM-macOS.dmg");
     expect(result.downloads.windows.url).toBe("https://crm.nikufra.ai/updates/assets/Nikufra-CRM-Windows.exe");
+    expect(result.downloads.trust).toEqual({ updaterSigned: true, macosNotarized: true, windowsAuthenticode: true });
     await expect(readFile(join(payloadDir, "assets", "Nikufra-CRM-macOS.dmg"), "utf8")).resolves.toContain("universal.dmg");
     await expect(readFile(join(payloadDir, "downloads.json"), "utf8")).resolves.toContain('"version": "0.1.0"');
+  });
+
+  it("marks internal installers without claiming operating-system trust", async () => {
+    const { releaseDir, payloadDir } = await fixture();
+    const result = await prepareUpdaterPayload({
+      releaseDir,
+      payloadDir,
+      baseUrl: "https://crm.nikufra.ai/updates/assets/",
+      expectedVersion: "0.1.0",
+      releaseTrust: "internal",
+    });
+
+    expect(result.downloads.trust).toEqual({ updaterSigned: true, macosNotarized: false, windowsAuthenticode: false });
   });
 
   it("refuses an incomplete or mismatched update manifest", async () => {

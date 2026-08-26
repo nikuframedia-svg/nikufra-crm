@@ -112,7 +112,7 @@ jobs:
           mkdir -p release payload
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir release
           test -s release/latest.json
-          node scripts/prepare-updater-payload.mjs release payload "https://crm.nikufra.ai/updates/assets/" "$version"
+          node scripts/prepare-updater-payload.mjs release payload "https://crm.nikufra.ai/updates/assets/" "$version" internal
       - name: Preparar SSH restrito
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}

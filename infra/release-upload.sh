@@ -65,6 +65,11 @@ for platform, release in platforms.items():
 downloads = json.loads((stage / "downloads.json").read_text(encoding="utf-8"))
 if downloads.get("version") != manifest["version"]:
     raise SystemExit("Versão dos instaladores não corresponde ao manifesto")
+trust = downloads.get("trust")
+if not isinstance(trust, dict) or trust.get("updaterSigned") is not True:
+    raise SystemExit("Metadados de confiança dos instaladores inválidos")
+if not isinstance(trust.get("macosNotarized"), bool) or not isinstance(trust.get("windowsAuthenticode"), bool):
+    raise SystemExit("Estado das assinaturas dos sistemas operativos em falta")
 expected_installers = {
     "macos": "Nikufra-CRM-macOS.dmg",
     "windows": "Nikufra-CRM-Windows.exe",

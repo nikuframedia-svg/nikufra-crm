@@ -56,6 +56,7 @@ else
 fi
 
 update_manifest="$(curl --fail --silent --show-error --max-time 15 "https://${CRM_DOMAIN}/updates/latest.json" 2>/dev/null || true)"
+download_manifest="$(curl --fail --silent --show-error --max-time 15 "https://${CRM_DOMAIN}/updates/downloads.json" 2>/dev/null || true)"
 if jq -e --argjson manifest "${update_manifest:-null}" '
   ($manifest.version | type == "string" and length > 0) and
   (["darwin-aarch64", "darwin-x86_64", "windows-x86_64"] | all(. as $platform |
@@ -65,6 +66,16 @@ if jq -e --argjson manifest "${update_manifest:-null}" '
   pass "manifesto de updates assinado para Mac e Windows"
 else
   fail "manifesto de updates assinado ainda não publicado"
+fi
+
+if jq -e --argjson downloads "${download_manifest:-null}" '
+  $downloads.trust.updaterSigned == true and
+  $downloads.trust.macosNotarized == true and
+  $downloads.trust.windowsAuthenticode == true
+' >/dev/null 2>&1 <<<"${download_manifest:-null}"; then
+  pass "instaladores notarizados e assinados pelos sistemas operativos"
+else
+  fail "assinaturas oficiais Apple/Windows ainda não verificadas"
 fi
 
 installers_ready=true
