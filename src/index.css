@@ -66,16 +66,15 @@ a { color: inherit; text-decoration: none; }
 .app-shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); height: 100vh; transition: grid-template-columns 180ms ease-out; }
 .app-shell--collapsed { grid-template-columns: 70px minmax(0, 1fr); }
 .sidebar { position: relative; z-index: 5; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--line); background: var(--sidebar); overflow: hidden; }
-.sidebar__brand { display: flex; align-items: center; justify-content: space-between; height: 70px; padding: 0 18px; background: #050608; border-bottom: 1px solid #20242b; }
+.sidebar__brand { display: flex; align-items: center; justify-content: space-between; height: 70px; padding: 0 18px; background: var(--sidebar); border-bottom: 1px solid var(--line); }
 .wordmark { display: flex; align-items: center; min-width: max-content; }
 .wordmark__lockup { position: relative; display: block; width: 132px; aspect-ratio: 844 / 160; }
 .wordmark__logo { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
 :root:not(.dark) .wordmark__logo--base { filter: brightness(0); opacity: .94; }
 .wordmark__logo--color { clip-path: inset(0 82.2% 0 0); }
 .wordmark__mark { display: block; width: 36px; height: 36px; object-fit: contain; }
-.sidebar__brand .wordmark .wordmark__logo--base { filter: brightness(0) invert(1); opacity: 1; }
-.sidebar__brand .icon-button { margin-left: 12px; color: #98a2b3; }
-.sidebar__brand .icon-button:hover { color: #fff; background: #151922; border-color: #2b313d; }
+.sidebar__brand .icon-button { margin-left: 12px; color: var(--muted); }
+.sidebar__brand .icon-button:hover { color: var(--ink); background: var(--surface-soft); border-color: var(--line-strong); }
 .app-shell--collapsed .sidebar__brand { justify-content: center; padding: 0; }
 .app-shell--collapsed .sidebar__brand .icon-button { display: none; }
 .app-shell--collapsed .wordmark { justify-content: center; }
