@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REQUIRED_PLATFORMS = ["darwin-aarch64", "darwin-x86_64", "windows-x86_64"];
+const RELEASE_ASSET_MAP = "release-assets.json";
 
 function assetNameFromUrl(value) {
   const parsed = new URL(value);
@@ -41,13 +42,30 @@ export async function prepareUpdaterPayload({ releaseDir, payloadDir, baseUrl, e
   }
 
   const releaseFiles = (await readdir(releaseDir, { withFileTypes: true }))
-    .filter((entry) => entry.isFile() && entry.name !== "latest.json")
+    .filter((entry) => entry.isFile() && !["latest.json", RELEASE_ASSET_MAP].includes(entry.name))
     .map((entry) => entry.name);
+  const assetMapSource = await readFile(join(releaseDir, RELEASE_ASSET_MAP), "utf8").catch(() => "[]");
+  const assetMapEntries = JSON.parse(assetMapSource);
+  if (!Array.isArray(assetMapEntries)) throw new Error("Mapa de assets da release inválido");
+  const assetMap = new Map(assetMapEntries.map((entry) => {
+    if (typeof entry?.apiUrl !== "string" || typeof entry?.name !== "string" || basename(entry.name) !== entry.name) {
+      throw new Error("Entrada inválida no mapa de assets da release");
+    }
+    return [new URL(entry.apiUrl).toString(), entry.name];
+  }));
+  const resolveAssetName = (value) => {
+    const normalizedUrl = new URL(value).toString();
+    const directName = assetNameFromUrl(normalizedUrl);
+    const mappedName = assetMap.get(normalizedUrl);
+    const name = releaseFiles.includes(directName) ? directName : mappedName;
+    if (!name || !releaseFiles.includes(name)) throw new Error(`Não foi possível associar o asset da release: ${value}`);
+    return name;
+  };
 
   for (const platform of REQUIRED_PLATFORMS) {
     const entry = sourceManifest.platforms[platform];
     if (!entry?.url || !entry?.signature) throw new Error(`Manifesto incompleto para ${platform}`);
-    const assetName = assetNameFromUrl(entry.url);
+    const assetName = resolveAssetName(entry.url);
     await assertFile(join(releaseDir, assetName), `Artefacto de update ${platform}`);
   }
 
@@ -68,7 +86,7 @@ export async function prepareUpdaterPayload({ releaseDir, payloadDir, baseUrl, e
 
   const manifest = structuredClone(sourceManifest);
   for (const entry of Object.values(manifest.platforms)) {
-    entry.url = publicAssetUrl(baseUrl, assetNameFromUrl(entry.url));
+    entry.url = publicAssetUrl(baseUrl, resolveAssetName(entry.url));
   }
   await writeFile(join(payloadDir, "latest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 

@@ -63,6 +63,31 @@ describe("prepareUpdaterPayload", () => {
     expect(result.downloads.trust).toEqual({ updaterSigned: true, macosNotarized: false, windowsAuthenticode: false });
   });
 
+  it("resolves GitHub API asset URLs to the downloaded release filenames", async () => {
+    const { releaseDir, payloadDir } = await fixture();
+    const manifestPath = join(releaseDir, "latest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    manifest.platforms["darwin-aarch64"].url = "https://api.github.com/repos/nikufra/crm/releases/assets/101";
+    manifest.platforms["darwin-x86_64"].url = "https://api.github.com/repos/nikufra/crm/releases/assets/101";
+    manifest.platforms["windows-x86_64"].url = "https://api.github.com/repos/nikufra/crm/releases/assets/202";
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    await writeFile(join(releaseDir, "release-assets.json"), JSON.stringify([
+      { apiUrl: "https://api.github.com/repos/nikufra/crm/releases/assets/101", name: "Nikufra.app.tar.gz" },
+      { apiUrl: "https://api.github.com/repos/nikufra/crm/releases/assets/202", name: "Nikufra.exe.zip" },
+    ]));
+
+    const result = await prepareUpdaterPayload({
+      releaseDir,
+      payloadDir,
+      baseUrl: "https://crm.nikufra.ai/updates/assets/",
+      expectedVersion: "0.1.0",
+      releaseTrust: "internal",
+    });
+
+    expect(result.manifest.platforms["darwin-aarch64"].url).toBe("https://crm.nikufra.ai/updates/assets/Nikufra.app.tar.gz");
+    expect(result.manifest.platforms["windows-x86_64"].url).toBe("https://crm.nikufra.ai/updates/assets/Nikufra.exe.zip");
+  });
+
   it("refuses an incomplete or mismatched update manifest", async () => {
     const { releaseDir, payloadDir } = await fixture();
     await expect(prepareUpdaterPayload({

@@ -111,6 +111,7 @@ jobs:
           tag="internal-v${version}"
           mkdir -p release payload
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir release
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[] | {apiUrl, name}]' > release/release-assets.json
           test -s release/latest.json
           node scripts/prepare-updater-payload.mjs release payload "https://crm.nikufra.ai/updates/assets/" "$version" internal
       - name: Preparar SSH restrito
