@@ -17,6 +17,7 @@ fi
 CLIENT_ID_VALUE="$(jq -er '.web.client_id' "${OAUTH_FILE}")"
 CLIENT_SECRET_VALUE="$(jq -er '.web.client_secret' "${OAUTH_FILE}")"
 jq -e '.web.redirect_uris | index("http://localhost:8000/functions/v1/gmail-oauth-callback") != null' "${OAUTH_FILE}" >/dev/null
+jq -e '.web.redirect_uris | index("https://crm.nikufra.ai/functions/v1/gmail-oauth-callback") != null' "${OAUTH_FILE}" >/dev/null
 
 TEMP_ENV="$(mktemp "${SCRIPT_DIR}/.env.oauth.XXXXXX")"
 cleanup() { [[ -f "${TEMP_ENV}" ]] && unlink "${TEMP_ENV}"; }
