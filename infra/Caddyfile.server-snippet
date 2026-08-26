@@ -1,14 +1,23 @@
 crm.nikufra.ai {
-    encode zstd gzip
+	encode zstd gzip
 
-    header {
-        Strict-Transport-Security "max-age=31536000; includeSubDomains"
-        X-Content-Type-Options "nosniff"
-        X-Frame-Options "DENY"
-        Referrer-Policy "no-referrer"
-        Permissions-Policy "camera=(), microphone=(), geolocation=()"
-        -Server
-    }
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
 
-    reverse_proxy 127.0.0.1:8800
+	redir /download /download/ 308
+
+	handle_path /download/* {
+		root * /srv/ocr-portal/crm-download
+		try_files {path} /index.html
+		header Cache-Control "no-store"
+		file_server
+	}
+
+	reverse_proxy 127.0.0.1:8800
 }

@@ -126,6 +126,7 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
       AUTH_EMAIL_HOOK_SECRET: ${AUTH_EMAIL_HOOK_SECRET:-}
+      DESKTOP_DOWNLOAD_URL: https://${CRM_DOMAIN}/download
     command: ["start", "--main-service", "/home/deno/functions/main"]
     networks:
       backend:
