@@ -40,6 +40,7 @@ describe("native auth storage boundary", () => {
 
     const storage = createSecureAuthStorage();
     await expect(storage?.getItem("sb-crm-auth-token")).resolves.toBe("stored-session");
+    await expect(storage?.getItem("sb-crm-auth-token")).resolves.toBe("stored-session");
     await storage?.setItem("sb-crm-auth-token", "new-session");
     await storage?.removeItem("sb-crm-auth-token");
 
@@ -48,5 +49,26 @@ describe("native auth storage boundary", () => {
       ["secure_storage_set", { key: "sb-crm-auth-token", value: "new-session" }],
       ["secure_storage_remove", { key: "sb-crm-auth-token" }],
     ]);
+  });
+
+  it("does not reopen a denied Keychain prompt on every session refresh", async () => {
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { __TAURI_INTERNALS__: {} },
+    });
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: { platform: "MacIntel", userAgent: "Nikufra CRM macOS" },
+    });
+    invoke.mockRejectedValueOnce(new Error("Acesso ao Keychain recusado"));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const storage = createSecureAuthStorage();
+    await expect(storage?.getItem("sb-crm-auth-token")).resolves.toBeNull();
+    await expect(storage?.getItem("sb-crm-auth-token")).resolves.toBeNull();
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledOnce();
+    consoleError.mockRestore();
   });
 });

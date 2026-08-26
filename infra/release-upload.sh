@@ -38,16 +38,29 @@ tar -xzf "${ARCHIVE}" --no-same-owner --no-same-permissions -C "${STAGE}"
   exit 1
 }
 
-manifest_version="$(python3 - "${STAGE}" <<'PY'
+manifest_version="$(python3 - "${STAGE}" "${ACTIVE_DIR}" <<'PY'
 import json
 import pathlib
+import re
 import sys
 import urllib.parse
 
 stage = pathlib.Path(sys.argv[1])
+active = pathlib.Path(sys.argv[2])
 manifest = json.loads((stage / "latest.json").read_text(encoding="utf-8"))
-if not isinstance(manifest.get("version"), str) or not manifest["version"]:
+version_pattern = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+version_match = version_pattern.fullmatch(manifest.get("version", ""))
+if not version_match:
     raise SystemExit("Versão inválida no manifesto")
+version_tuple = tuple(map(int, version_match.groups()))
+active_manifest = active / "latest.json"
+if active_manifest.is_file():
+    active_version = json.loads(active_manifest.read_text(encoding="utf-8")).get("version", "")
+    active_match = version_pattern.fullmatch(active_version)
+    if not active_match:
+        raise SystemExit("A release ativa tem uma versão inválida")
+    if version_tuple < tuple(map(int, active_match.groups())):
+        raise SystemExit(f"Downgrade recusado: {manifest['version']} < {active_version}")
 platforms = manifest.get("platforms")
 if not isinstance(platforms, dict) or not platforms:
     raise SystemExit("Plataformas em falta no manifesto")
