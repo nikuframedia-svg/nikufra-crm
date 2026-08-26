@@ -11,6 +11,7 @@ import {
   FilePenLine,
   KanbanSquare,
   LayoutDashboard,
+  Lightbulb,
   Mail,
   Menu,
   Moon,
@@ -27,6 +28,7 @@ import { Button, Modal, StageChip } from "./ui";
 
 const navItems = [
   { to: "/", label: "Visão geral", icon: LayoutDashboard },
+  { to: "/sugestoes", label: "Sugestões", icon: Lightbulb },
   { to: "/pipeline", label: "Pipeline", icon: KanbanSquare },
   { to: "/leads", label: "Empresas e leads", icon: Building2 },
   { to: "/email", label: "Email", icon: Mail },

@@ -9,24 +9,19 @@ Deno.serve(async (request) => {
     if (profile.role !== "admin") return Response.json({ error: "Apenas administradores podem eliminar contactos" }, { status: 403, headers: corsHeaders });
     const body = await request.json();
     const ids: string[] = [...new Set<string>((Array.isArray(body.ids) ? body.ids : []).map((id: unknown) => String(id)))];
-    if (!ids.length || ids.length > 200 || ids.some((id) => !uuidPattern.test(id))) throw new Error("Seleciona entre 1 e 200 contactos válidos");
+    const companyIds: string[] = [...new Set<string>((Array.isArray(body.companyIds) ? body.companyIds : []).map((id: unknown) => String(id)))];
+    const opportunityIds: string[] = [...new Set<string>((Array.isArray(body.opportunityIds) ? body.opportunityIds : []).map((id: unknown) => String(id)))];
+    const allIds = [...ids, ...companyIds, ...opportunityIds];
+    if (!allIds.length || allIds.length > 200 || allIds.some((id) => !uuidPattern.test(id))) throw new Error("Seleciona entre 1 e 200 registos válidos");
     const admin = adminClient();
-    const { data: contacts, error: readError } = await admin.from("contactos").select("id,email,google_resource_name").in("id", ids);
-    if (readError) throw readError;
-    for (const contact of contacts ?? []) {
-      const suppression = { email: contact.email || null, google_resource_name: contact.google_resource_name || null, deleted_by: user.id };
-      if (suppression.email || suppression.google_resource_name) {
-        const { error } = await admin.from("contact_import_suppressions").insert(suppression);
-        if (error && error.code !== "23505") throw error;
-      }
-      await admin.from("audit_log").insert({ actor_id: user.id, tabela: "contactos", registo_id: contact.id, acao: "RGPD_DELETE", alteracoes: { contacto_removido: true, reimportacao_google_bloqueada: true } });
-    }
-    const contactIds = (contacts ?? []).map((contact) => contact.id);
-    if (contactIds.length) {
-      const { error } = await admin.from("contactos").delete().in("id", contactIds);
-      if (error) throw error;
-    }
-    return Response.json({ deleted: contactIds.length }, { headers: corsHeaders });
+    const { data, error } = await admin.rpc("delete_commercial_records", {
+      p_contact_ids: ids,
+      p_company_ids: companyIds,
+      p_opportunity_ids: opportunityIds,
+      p_actor_id: user.id,
+    });
+    if (error) throw error;
+    return Response.json(data ?? { deleted: 0 }, { headers: corsHeaders });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Falha ao eliminar contactos" }, { status: 400, headers: corsHeaders });
   }

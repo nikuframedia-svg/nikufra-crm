@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { DndContext, DragOverlay, PointerSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
-import { ChevronDown, GripVertical, Plus, SlidersHorizontal } from "lucide-react";
+import { AlertTriangle, ChevronDown, GripVertical, Plus, SlidersHorizontal, Trash2 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { stageLabels, stageOrder, stageProbability } from "../data/seed";
 import { formatCurrency } from "../lib/format";
@@ -8,11 +8,11 @@ import { useCRM } from "../state/crm-context";
 import type { Lead, Opportunity, Stage, Vertical } from "../types";
 import { Avatar, Button, EmptyState, Modal, PageHeader } from "../components/ui";
 
-function OpportunityCard({ item, overlay = false }: { item: Opportunity; overlay?: boolean }) {
+function OpportunityCard({ item, overlay = false, canDelete = false, onDelete }: { item: Opportunity; overlay?: boolean; canDelete?: boolean; onDelete?: (item: Opportunity) => void }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: item.id, disabled: overlay });
   return (
     <article ref={setNodeRef} className={`opportunity-card ${isDragging ? "is-dragging" : ""} ${overlay ? "is-overlay" : ""}`} style={transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined}>
-      <div className="opportunity-card__meta"><span>{item.tipo}</span><button className="drag-handle" aria-label={`Mover ${item.empresa}`} {...listeners} {...attributes}><GripVertical size={14} /></button></div>
+      <div className="opportunity-card__meta"><span>{item.tipo}</span><span className="opportunity-card__actions">{canDelete && !overlay ? <button className="card-delete" aria-label={`Apagar ${item.empresa}`} title="Apagar registo comercial" onPointerDown={(event) => event.stopPropagation()} onClick={() => onDelete?.(item)}><Trash2 size={13} /></button> : null}<button className="drag-handle" aria-label={`Mover ${item.empresa}`} {...listeners} {...attributes}><GripVertical size={14} /></button></span></div>
       {overlay ? <h3>{item.empresa}</h3> : <Link to="/empresas/$companyId" params={{ companyId: item.empresaId ?? item.id }} className="opportunity-card__link"><h3>{item.empresa}</h3></Link>}<p>{item.titulo}</p>
       <div className="opportunity-card__value"><strong className="mono">{formatCurrency(item.valor)}</strong><span className="mono">{item.probabilidade}%</span></div>
       <div className="opportunity-card__foot"><span className={`age-badge age-badge--${item.diasNoEstado > 30 ? "danger" : item.diasNoEstado >= 14 ? "warning" : "good"}`}>{item.diasNoEstado}d</span><Avatar ownerId={item.ownerId} size="sm" /></div>
@@ -20,31 +20,36 @@ function OpportunityCard({ item, overlay = false }: { item: Opportunity; overlay
   );
 }
 
-function PipelineColumn({ stage, items }: { stage: Stage; items: Opportunity[] }) {
+function PipelineColumn({ stage, items, canDelete, onDelete }: { stage: Stage; items: Opportunity[]; canDelete: boolean; onDelete: (item: Opportunity) => void }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage });
   const [limit, setLimit] = useState(40);
   const weighted = items.reduce((sum, item) => sum + item.valor * item.probabilidade / 100, 0);
   return (
     <section ref={setNodeRef} className={`pipeline-column ${isOver ? "is-over" : ""}`}>
       <header><div><span className={`stage-dot stage-dot--${stage}`} /><h2>{stageLabels[stage]}</h2><b>{items.length}</b></div><p className="mono">{formatCurrency(weighted)} ponderado</p></header>
-      <div className="pipeline-column__body">{items.length ? <>{items.slice(0, limit).map((item) => <OpportunityCard item={item} key={item.id} />)}{items.length > limit ? <button className="show-more" onClick={() => setLimit((value) => value + 40)}>Mostrar mais {Math.min(40, items.length - limit)} de {items.length}</button> : null}</> : <EmptyState>Sem oportunidades. Arrasta um cartão para aqui.</EmptyState>}</div>
+      <div className="pipeline-column__body">{items.length ? <>{items.slice(0, limit).map((item) => <OpportunityCard item={item} key={item.id} canDelete={canDelete} onDelete={onDelete} />)}{items.length > limit ? <button className="show-more" onClick={() => setLimit((value) => value + 40)}>Mostrar mais {Math.min(40, items.length - limit)} de {items.length}</button> : null}</> : <EmptyState>Sem oportunidades. Arrasta um cartão para aqui.</EmptyState>}</div>
     </section>
   );
 }
 
 export function PipelinePage() {
-  const { opportunities, leads, moveOpportunity, addOpportunity, team } = useCRM();
+  const { opportunities, leads, moveOpportunity, addOpportunity, deleteCommercialRecords, team, currentUserId } = useCRM();
   const [ownerFilter, setOwnerFilter] = useState("all");
   const [verticalFilter, setVerticalFilter] = useState("all");
   const [activeId, setActiveId] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
   const [lostPending, setLostPending] = useState<string | null>(null);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [deletePending, setDeletePending] = useState<Opportunity | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const verticalByCompany = useMemo(() => new Map(leads.map((lead) => [lead.empresaId ?? lead.empresa, lead.vertical])), [leads]);
   const verticals = useMemo(() => [...new Set(leads.map((lead) => lead.vertical))].sort(), [leads]);
   const filtered = useMemo(() => opportunities.filter((item) => (ownerFilter === "all" || item.ownerId === ownerFilter) && (verticalFilter === "all" || verticalByCompany.get(item.empresaId ?? item.empresa) === verticalFilter)), [opportunities, ownerFilter, verticalByCompany, verticalFilter]);
   const activeItem = opportunities.find((item) => item.id === activeId);
+  const canDelete = team.find((owner) => owner.id === currentUserId)?.role === "admin";
+  const deleteContactCount = deletePending ? leads.filter((lead) => lead.empresaId === deletePending.empresaId || lead.id === deletePending.leadId).length : 0;
 
   useEffect(() => {
     const handleNewShortcut = (event: KeyboardEvent) => {
@@ -76,13 +81,29 @@ export function PipelinePage() {
     setNewOpen(false);
   }
 
+  async function handleDelete() {
+    if (!deletePending) return;
+    setDeleteBusy(true); setDeleteError("");
+    try {
+      await deleteCommercialRecords({
+        companyIds: deletePending.empresaId ? [deletePending.empresaId] : [],
+        opportunityIds: [deletePending.id],
+      });
+      setDeletePending(null);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "Não foi possível apagar o registo comercial.");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   return (
     <div className="page page--pipeline">
       <PageHeader eyebrow="Pipeline comercial" title="Oportunidades" description="Arrasta os cartões entre etapas. Todas as mudanças ficam registadas no histórico." actions={<Button onClick={() => setNewOpen(true)}><Plus size={16} />Nova oportunidade <kbd>N</kbd></Button>} />
       <div className="toolbar"><div className="toolbar__group"><label className="select-button">Responsável<select value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)}><option value="all">Toda a equipa</option>{team.map((owner) => <option key={owner.id} value={owner.id}>{owner.nome}</option>)}</select><ChevronDown size={14} /></label><label className="select-button">Vertical<select value={verticalFilter} onChange={(event) => setVerticalFilter(event.target.value)}><option value="all">Todas</option>{verticals.map((vertical) => <option key={vertical}>{vertical}</option>)}</select><ChevronDown size={14} /></label></div><div className="toolbar__summary"><span>Pipeline ponderado</span><strong className="mono">{formatCurrency(filtered.filter((item) => stageOrder.includes(item.estado)).reduce((sum, item) => sum + item.valor * item.probabilidade / 100, 0))}</strong></div></div>
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
         <div className="pipeline-board-scroll" role="region" aria-label="Etapas do pipeline" tabIndex={0}>
-          <div className="pipeline-board">{stageOrder.map((stage) => <PipelineColumn key={stage} stage={stage} items={filtered.filter((item) => item.estado === stage)} />)}<button className="terminal-toggle" onClick={() => setTerminalOpen((value) => !value)}><SlidersHorizontal size={15} /><span>Fora do funil</span><b>{filtered.filter((item) => item.estado === "perdido" || item.estado === "adiado").length}</b></button>{terminalOpen ? <div className="terminal-columns"><PipelineColumn stage="adiado" items={filtered.filter((item) => item.estado === "adiado")} /><PipelineColumn stage="perdido" items={filtered.filter((item) => item.estado === "perdido")} /></div> : null}</div>
+          <div className="pipeline-board">{stageOrder.map((stage) => <PipelineColumn key={stage} stage={stage} items={filtered.filter((item) => item.estado === stage)} canDelete={Boolean(canDelete)} onDelete={setDeletePending} />)}<button className="terminal-toggle" onClick={() => setTerminalOpen((value) => !value)}><SlidersHorizontal size={15} /><span>Fora do funil</span><b>{filtered.filter((item) => item.estado === "perdido" || item.estado === "adiado").length}</b></button>{terminalOpen ? <div className="terminal-columns"><PipelineColumn stage="adiado" items={filtered.filter((item) => item.estado === "adiado")} canDelete={Boolean(canDelete)} onDelete={setDeletePending} /><PipelineColumn stage="perdido" items={filtered.filter((item) => item.estado === "perdido")} canDelete={Boolean(canDelete)} onDelete={setDeletePending} /></div> : null}</div>
         </div>
         <DragOverlay>{activeItem ? <OpportunityCard item={activeItem} overlay /> : null}</DragOverlay>
       </DndContext>
@@ -100,6 +121,12 @@ export function PipelinePage() {
 
       <Modal open={Boolean(lostPending)} onClose={() => setLostPending(null)} title="Marcar como perdido" description="O motivo é obrigatório para manter as métricas honestas.">
         <form onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); if (lostPending) moveOpportunity(lostPending, "perdido", { motivo: String(data.get("motivo")), notas: String(data.get("notas")) }); setLostPending(null); }} className="form-stack"><label>Motivo<select name="motivo" required><option value="">Selecionar...</option><option value="preco">Preço</option><option value="timing">Timing</option><option value="sem_orcamento">Sem orçamento</option><option value="concorrente">Concorrente</option><option value="sem_resposta">Sem resposta</option><option value="nao_prioritario">Não prioritário</option><option value="outro">Outro</option></select></label><label>Notas<textarea name="notas" rows={3} placeholder="Contexto útil para uma futura reativação." /></label><div className="modal__actions"><Button type="button" variant="secondary" onClick={() => setLostPending(null)}>Cancelar</Button><Button type="submit" variant="danger">Confirmar perda</Button></div></form>
+      </Modal>
+
+      <Modal open={Boolean(deletePending)} onClose={() => !deleteBusy && setDeletePending(null)} title={`Apagar ${deletePending?.empresa ?? "registo comercial"}?`} description="A eliminação será refletida no Kanban e em Empresas e leads.">
+        <div className="delete-contact-warning"><AlertTriangle size={20} /><div><strong>Esta operação não pode ser anulada.</strong><p>Serão removidos {deleteContactCount} contacto{deleteContactCount === 1 ? "" : "s"}, a empresa, a oportunidade, as atividades e a faturação associada. Os contactos apagados não serão reimportados pelo Google.</p></div></div>
+        {deleteError ? <div className="auth-error">{deleteError}</div> : null}
+        <div className="modal__actions"><Button variant="secondary" disabled={deleteBusy} onClick={() => setDeletePending(null)}>Cancelar</Button><Button variant="danger" disabled={deleteBusy} onClick={() => void handleDelete()}>{deleteBusy ? "A apagar…" : "Apagar definitivamente"}</Button></div>
       </Modal>
     </div>
   );

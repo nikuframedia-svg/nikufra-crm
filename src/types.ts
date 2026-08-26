@@ -111,3 +111,34 @@ export interface Draft {
   mensagem: string;
   criadoEm: string;
 }
+
+export interface FollowUpSuggestion {
+  contactId: string;
+  empresaId: string;
+  opportunityId?: string;
+  ownerId?: string;
+  userId: string;
+  empresa: string;
+  contactoNome: string;
+  contactoEmail: string;
+  contactoCargo: string;
+  estado: Stage;
+  ultimaInteracaoEm: string;
+  totalInteracoes: number;
+  totalMensagens: number;
+  emailsEnviados: number;
+  emailsRecebidos: number;
+  reunioes: number;
+  ultimoAssunto: string;
+  ultimoResumo: string;
+}
+
+export interface CommercialDeletionResult {
+  deleted: number;
+  deletedContacts: number;
+  deletedCompanies: number;
+  deletedOpportunities: number;
+  deletedActivities: number;
+  deletedRevenue: number;
+  deletedCompanyIds: string[];
+}

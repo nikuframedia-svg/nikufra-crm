@@ -11,7 +11,7 @@ import { Avatar, Button, Card, Modal, PageHeader } from "../components/ui";
 const helper = createColumnHelper<Lead>();
 
 export function LeadsPage() {
-  const { leads, opportunities, updateLead, deleteContacts, team, currentUserId, importBatch, setEmailSelection, dataMode } = useCRM();
+  const { leads, opportunities, updateLead, deleteCommercialRecords, team, currentUserId, importBatch, setEmailSelection, dataMode } = useCRM();
   const [query, setQuery] = useState("");
   const [sorting, setSorting] = useState<SortingState>([]);
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
@@ -103,7 +103,7 @@ export function LeadsPage() {
   async function handleDelete() {
     setDeleteBusy(true); setDeleteError("");
     try {
-      await deleteContacts([...selected]);
+      await deleteCommercialRecords({ contactIds: [...selected] });
       setSelected(new Set()); setDeleteOpen(false);
     } catch (error) {
       setDeleteError(error instanceof Error ? error.message : "Não foi possível eliminar os contactos.");
@@ -125,8 +125,8 @@ export function LeadsPage() {
         {importError ? <div className="auth-error">{importError}</div> : null}
         <div className="modal__actions"><Button variant="secondary" onClick={() => setImportOpen(false)}>Cancelar</Button><Button disabled={!importData || importBusy} onClick={() => void handleImport()}>{importBusy ? "A importar…" : "Importar sem duplicados"}</Button></div>
       </Modal>
-      <Modal open={deleteOpen} onClose={() => !deleteBusy && setDeleteOpen(false)} title={`Apagar ${selected.size} contacto${selected.size === 1 ? "" : "s"}?`} description="Esta ação remove os contactos selecionados da base comercial.">
-        <div className="delete-contact-warning"><AlertTriangle size={20} /><div><strong>Os contactos não voltarão a aparecer pela sincronização Google.</strong><p>As empresas, oportunidades e histórico comercial são preservados. A ligação pessoal ao contacto é removida e a operação fica no audit log.</p></div></div>
+      <Modal open={deleteOpen} onClose={() => !deleteBusy && setDeleteOpen(false)} title={`Apagar ${selected.size} registo${selected.size === 1 ? "" : "s"} comercial${selected.size === 1 ? "" : "is"}?`} description="A empresa e a lead são o mesmo registo em todo o CRM.">
+        <div className="delete-contact-warning"><AlertTriangle size={20} /><div><strong>A eliminação é definitiva e será refletida também no Kanban.</strong><p>Serão removidos a empresa, todos os contactos associados, oportunidades, atividades e faturação. O Google fica impedido de voltar a importar os contactos apagados.</p></div></div>
         {deleteError ? <div className="auth-error">{deleteError}</div> : null}
         <div className="modal__actions"><Button variant="secondary" disabled={deleteBusy} onClick={() => setDeleteOpen(false)}>Cancelar</Button><Button variant="danger" disabled={deleteBusy} onClick={() => void handleDelete()}>{deleteBusy ? "A apagar…" : "Apagar definitivamente"}</Button></div>
       </Modal>
