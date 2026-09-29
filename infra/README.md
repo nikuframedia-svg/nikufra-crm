@@ -45,6 +45,12 @@ O OAuth é individual e a conta Google devolvida pelo Gmail tem de coincidir com
 
 O `.env` real não entra no Git, em backups de código ou em mensagens. `SERVICE_ROLE_KEY`, segredo Google e chave de encriptação vivem apenas no servidor.
 
+## Claude via MCP
+
+O endpoint remoto `https://crm.nikufra.ai/functions/v1/mcp` expõe apenas ferramentas de leitura para empresas, fichas, pipeline e sugestões de follow-up. O Auth funciona como servidor OAuth 2.1 com PKCE e registo dinâmico: cada pessoa entra com a conta Nikufra existente, vê o ecrã de consentimento e recebe apenas os acessos permitidos pelas políticas RLS. O token fica no cliente MCP e pode ser revogado no Claude.
+
+Este conector permite perguntar no Claude sobre o CRM. Não permite usar uma subscrição Claude como motor das menções no chat interno; as respostas dentro do CRM continuam a usar a API Anthropic configurada no servidor.
+
 ## Rede e sistema operativo
 
 ```bash

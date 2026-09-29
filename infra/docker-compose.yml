@@ -39,6 +39,10 @@ services:
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
       GOTRUE_JWT_EXP: ${JWT_EXPIRY:-3600}
       GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_OAUTH_SERVER_ENABLED: "true"
+      GOTRUE_OAUTH_SERVER_AUTHORIZATION_PATH: /oauth/consent
+      GOTRUE_OAUTH_SERVER_ALLOW_DYNAMIC_REGISTRATION: "true"
+      GOTRUE_OAUTH_SERVER_DEFAULT_SCOPE: email profile
       GOTRUE_SECURITY_REFRESH_TOKEN_ROTATION_ENABLED: "true"
       GOTRUE_SECURITY_REFRESH_TOKEN_REUSE_INTERVAL: 10
       GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
@@ -84,6 +88,9 @@ services:
     networks: [backend]
 
   realtime:
+    # Realtime derives the self-host tenant from this hostname. Keep it aligned
+    # with the default tenant seeded as `realtime-dev`.
+    container_name: realtime-dev.supabase-realtime
     image: supabase/realtime:v2.102.3
     restart: unless-stopped
     depends_on:
@@ -106,6 +113,12 @@ services:
       APP_NAME: realtime
       SEED_SELF_HOST: "true"
       RUN_JANITOR: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sSfL --head -o /dev/null -H 'Authorization: Bearer ${ANON_KEY}' http://localhost:4000/api/tenants/realtime-dev/health"]
+      timeout: 5s
+      interval: 30s
+      retries: 3
+      start_period: 10s
     networks: [backend]
 
   functions:

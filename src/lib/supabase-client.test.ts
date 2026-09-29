@@ -59,4 +59,15 @@ describe("secure browser authentication", () => {
 
     await expect(requestMagicLink("member@gmail.com")).rejects.toThrow("email unavailable");
   });
+
+  it("preserves an MCP consent request through the email login", async () => {
+    window.location.pathname = "/oauth/consent";
+    window.location.href = "https://crm.nikufra.ai/oauth/consent?authorization_id=request-1#temporary";
+    const { requestMagicLink } = await import("./supabase");
+
+    await requestMagicLink("member@gmail.com");
+    expect(auth.signInWithOtp).toHaveBeenCalledWith(expect.objectContaining({
+      options: expect.objectContaining({ emailRedirectTo: "https://crm.nikufra.ai/oauth/consent?authorization_id=request-1" }),
+    }));
+  });
 });

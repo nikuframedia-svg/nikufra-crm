@@ -8,6 +8,7 @@ import { Wordmark } from "./Logo";
 import { Button } from "./ui";
 
 export function AuthGate({ children }: { children: ReactNode }) {
+  const isOAuthConsent = window.location.pathname === "/oauth/consent";
   const [session, setSession] = useState<Session | null | undefined>(supabase ? undefined : null);
   const [email, setEmail] = useState("");
   const [rememberAccount, setRememberAccount] = useState(shouldRememberGoogleAccount);
@@ -42,6 +43,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   const loadGoogleOnboarding = useCallback(async () => {
     if (!supabase || !session || profileState !== "active") return;
+    if (isOAuthConsent) { setGoogleState("ready"); return; }
     if (googleCallbackError) { setGoogleState("error"); setGoogleMessage(googleCallbackError); return; }
     setGoogleState("loading"); setGoogleMessage("");
     const { data, error } = await supabase.from("google_tokens").select("import_confirmed_at").eq("user_id", session.user.id).maybeSingle();
@@ -59,7 +61,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     setGoogleState("preview");
     try { setGooglePreview(await previewGoogleImport()); }
     catch (previewError) { setGoogleState("error"); setGoogleMessage(previewError instanceof Error ? previewError.message : "Não foi possível analisar a conta Google."); }
-  }, [googleCallbackError, profileState, session]);
+  }, [googleCallbackError, isOAuthConsent, profileState, session]);
 
   useEffect(() => { void loadGoogleOnboarding(); }, [loadGoogleOnboarding]);
 
@@ -79,7 +81,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (!supabase) return children;
   if (session === undefined) return <div className="route-loading"><span /><p>A validar sessão segura…</p></div>;
   if (session && profileState === "loading") return <div className="route-loading"><span /><p>A confirmar aprovação da conta…</p></div>;
-  if (session && profileState === "active" && googleState === "ready") return children;
+  if (session && profileState === "active" && (isOAuthConsent || googleState === "ready")) return children;
   if (session && profileState === "active" && ["idle", "loading"].includes(googleState)) return <div className="route-loading"><span /><p>A preparar a ligação segura à conta Google…</p></div>;
   if (session && profileState === "active" && googleState === "importing") return <div className="route-loading"><span /><p>A iniciar a importação sem duplicados…</p></div>;
   if (session && profileState === "active" && googleState === "oauth") return <div className="auth-screen"><aside><Wordmark /><div><p className="eyebrow">Conta individual</p><h1>O teu contexto Google,<br />no CRM da equipa.</h1><p>Cada utilizador autoriza apenas a própria conta. Os dados comerciais resultantes ficam partilhados no CRM.</p></div><footer><span><ShieldCheck size={14} />OAuth 2.0</span><span>·</span><span>Tokens cifrados</span></footer></aside><main><section><div className="auth-mark"><Mail size={20} /></div><p className="eyebrow">Autorização Google</p><h2>Confirma a tua conta</h2><p>Vais ser encaminhado para a Google. Aceita as permissões e regressas automaticamente ao CRM para rever quantos contactos serão importados.</p><Button onClick={() => void handleGoogleRetry()}>Continuar com Google<ArrowRight size={16} /></Button><Button variant="ghost" onClick={() => void supabase!.auth.signOut()}>Sair</Button></section></main></div>;

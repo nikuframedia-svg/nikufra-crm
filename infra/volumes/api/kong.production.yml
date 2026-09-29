@@ -23,6 +23,18 @@ services:
     url: http://auth:9999/callback
     routes: [{ name: auth-v1-open-callback, strip_path: true, paths: [/auth/v1/callback] }]
     plugins: [{ name: cors }]
+  - name: auth-v1-open-oauth
+    url: http://auth:9999/oauth
+    routes: [{ name: auth-v1-open-oauth, strip_path: true, paths: [/auth/v1/oauth] }]
+    plugins: [{ name: cors }]
+  - name: auth-v1-open-discovery
+    url: http://auth:9999/.well-known/
+    routes: [{ name: auth-v1-open-discovery, strip_path: true, paths: [/auth/v1/.well-known/] }]
+    plugins: [{ name: cors }]
+  - name: well-known-oauth
+    url: http://auth:9999/.well-known/oauth-authorization-server
+    routes: [{ name: well-known-oauth, strip_path: true, paths: [/.well-known/oauth-authorization-server] }]
+    plugins: [{ name: cors }]
   - name: auth-v1
     url: http://auth:9999/
     routes: [{ name: auth-v1-all, strip_path: true, paths: [/auth/v1/] }]
@@ -32,7 +44,7 @@ services:
     routes: [{ name: rest-v1-all, strip_path: true, paths: [/rest/v1/] }]
     plugins: [{ name: cors }, { name: key-auth, config: { hide_credentials: true } }, { name: acl, config: { allow: [anon, admin] } }]
   - name: realtime-v1
-    url: http://realtime:4000/socket/
+    url: http://realtime-dev.supabase-realtime:4000/socket/
     routes: [{ name: realtime-v1-all, strip_path: true, paths: [/realtime/v1/] }]
     plugins: [{ name: cors }, { name: key-auth, config: { hide_credentials: false } }, { name: acl, config: { allow: [anon, admin] } }]
   - name: functions-v1

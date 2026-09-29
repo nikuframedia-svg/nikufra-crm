@@ -47,6 +47,14 @@ export interface ChatMessage {
   createdAt: string;
 }
 
+export function mergeChatMessage(messages: ChatMessage[], incoming: ChatMessage) {
+  const withoutPreviousVersion = messages.filter((message) => message.id !== incoming.id);
+  return [...withoutPreviousVersion, incoming].sort((left, right) => {
+    const timeDifference = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+    return timeDifference || left.id.localeCompare(right.id);
+  });
+}
+
 export function chatConversationTitle(conversation: ChatConversation, members: ChatMember[], team: Owner[], currentUserId: string) {
   if (conversation.kind === "channel") return conversation.nome ?? "Canal";
   if (conversation.nome) return conversation.nome;

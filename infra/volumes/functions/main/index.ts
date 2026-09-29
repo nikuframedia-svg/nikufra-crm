@@ -6,7 +6,7 @@ const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 Deno.serve(async (request) => {
   const functionName = new URL(request.url).pathname.split("/").filter(Boolean)[0];
-  const independentlyAuthenticated = new Set(["gmail-oauth-callback", "send-auth-email"]);
+  const independentlyAuthenticated = new Set(["gmail-oauth-callback", "send-auth-email", "mcp"]);
   if (request.method !== "OPTIONS" && !independentlyAuthenticated.has(functionName)) {
     const authorization = request.headers.get("authorization") ?? "";
     const isServiceRequest = authorization === `Bearer ${serviceKey}`;

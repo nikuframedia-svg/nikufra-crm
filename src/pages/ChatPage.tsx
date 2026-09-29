@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Bot, Check, ChevronRight, Hash, Loader2, LockKeyhole, MessageCircle, MessageSquarePlus, Plus, Search, Send, Settings2, UserPlus, Users, X } from "lucide-react";
 import { Button, Modal } from "../components/ui";
-import { chatConversationInitials, chatConversationTitle, formatChatTime, mentionedAgentIds, type ChatAgent, type ChatConversation, type ChatConversationAgent, type ChatMember, type ChatMessage } from "../lib/chat";
+import { chatConversationInitials, chatConversationTitle, formatChatTime, mentionedAgentIds, mergeChatMessage, type ChatAgent, type ChatConversation, type ChatConversationAgent, type ChatMember, type ChatMessage } from "../lib/chat";
 import { supabase } from "../lib/supabase";
 import { useCRM } from "../state/crm-context";
 
@@ -122,8 +122,22 @@ export function ChatPage() {
     const client = supabase;
     if (!client || !selectedId || !body || sending) return;
     setSending(true); setError(""); setDraft("");
-    const { data: inserted, error: insertError } = await client.from("chat_messages").insert({ conversation_id: selectedId, sender_id: currentUserId, agent_id: null, body }).select("id").single();
+    const { data: inserted, error: insertError } = await client.from("chat_messages").insert({ conversation_id: selectedId, sender_id: currentUserId, agent_id: null, body }).select("id,conversation_id,sender_id,agent_id,parent_message_id,body,edited_at,created_at").single();
     if (insertError || !inserted) { setDraft(body); setError(insertError?.message ?? "Não foi possível enviar a mensagem."); setSending(false); return; }
+
+    const insertedMessage: ChatMessage = {
+      id: inserted.id,
+      conversationId: inserted.conversation_id,
+      senderId: inserted.sender_id,
+      agentId: inserted.agent_id,
+      parentMessageId: inserted.parent_message_id,
+      body: inserted.body,
+      editedAt: inserted.edited_at,
+      createdAt: inserted.created_at,
+    };
+    setMessages((current) => mergeChatMessage(current, insertedMessage));
+    setConversations((current) => current.map((conversation) => conversation.id === selectedId ? { ...conversation, lastMessageAt: inserted.created_at } : conversation));
+    setSending(false);
 
     const mentioned = mentionedAgentIds(body, currentConversationAgents);
     if (mentioned.length) {
@@ -132,8 +146,8 @@ export function ChatPage() {
       const failed = results.find((result) => result.error || result.data?.error);
       if (failed) setError(failed.data?.error || failed.error?.message || "O agente não conseguiu responder.");
       setAgentThinking([]);
+      await loadMessages(selectedId);
     }
-    setSending(false);
   }
 
   function handleComposerKey(event: KeyboardEvent<HTMLTextAreaElement>) {

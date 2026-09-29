@@ -10,7 +10,7 @@ crm.nikufra.ai {
 		-Server
 	}
 
-	@api path /auth/* /rest/* /realtime/* /functions/*
+	@api path /auth/* /rest/* /realtime/* /functions/* /.well-known/*
 	handle @api {
 		reverse_proxy 127.0.0.1:8800
 	}

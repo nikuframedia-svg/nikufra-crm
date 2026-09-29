@@ -20,10 +20,13 @@ export const supabase = typeof window !== "undefined" && url && anonKey ? create
 
 export async function requestMagicLink(email: string) {
   if (!supabase) return { local: true };
+  const redirectTo = window.location.pathname === "/oauth/consent"
+    ? window.location.href.split("#")[0]
+    : window.location.origin;
   const { error } = await supabase.auth.signInWithOtp({
     email,
     options: {
-      emailRedirectTo: window.location.origin,
+      emailRedirectTo: redirectTo,
       shouldCreateUser: false,
     },
   });
