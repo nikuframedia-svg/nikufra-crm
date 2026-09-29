@@ -13,7 +13,11 @@ beforeEach(() => {
   vi.stubEnv("VITE_SUPABASE_ANON_KEY", "public-anon-key");
   Object.defineProperty(globalThis, "window", {
     configurable: true,
-    value: { location: { origin: "https://crm.nikufra.ai" } },
+    value: {
+      location: { origin: "https://crm.nikufra.ai" },
+      localStorage: { getItem: vi.fn(() => null), setItem: vi.fn(), removeItem: vi.fn() },
+      sessionStorage: { getItem: vi.fn(() => null), setItem: vi.fn(), removeItem: vi.fn() },
+    },
   });
   auth.signInWithOtp.mockResolvedValue({ error: null });
 });
@@ -35,6 +39,7 @@ describe("secure browser authentication", () => {
         detectSessionInUrl: true,
         flowType: "pkce",
         experimental: { appendPkceFlowIdToRedirects: true },
+        storage: expect.objectContaining({ getItem: expect.any(Function), setItem: expect.any(Function), removeItem: expect.any(Function) }),
       },
     });
 

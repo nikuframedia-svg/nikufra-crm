@@ -5,6 +5,7 @@ import {
   Bell,
   Building2,
   CalendarDays,
+  CheckCircle2,
   ChevronDown,
   CircleDollarSign,
   Command,
@@ -12,6 +13,7 @@ import {
   KanbanSquare,
   LayoutDashboard,
   Lightbulb,
+  LogOut,
   Mail,
   Menu,
   Moon,
@@ -45,6 +47,7 @@ export function AppShell() {
   const [dark, setDark] = useState(() => localStorage.getItem("nikufra:theme") === "dark");
   const [commandOpen, setCommandOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
   const [query, setQuery] = useState("");
 
   useEffect(() => {
@@ -59,7 +62,7 @@ export function AppShell() {
         setCommandOpen(true);
       }
       if (event.key.toLowerCase() === "e" && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement)) setActivityOpen(true);
-      if (event.key === "Escape") { setCommandOpen(false); setActivityOpen(false); }
+      if (event.key === "Escape") { setCommandOpen(false); setActivityOpen(false); setAccountOpen(false); }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
@@ -89,6 +92,11 @@ export function AppShell() {
     setActivityOpen(false);
   }
 
+  async function handleSignOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut({ scope: "local" });
+  }
+
   return (
     <div className={`app-shell ${collapsed ? "app-shell--collapsed" : ""}`}>
       <aside className="sidebar">
@@ -104,7 +112,7 @@ export function AppShell() {
           <Link to="/definicoes" className="nav-item" activeProps={{ className: "nav-item nav-item--active" }}><Settings size={17} /><span>Definições</span></Link>
         </nav>
         <div className="sidebar__footer">
-          <button className="user-card" onClick={() => { if (supabase) void supabase.auth.signOut(); }} title={supabase ? "Terminar sessão" : "Dataset local"}><span className="avatar avatar--md" style={{ "--avatar": currentUser?.cor ?? "#3b82f6" } as React.CSSProperties}>{currentUser?.iniciais ?? "N"}</span><span><strong>{currentUser?.nome ?? "Nikufra"}</strong><small>{supabase ? "Terminar sessão" : "Dados reais locais"}</small></span><ChevronDown size={15} /></button>
+          <button className="user-card" onClick={() => setAccountOpen(true)} title={supabase ? "Conta e sessão" : "Dataset local"}><span className="avatar avatar--md" style={{ "--avatar": currentUser?.cor ?? "#3b82f6" } as React.CSSProperties}>{currentUser?.iniciais ?? "N"}</span><span><strong>{currentUser?.nome ?? "Nikufra"}</strong><small>{supabase ? "Conta Google guardada" : "Dados reais locais"}</small></span><ChevronDown size={15} /></button>
         </div>
       </aside>
       <div className="workspace">
@@ -135,6 +143,11 @@ export function AppShell() {
           <label>Resumo<textarea name="descricao" required autoFocus placeholder="O que aconteceu e qual é o próximo passo?" rows={4} /></label>
           <div className="modal__actions"><Button type="button" variant="secondary" onClick={() => setActivityOpen(false)}>Cancelar</Button><Button type="submit"><FilePenLine size={16} />Guardar atividade</Button></div>
         </form>
+      </Modal>
+
+      <Modal open={accountOpen} onClose={() => setAccountOpen(false)} title="Conta e sessão" description="A tua sessão fica guardada neste browser.">
+        <div className="account-session-card"><CheckCircle2 size={20} /><div><strong>{currentUser?.nome ?? "Utilizador Nikufra"}</strong><span>{currentUser?.email}</span><p>Podes fechar o separador ou o browser. Ao voltares a <b>crm.nikufra.ai</b>, a conta abre automaticamente e o Gmail continua ligado.</p></div></div>
+        <div className="modal__actions account-session-actions"><Button variant="secondary" onClick={() => setAccountOpen(false)}>Continuar no CRM</Button>{supabase ? <Button variant="danger" onClick={() => void handleSignOut()}><LogOut size={15} />Terminar sessão neste dispositivo</Button> : null}</div>
       </Modal>
     </div>
   );

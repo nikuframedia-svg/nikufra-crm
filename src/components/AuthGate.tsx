@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { ArrowRight, CheckCircle2, KeyRound, Loader2, Mail, ShieldCheck, Users } from "lucide-react";
+import { setRememberGoogleAccount, shouldRememberGoogleAccount } from "../lib/auth-storage";
 import { confirmGoogleImport, previewGoogleImport, startGoogleOAuth, type GoogleImportPreview } from "../lib/google-oauth";
 import { requestMagicLink, supabase } from "../lib/supabase";
 import { Wordmark } from "./Logo";
@@ -9,6 +10,7 @@ import { Button } from "./ui";
 export function AuthGate({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null | undefined>(supabase ? undefined : null);
   const [email, setEmail] = useState("");
+  const [rememberAccount, setRememberAccount] = useState(shouldRememberGoogleAccount);
   const [status, setStatus] = useState<"idle" | "loading" | "sent" | "error">("idle");
   const [message, setMessage] = useState("");
   const [profileState, setProfileState] = useState<"loading" | "active" | "pending">(supabase ? "loading" : "active");
@@ -87,14 +89,14 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setStatus("loading"); setMessage("");
-    try { await requestMagicLink(email); setStatus("sent"); }
+    try { setRememberGoogleAccount(rememberAccount); await requestMagicLink(email); setStatus("sent"); }
     catch (error) { setStatus("error"); setMessage(error instanceof Error ? error.message : "Não foi possível criar o magic link. Confirma o endereço e tenta novamente."); }
   }
 
   return (
     <div className="auth-screen">
       <aside><Wordmark /><div><p className="eyebrow">Inteligência comercial</p><h1>O contexto certo,<br />antes de cada conversa.</h1><p>Pipeline, relações e receita numa única superfície operacional.</p></div><footer><span><ShieldCheck size={14} />Servidor privado Nikufra</span><span>·</span><span>TLS 1.3</span><span>·</span><span>RLS ativo</span></footer></aside>
-      <main><section><div className="auth-mark"><KeyRound size={20} /></div><p className="eyebrow">Acesso por convite</p><h2>Entrar no CRM</h2><p>Recebe um link de acesso seguro no email que foi convidado. Depois, a app pede autorização para a mesma conta Google.</p>{status === "sent" ? <div className="auth-success"><CheckCircle2 size={22} /><strong>Verifica o teu email</strong><span>Enviámos um magic link para {email}. Expira em 30 minutos.</span><Button variant="secondary" onClick={() => setStatus("idle")}>Usar outro endereço</Button></div> : <form onSubmit={handleSubmit}><label>Email convidado<input type="email" required autoFocus value={email} onChange={(event) => setEmail(event.target.value)} placeholder="nome@gmail.com" /></label>{status === "error" ? <div className="auth-error">{message}</div> : null}<Button type="submit" disabled={status === "loading"}>{status === "loading" ? <Loader2 className="spin" size={16} /> : null}Continuar com magic link<ArrowRight size={16} /></Button></form>}<small>Contas sem convite de administrador são recusadas.</small></section></main>
+      <main><section><div className="auth-mark"><KeyRound size={20} /></div><p className="eyebrow">Acesso por convite</p><h2>Entrar no CRM</h2><p>Na primeira entrada confirmas o email e ligas a conta Google. Depois, este browser reconhece-te automaticamente.</p>{status === "sent" ? <div className="auth-success"><CheckCircle2 size={22} /><strong>Verifica o teu email uma única vez</strong><span>Enviámos um link para {email}. Com a opção de guardar ativa, fechar o separador ou o browser não termina a sessão.</span><Button variant="secondary" onClick={() => setStatus("idle")}>Usar outro endereço</Button></div> : <form onSubmit={handleSubmit}><label>Email convidado<input type="email" required autoFocus value={email} onChange={(event) => setEmail(event.target.value)} placeholder="nome@gmail.com" /></label><label className="remember-account"><input type="checkbox" checked={rememberAccount} onChange={(event) => setRememberAccount(event.target.checked)} /><span><strong>Guardar a conta Google neste dispositivo</strong><small>Recomendado. Podes fechar o separador e voltar sem receber outro email.</small></span></label>{status === "error" ? <div className="auth-error">{message}</div> : null}<Button type="submit" disabled={status === "loading"}>{status === "loading" ? <Loader2 className="spin" size={16} /> : null}Continuar com magic link<ArrowRight size={16} /></Button></form>}<small>Só será pedido outro link se terminares a sessão, limpares os dados do browser ou usares outro dispositivo.</small></section></main>
     </div>
   );
 }

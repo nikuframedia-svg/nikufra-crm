@@ -138,6 +138,11 @@ main { height: calc(100vh - 70px); overflow: auto; }
 .auth-screen form label { display: flex; flex-direction: column; gap: 7px; color: var(--muted); font-size: 10px; font-weight: 650; }
 .auth-screen form input { height: 42px; font-size: 12px; }
 .auth-screen form .button { width: 100%; height: 40px; margin-top: 10px; }
+.auth-screen form .remember-account { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: flex-start; gap: 9px; margin-top: 13px; padding: 11px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); cursor: pointer; }
+.remember-account input { width: 15px; height: 15px; margin: 1px 0 0; padding: 0; accent-color: var(--accent); }
+.remember-account span { display: grid; gap: 3px; }
+.remember-account strong { color: var(--ink); font-size: 9.5px; }
+.remember-account small { color: var(--muted); font-size: 8.5px; font-weight: 450; line-height: 1.4; }
 .auth-screen section > small { display: block; margin-top: 18px; color: var(--muted-2); font-size: 8.5px; text-align: center; }
 .auth-success { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 16px; border: 1px solid rgba(34,197,94,.22); border-radius: 5px; color: var(--green); background: rgba(34,197,94,.06); }
 .auth-success strong { color: var(--ink); font-size: 11px; }
@@ -242,6 +247,13 @@ main { height: calc(100vh - 70px); overflow: auto; }
 .delete-contact-warning p { margin: 6px 0 0; color: var(--muted); font-size: 9.5px; line-height: 1.55; }
 .delete-contact-warning + .auth-error { margin: 0 21px; }
 .delete-contact-warning ~ .modal__actions { margin: 0 21px 20px; }
+.account-session-card { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 12px; margin: 20px 21px; padding: 15px; border: 1px solid rgba(34,197,94,.22); border-radius: 5px; color: var(--green); background: rgba(34,197,94,.06); }
+.account-session-card > div { display: grid; gap: 3px; }
+.account-session-card strong { color: var(--ink-strong); font-size: 11px; }
+.account-session-card span { color: var(--muted); font-size: 9px; }
+.account-session-card p { margin: 9px 0 0; color: var(--muted); font-size: 9.5px; line-height: 1.55; }
+.account-session-card b { color: var(--ink); }
+.account-session-actions { margin: 0 21px 20px; }
 .form-stack { display: flex; flex-direction: column; gap: 14px; padding: 20px 21px; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .form-grid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }

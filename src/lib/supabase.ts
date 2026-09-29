@@ -1,7 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
+import { createRememberedAuthStorage } from "./auth-storage";
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const authStorage = typeof window !== "undefined"
+  ? createRememberedAuthStorage(window.localStorage, window.sessionStorage)
+  : undefined;
 
 export const supabase = typeof window !== "undefined" && url && anonKey ? createClient(url, anonKey, {
   auth: {
@@ -10,6 +14,7 @@ export const supabase = typeof window !== "undefined" && url && anonKey ? create
     detectSessionInUrl: true,
     flowType: "pkce",
     experimental: { appendPkceFlowIdToRedirects: true },
+    storage: authStorage,
   },
 }) : null;
 
