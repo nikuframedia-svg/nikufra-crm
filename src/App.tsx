@@ -7,6 +7,7 @@ const SuggestionsPage = lazy(() => import("./pages/SuggestionsPage").then((modul
 const PipelinePage = lazy(() => import("./pages/PipelinePage").then((module) => ({ default: module.PipelinePage })));
 const LeadsPage = lazy(() => import("./pages/LeadsPage").then((module) => ({ default: module.LeadsPage })));
 const EmailPage = lazy(() => import("./pages/EmailPage").then((module) => ({ default: module.EmailPage })));
+const ChatPage = lazy(() => import("./pages/ChatPage").then((module) => ({ default: module.ChatPage })));
 const CalendarPage = lazy(() => import("./pages/CalendarPage").then((module) => ({ default: module.CalendarPage })));
 const MetricsPage = lazy(() => import("./pages/MetricsPage").then((module) => ({ default: module.MetricsPage })));
 const RevenuePage = lazy(() => import("./pages/RevenuePage").then((module) => ({ default: module.RevenuePage })));
@@ -21,6 +22,7 @@ const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/pipeline", component: PipelinePage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/leads", component: LeadsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/email", component: EmailPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/chat", component: ChatPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/calendario", component: CalendarPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/metricas", component: MetricsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/faturacao", component: RevenuePage }),

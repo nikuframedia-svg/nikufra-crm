@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap;
-select plan(14);
+select plan(19);
 
 select policies_are('public', 'empresas', array['empresas_read','empresas_insert','empresas_update']);
 select policies_are('public', 'contactos', array['contactos_read','contactos_insert','contactos_update']);
@@ -10,6 +10,11 @@ select policies_are('public', 'faturacao', array['faturacao_read','faturacao_adm
 select policies_are('public', 'objetivos', array['objetivos_read','objetivos_admin_write']);
 select policies_are('public', 'estado_historico', array['estado_historico_read']);
 select policies_are('public', 'follow_up_dismissals', array['follow_up_dismissals_read','follow_up_dismissals_insert','follow_up_dismissals_delete']);
+select policies_are('public', 'chat_conversations', array['chat_conversations_read','chat_conversations_update']);
+select policies_are('public', 'chat_conversation_members', array['chat_members_read']);
+select policies_are('public', 'chat_agents', array['chat_agents_read']);
+select policies_are('public', 'chat_conversation_agents', array['chat_conversation_agents_read']);
+select policies_are('public', 'chat_messages', array['chat_messages_read','chat_messages_insert','chat_messages_update_own']);
 
 set local role anon;
 select throws_ok('select * from public.empresas', '42501', null, 'anon não lê empresas');

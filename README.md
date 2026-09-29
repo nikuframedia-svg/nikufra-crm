@@ -10,7 +10,8 @@ Aplicação web interna para gerir pipeline, relações comerciais, atividade, m
 - Sugestões de follow-up por antiguidade e frequência, com intervalo temporal e opção de rejeitar.
 - Gmail com histórico, templates, opt-out e criação de rascunhos — nunca envia automaticamente.
 - Google Calendar da equipa em modo de leitura.
-- Métricas, faturação, objetivos, performance de equipa, atribuições, roles e segurança.
+- Chat de equipa em tempo real com canais, conversas privadas, membros e agentes Claude com ferramentas MCP remotas.
+- Métricas, faturação, objetivos, eliminação auditada de lançamentos, performance de equipa, atribuições, roles e segurança.
 - React/Vite/TypeScript, Supabase self-hosted, PostgreSQL com RLS e publicação web atómica.
 
 ## Desenvolvimento
@@ -40,6 +41,12 @@ A autorização pede apenas Gmail em leitura/criação de rascunhos, Google Cont
 No servidor são necessários `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `TOKEN_ENCRYPTION_KEY` e `SUPABASE_PUBLIC_URL`; no build web, `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`. No Google Cloud devem estar ativas Gmail API, People API e Google Calendar API, com o callback `https://crm.nikufra.ai/functions/v1/gmail-oauth-callback`.
 
 Para importar leads, abrir “Empresas e leads → Importar CSV”. A operação autenticada é idempotente: associa contactos por email, consolida empresas e evita duplicados. A pré-visualização mostra o mapeamento inferido e permite corrigir cada coluna.
+
+## Chat e agentes
+
+O Chat guarda canais, conversas privadas, membros, mensagens e leituras no PostgreSQL. Todas as tabelas têm RLS: uma conversa só é visível para os seus membros e apenas o responsável pelo canal ou um administrador pode adicionar pessoas e agentes.
+
+Um administrador pode configurar um agente Anthropic e, opcionalmente, um ou mais servidores MCP remotos HTTPS. A chave da Anthropic e os tokens MCP são cifrados no servidor com `TOKEN_ENCRYPTION_KEY`; nunca são guardados no browser, devolvidos pela API ou expostos nas tabelas públicas. O agente só recebe as 20 mensagens recentes da conversa onde foi mencionado e só pode usar os MCP ligados à sua própria configuração.
 
 ## Validação
 

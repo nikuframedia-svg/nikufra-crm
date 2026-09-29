@@ -18,6 +18,32 @@ export const formatPercentage = (value: number) => `${formatDecimal(value)}%`;
 
 export const formatNumber = (value: number) => new Intl.NumberFormat("pt-PT").format(value);
 
+export function parseMoneyInput(value: string) {
+  const cleaned = value.trim().replace(/[€\s\u00a0]/g, "").replace(/[^0-9,.-]/g, "");
+  if (!cleaned) return Number.NaN;
+  const negative = cleaned.startsWith("-");
+  const unsigned = cleaned.replace(/-/g, "");
+  const comma = unsigned.lastIndexOf(",");
+  const dot = unsigned.lastIndexOf(".");
+  let normalized: string;
+
+  if (comma >= 0 && dot >= 0) {
+    const decimalSeparator = comma > dot ? "," : ".";
+    const thousandsSeparator = decimalSeparator === "," ? "." : ",";
+    normalized = unsigned.split(thousandsSeparator).join("").replace(decimalSeparator, ".");
+  } else if (comma >= 0 || dot >= 0) {
+    const separator = comma >= 0 ? "," : ".";
+    const parts = unsigned.split(separator);
+    const groupedThousands = parts.length > 2 || (parts.length === 2 && parts[1].length === 3 && parts[0].length >= 1);
+    normalized = groupedThousands ? parts.join("") : `${parts[0]}.${parts[1] ?? ""}`;
+  } else {
+    normalized = unsigned;
+  }
+
+  const parsed = Number(`${negative ? "-" : ""}${normalized}`);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
+
 export const formatDate = (value: string) => new Intl.DateTimeFormat("pt-PT", {
   day: "2-digit",
   month: "2-digit",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatCurrency, formatDate, formatDecimal, formatPercentage } from "./format";
+import { formatCurrency, formatDate, formatDecimal, formatPercentage, parseMoneyInput } from "./format";
 
 describe("formatação portuguesa", () => {
   it("mostra valores monetários exatos sem abreviar nem inventar casas decimais", () => {
@@ -17,5 +17,13 @@ describe("formatação portuguesa", () => {
 
   it("formata datas em dd/mm/aaaa", () => {
     expect(formatDate("2026-08-24T12:00:00Z")).toBe("24/08/2026");
+  });
+
+  it("interpreta separadores de milhares e decimais como um utilizador português", () => {
+    expect(parseMoneyInput("2,500")).toBe(2500);
+    expect(parseMoneyInput("2.500")).toBe(2500);
+    expect(parseMoneyInput("2,50")).toBe(2.5);
+    expect(parseMoneyInput("1.445,25 €")).toBe(1445.25);
+    expect(parseMoneyInput("1,445.25")).toBe(1445.25);
   });
 });

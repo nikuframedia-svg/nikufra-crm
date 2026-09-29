@@ -49,6 +49,16 @@ if [[ "${sync_recent}" == t ]]; then pass "sync Google recente"; else fail "sync
 real_data="$(db_value "select (select count(*) from public.empresas) > 0 and (select count(*) from public.contactos) > 0 and (select count(*) from public.oportunidades) > 0;")"
 if [[ "${real_data}" == t ]]; then pass "dados CRM reais presentes"; else fail "base CRM vazia"; fi
 
+chat_ready="$(db_value "select to_regclass('public.chat_conversations') is not null and to_regclass('public.chat_messages') is not null and to_regclass('public.chat_agents') is not null and (select relrowsecurity from pg_class where oid='public.chat_messages'::regclass);")"
+if [[ "${chat_ready}" == t ]]; then pass "chat de equipa com RLS ativo"; else fail "chat de equipa incompleto"; fi
+
+chat_functions_ready=true
+for function_name in chat-agent chat-agent-config billing-delete; do
+  status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 15 -X POST -H "apikey: ${ANON_KEY}" "https://${CRM_DOMAIN}/functions/v1/${function_name}")"
+  if [[ "${status}" != 401 ]]; then chat_functions_ready=false; fi
+done
+if [[ "${chat_functions_ready}" == true ]]; then pass "funções de chat e faturação protegidas"; else fail "funções de chat/faturação indisponíveis ou sem proteção"; fi
+
 if find "${PROJECT_DIR}/backups/daily" -maxdepth 1 -type f -name '*.dump' -mtime -2 -size +100k -print -quit 2>/dev/null | grep -q .; then
   pass "backup diário recente"
 else
