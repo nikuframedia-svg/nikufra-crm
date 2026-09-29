@@ -4,6 +4,10 @@ export interface RankedFollowUp extends FollowUpSuggestion {
   daysSinceLastInteraction: number;
 }
 
+export function isWithinDayRange(days: number, minimum: number | null, maximum: number | null) {
+  return (minimum === null || days >= minimum) && (maximum === null || days <= maximum);
+}
+
 export function daysSinceLastInteraction(value: string, now = new Date()) {
   const timestamp = new Date(value).getTime();
   if (!Number.isFinite(timestamp)) return 0;

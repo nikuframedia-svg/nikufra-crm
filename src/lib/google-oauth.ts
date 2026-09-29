@@ -1,4 +1,3 @@
-import { open } from "@tauri-apps/plugin-shell";
 import { supabase } from "./supabase";
 
 export interface GoogleImportPreview {
@@ -12,8 +11,7 @@ export async function startGoogleOAuth() {
   if (!supabase) throw new Error("A API do servidor não está configurada.");
   const { data, error } = await supabase.functions.invoke("gmail-oauth-start", { body: {} });
   if (error || !data?.url) throw new Error(error?.message ?? "Não foi possível iniciar a autorização Google.");
-  if ("__TAURI_INTERNALS__" in window) await open(data.url);
-  else window.open(data.url, "_blank", "noopener,noreferrer");
+  window.location.assign(data.url);
 }
 
 export async function previewGoogleImport(): Promise<GoogleImportPreview> {

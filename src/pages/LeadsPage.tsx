@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { createColumnHelper, flexRender, getCoreRowModel, getFilteredRowModel, getPaginationRowModel, getSortedRowModel, useReactTable, type PaginationState, type SortingState } from "@tanstack/react-table";
 import { AlertTriangle, ArrowDownUp, Check, Download, MailPlus, Search, Trash2, Upload, X } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import { stageLabels, stageOrder, stageProbability } from "../data/seed";
+import { pipelineBoardOrder, stageLabels, stageProbability } from "../data/seed";
 import { csvFieldLabels, csvRecord, parseCsv, stageFromText, verticalFromText, type CsvField, type ParsedCsv } from "../lib/csv-import";
 import { useCRM } from "../state/crm-context";
 import type { Lead, Opportunity, Stage, Vertical } from "../types";
@@ -33,7 +33,7 @@ export function LeadsPage() {
     helper.accessor("email", { header: "Email", cell: ({ row, getValue }) => <input className="inline-edit inline-edit--wide" type="email" value={getValue()} onChange={(event) => updateLead(row.original.id, "email", event.target.value)} /> }),
     helper.accessor("telefone", { header: "Telefone", cell: ({ row, getValue }) => <input className="inline-edit mono" value={getValue()} onChange={(event) => updateLead(row.original.id, "telefone", event.target.value)} /> }),
     helper.accessor("vertical", { header: "Vertical", cell: ({ row, getValue }) => <select className="inline-select" value={getValue()} onChange={(event) => updateLead(row.original.id, "vertical", event.target.value)}><option>Outro</option><option>Metalomecânica</option><option>Automóvel</option><option>Alumínio</option><option>Cortiça</option><option>Compósitos</option><option>Eletrónica</option></select> }),
-    helper.accessor("estado", { header: "Estado", cell: ({ row, getValue }) => <select className="inline-select inline-select--stage" value={getValue()} onChange={(event) => updateLead(row.original.id, "estado", event.target.value)}>{[...stageOrder, "adiado" as const].map((stage) => <option key={stage} value={stage}>{stageLabels[stage]}</option>)}</select> }),
+    helper.accessor("estado", { header: "Estado", cell: ({ row, getValue }) => <select className="inline-select inline-select--stage" value={getValue()} onChange={(event) => updateLead(row.original.id, "estado", event.target.value)}>{[...pipelineBoardOrder, "adiado" as const].map((stage) => <option key={stage} value={stage} disabled={stage === "perdido"}>{stageLabels[stage]}</option>)}</select> }),
     helper.accessor("ownerId", { header: "Responsável", cell: ({ row, getValue }) => <div className="owner-cell"><Avatar ownerId={getValue()} size="sm" /><select className="inline-select" value={getValue()} onChange={(event) => updateLead(row.original.id, "ownerId", event.target.value)}>{team.map((owner) => <option key={owner.id} value={owner.id}>{owner.nome}</option>)}</select></div> }),
   ], [leads, selected, team, updateLead]);
 

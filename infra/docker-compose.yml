@@ -31,8 +31,8 @@ services:
       API_EXTERNAL_URL: https://${CRM_DOMAIN}/auth/v1
       GOTRUE_DB_DRIVER: postgres
       GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@db:5432/postgres
-      GOTRUE_SITE_URL: nikufra-crm://auth/callback
-      GOTRUE_URI_ALLOW_LIST: nikufra-crm://auth/callback,nikufra-crm://auth/callback?*,http://localhost:1420
+      GOTRUE_SITE_URL: https://${CRM_DOMAIN}
+      GOTRUE_URI_ALLOW_LIST: https://${CRM_DOMAIN},https://${CRM_DOMAIN}/**,http://localhost:1420,http://127.0.0.1:1420
       GOTRUE_DISABLE_SIGNUP: "false"
       GOTRUE_JWT_ADMIN_ROLES: service_role
       GOTRUE_JWT_AUD: authenticated
@@ -44,8 +44,7 @@ services:
       GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
       GOTRUE_MAILER_AUTOCONFIRM: "false"
       GOTRUE_MAILER_SECURE_EMAIL_CHANGE_ENABLED: "true"
-      # A first-time invite includes time to download and install the desktop
-      # app. Links remain single-use and expire after 30 minutes.
+      # Browser links remain single-use and expire after 30 minutes.
       GOTRUE_MAILER_OTP_EXP: 1800
       GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
       GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
@@ -120,6 +119,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       SUPABASE_URL: http://kong:8000
       SUPABASE_PUBLIC_URL: https://${CRM_DOMAIN}
+      APP_PUBLIC_URL: https://${CRM_DOMAIN}
       SUPABASE_ANON_KEY: ${ANON_KEY}
       SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
       SUPABASE_DB_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
@@ -128,7 +128,6 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
       AUTH_EMAIL_HOOK_SECRET: ${AUTH_EMAIL_HOOK_SECRET:-}
-      DESKTOP_DOWNLOAD_URL: https://${CRM_DOMAIN}/download
     command: ["start", "--main-service", "/home/deno/functions/main"]
     networks:
       backend:
@@ -206,6 +205,7 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../dist:/srv/crm:ro
       - caddy-data:/data
       - caddy-config:/config
     networks: [backend]

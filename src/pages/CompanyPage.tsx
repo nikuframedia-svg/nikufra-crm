@@ -16,7 +16,7 @@ function daysBetween(start?: string, end?: string) {
 
 export function CompanyPage() {
   const { companyId } = useParams({ from: "/empresas/$companyId" });
-  const { leads, opportunities, activities, team, updateLead, updateOpportunity } = useCRM();
+  const { leads, opportunities, activities, team, updateCompanyName, updateLead, updateOpportunity } = useCRM();
   const { entries: revenueEntries } = useRevenueData();
   const companyOpportunities = useMemo(() => opportunities.filter((item) => item.empresaId === companyId || item.id === companyId), [companyId, opportunities]);
   const opportunity = companyOpportunities[0];
@@ -25,6 +25,8 @@ export function CompanyPage() {
   const companyActivities = activities.filter((item) => companyOpportunities.some((value) => value.id === item.oportunidadeId) || item.empresa === opportunity?.empresa);
   const billing = revenueEntries.filter((entry) => entry.empresaId === resolvedCompanyId || entry.empresa === opportunity?.empresa);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   if (!opportunity) return <div className="page"><PageHeader eyebrow="Empresa" title="Empresa não encontrada" description="A ficha pode ter sido arquivada ou eliminada." actions={<Link to="/pipeline"><Button variant="secondary"><ArrowLeft size={16} />Voltar ao pipeline</Button></Link>} /></div>;
 
@@ -33,11 +35,17 @@ export function CompanyPage() {
   const invoiced = billing.filter((entry) => entry.tipo === "Faturado").reduce((sum, entry) => sum + entry.valor, 0);
   const contracted = billing.filter((entry) => entry.tipo === "Contratualizado").reduce((sum, entry) => sum + entry.valor, 0);
 
-  function save(formData: FormData) {
+  async function save(formData: FormData) {
+    const companyName = String(formData.get("empresa") ?? "").trim();
+    const evaluationValue = String(formData.get("avaliacao") ?? "");
+    const proposalPriceValue = String(formData.get("valorProposta") ?? "");
+    setSaving(true);
+    setSaveError("");
     const changes: Partial<Opportunity> = {
       titulo: String(formData.get("titulo") ?? ""),
       valor: Number(formData.get("valor") ?? 0),
       recorrenteAnual: Number(formData.get("recorrente") ?? 0),
+      valorProposta: proposalPriceValue ? Number(proposalPriceValue) : undefined,
       ownerId: String(formData.get("ownerId") ?? opportunity.ownerId),
       dataPrimeiroContacto: String(formData.get("primeiroContacto") ?? ""),
       dataReuniao: String(formData.get("reuniao") ?? ""),
@@ -46,12 +54,19 @@ export function CompanyPage() {
       dataFecho: String(formData.get("fecho") ?? ""),
       dataFechoPrevista: String(formData.get("fechoPrevisto") ?? ""),
       cicloAcordoMeses: Number(formData.get("cicloAcordoMeses") ?? 0) || undefined,
-      avaliacao: Number(formData.get("avaliacao") ?? 0),
+      avaliacao: evaluationValue ? Number(evaluationValue) : undefined,
       notas: String(formData.get("notas") ?? ""),
     };
-    updateOpportunity(opportunity.id, changes);
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 1800);
+    try {
+      if (companyName !== opportunity.empresa) await updateCompanyName(resolvedCompanyId, companyName);
+      updateOpportunity(opportunity.id, changes);
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 1800);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Não foi possível guardar o nome da empresa.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -67,9 +82,11 @@ export function CompanyPage() {
       <section className="company-layout">
         <Card className="company-form-card">
           <div className="panel-header"><div><p className="eyebrow">Tudo editável</p><h2>Dados comerciais</h2></div>{saved ? <span className="saved-label"><Check size={15} />Guardado</span> : null}</div>
-          <form className="form-stack" onSubmit={(event) => { event.preventDefault(); save(new FormData(event.currentTarget)); }}>
+          <form className="form-stack" onSubmit={(event) => { event.preventDefault(); void save(new FormData(event.currentTarget)); }}>
+            <label>Nome da empresa<input name="empresa" required maxLength={160} defaultValue={opportunity.empresa} /></label>
             <div className="form-grid"><label>Oportunidade<input name="titulo" defaultValue={opportunity.titulo} /></label><label>Responsável<select name="ownerId" defaultValue={opportunity.ownerId}>{team.map((item) => <option value={item.id} key={item.id}>{item.nome}</option>)}</select></label></div>
-            <div className="form-grid form-grid--3"><label>Valor contratado / estimado<input className="mono" name="valor" type="number" min="0" step="0.01" defaultValue={opportunity.valor} /></label><label>Recorrente anual<input className="mono" name="recorrente" type="number" min="0" step="0.01" defaultValue={opportunity.recorrenteAnual ?? 0} /></label><label>Avaliação do cliente (1–5)<input name="avaliacao" type="number" min="1" max="5" defaultValue={opportunity.avaliacao ?? ""} /></label></div>
+            <div className="form-grid"><label>Valor contratado / estimado<input className="mono" name="valor" type="number" min="0" step="0.01" defaultValue={opportunity.valor} /></label><label>Preço da proposta (0 se não houve)<input className="mono" name="valorProposta" type="number" min="0" step="0.01" defaultValue={opportunity.valorProposta ?? (opportunity.estado === "perdido" ? 0 : "")} /></label></div>
+            <div className="form-grid"><label>Recorrente anual<input className="mono" name="recorrente" type="number" min="0" step="0.01" defaultValue={opportunity.recorrenteAnual ?? 0} /></label><label>Avaliação do cliente (1–5)<input name="avaliacao" type="number" min="1" max="5" defaultValue={opportunity.avaliacao ?? ""} /></label></div>
             <h3 className="settings-subtitle">Marcos comerciais</h3>
             <div className="milestone-grid">
               <label>Ciclo: 1.º contacto → acordo verbal (meses)<input className="mono" name="cicloAcordoMeses" type="number" min="0" max="240" step="0.01" defaultValue={opportunity.cicloAcordoMeses ?? ""} placeholder="Ex.: 2" /></label>
@@ -81,7 +98,8 @@ export function CompanyPage() {
               <label>Fecho previsto<input name="fechoPrevisto" type="date" defaultValue={opportunity.dataFechoPrevista} /></label>
             </div>
             <label>Notas internas<textarea name="notas" rows={5} defaultValue={opportunity.notas} placeholder="Contexto, próximos passos, riscos e informação do projeto." /></label>
-            <div className="modal__actions"><Button type="submit"><Save size={16} />Guardar ficha</Button></div>
+            {saveError ? <div className="auth-error" role="alert">{saveError}</div> : null}
+            <div className="modal__actions"><Button type="submit" disabled={saving}><Save size={16} />{saving ? "A guardar…" : "Guardar ficha"}</Button></div>
           </form>
         </Card>
 

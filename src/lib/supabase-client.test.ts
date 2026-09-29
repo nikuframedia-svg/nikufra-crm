@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const auth = vi.hoisted(() => ({
-  exchangeCodeForSession: vi.fn(),
-  setSession: vi.fn(),
   signInWithOtp: vi.fn(),
 }));
 const createClient = vi.hoisted(() => vi.fn(() => ({ auth })));
@@ -15,10 +13,8 @@ beforeEach(() => {
   vi.stubEnv("VITE_SUPABASE_ANON_KEY", "public-anon-key");
   Object.defineProperty(globalThis, "window", {
     configurable: true,
-    value: { __TAURI_INTERNALS__: {}, location: { origin: "tauri://localhost" } },
+    value: { location: { origin: "https://crm.nikufra.ai" } },
   });
-  auth.exchangeCodeForSession.mockResolvedValue({ error: null });
-  auth.setSession.mockResolvedValue({ error: null });
   auth.signInWithOtp.mockResolvedValue({ error: null });
 });
 
@@ -28,15 +24,15 @@ afterEach(() => {
   Reflect.deleteProperty(globalThis, "window");
 });
 
-describe("secure desktop authentication", () => {
-  it("enables persistent PKCE sessions and refuses implicit account creation", async () => {
+describe("secure browser authentication", () => {
+  it("uses persistent PKCE sessions and lets Supabase consume the callback URL", async () => {
     const { requestMagicLink } = await import("./supabase");
 
     expect(createClient).toHaveBeenCalledWith("https://crm.nikufra.ai", "public-anon-key", {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
-        detectSessionInUrl: false,
+        detectSessionInUrl: true,
         flowType: "pkce",
         experimental: { appendPkceFlowIdToRedirects: true },
       },
@@ -46,28 +42,16 @@ describe("secure desktop authentication", () => {
     expect(auth.signInWithOtp).toHaveBeenCalledWith({
       email: "member@gmail.com",
       options: {
-        emailRedirectTo: "nikufra-crm://auth/callback",
+        emailRedirectTo: "https://crm.nikufra.ai",
         shouldCreateUser: false,
       },
     });
   });
 
-  it("exchanges a one-time PKCE code bound to the originating flow", async () => {
-    const { consumeAppDeepLink } = await import("./supabase");
+  it("propagates an authentication error", async () => {
+    auth.signInWithOtp.mockResolvedValueOnce({ error: new Error("email unavailable") });
+    const { requestMagicLink } = await import("./supabase");
 
-    await expect(consumeAppDeepLink(
-      "nikufra-crm://auth/callback?code=one-time-code&sb_flow_id=12345678abcdef",
-    )).resolves.toBe("auth");
-    expect(auth.exchangeCodeForSession).toHaveBeenCalledWith("one-time-code", { flowId: "12345678abcdef" });
-    expect(auth.setSession).not.toHaveBeenCalled();
-  });
-
-  it("accepts already-issued invite links during the transition", async () => {
-    const { consumeAppDeepLink } = await import("./supabase");
-
-    await expect(consumeAppDeepLink(
-      "nikufra-crm://auth/callback#access_token=access&refresh_token=refresh",
-    )).resolves.toBe("auth");
-    expect(auth.setSession).toHaveBeenCalledWith({ access_token: "access", refresh_token: "refresh" });
+    await expect(requestMagicLink("member@gmail.com")).rejects.toThrow("email unavailable");
   });
 });

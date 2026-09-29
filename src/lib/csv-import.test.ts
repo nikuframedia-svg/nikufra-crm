@@ -16,5 +16,6 @@ describe("importação CSV inteligente", () => {
   it("normaliza estados em português e inglês", () => {
     expect(stageFromText("Reunião")).toBe("reuniao_feita");
     expect(stageFromText("Won")).toBe("cliente");
+    expect(stageFromText("Recusado")).toBe("perdido");
   });
 });

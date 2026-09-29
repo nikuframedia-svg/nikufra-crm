@@ -108,7 +108,7 @@ export function AppShell() {
         </div>
       </aside>
       <div className="workspace">
-        <div className="titlebar" data-tauri-drag-region>
+        <div className="titlebar">
           <div><span className="status-dot" />{activeLabel}<small>{dataMode === "supabase" ? "Sincronizado com servidor" : "Dataset Nikufra real · local"}</small></div>
           <div className="titlebar__actions">
             <button className="icon-button" onClick={() => setDark((value) => !value)} aria-label="Alternar tema">{dark ? <Sun size={17} /> : <Moon size={17} />}</button>

@@ -1,0 +1,78 @@
+name: Publicar aplicação web
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nikufra-crm-web-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with: { version: 10.34.5 }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 22, cache: pnpm }
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with: { deno-version: v2.x }
+      - name: Validar configuração obrigatória
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          required=(VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS)
+          for key in "${required[@]}"; do
+            test -n "${!key:-}" || { echo "Configuração em falta: $key" >&2; exit 1; }
+          done
+      - name: Instalar e validar
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm security:audit
+          pnpm test
+          find infra/volumes/functions -mindepth 2 -name index.ts -print0 | xargs -0 deno check --no-lock --import-map=infra/volumes/functions/deno.jsonc
+          bash -n infra/*.sh
+          docker compose --env-file infra/.env.example -f infra/docker-compose.yml -f infra/docker-compose.production.yml config --quiet
+      - name: Compilar aplicação web
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: pnpm build
+      - name: Preparar SSH restrito
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          install -d -m 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Publicar atomicamente
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -Eeuo pipefail
+          tar -C dist -czf - . | ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 "$DEPLOY_USER@$DEPLOY_HOST" publish-web
+      - name: Verificar produção
+        env:
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --retry 5 --retry-delay 2 https://crm.nikufra.ai/ | grep -q '<div id="root"></div>'
+          curl --fail --silent --show-error --retry 5 --retry-delay 2 -H "apikey: $VITE_SUPABASE_ANON_KEY" https://crm.nikufra.ai/auth/v1/health >/dev/null

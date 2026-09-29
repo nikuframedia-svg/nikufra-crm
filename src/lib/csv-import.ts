@@ -90,7 +90,7 @@ export function stageFromText(value: string): Stage | null {
   if (["proposta", "proposal", "orcamento"].includes(key)) return "proposta";
   if (["piloto", "pilot", "poc"].includes(key)) return "piloto";
   if (["cliente", "client", "customer", "won", "ganho"].includes(key)) return "cliente";
-  if (["perdido", "lost"].includes(key)) return "perdido";
+  if (["perdido", "recusado", "rejeitado", "lost", "declined", "rejected"].includes(key)) return "perdido";
   if (["adiado", "on hold", "paused"].includes(key)) return "adiado";
   return null;
 }

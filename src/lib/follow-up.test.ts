@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { daysSinceLastInteraction, rankFollowUps } from "./follow-up";
+import { daysSinceLastInteraction, isWithinDayRange, rankFollowUps } from "./follow-up";
 import type { FollowUpSuggestion } from "../types";
 
 function suggestion(overrides: Partial<FollowUpSuggestion>): FollowUpSuggestion {
@@ -47,5 +47,14 @@ describe("follow-up ranking", () => {
 
   it("never returns negative inactivity for future timestamps", () => {
     expect(daysSinceLastInteraction("2026-09-01T12:00:00.000Z", now)).toBe(0);
+  });
+
+  it("filters inclusive day ranges with optional limits", () => {
+    expect(isWithinDayRange(30, 30, 60)).toBe(true);
+    expect(isWithinDayRange(60, 30, 60)).toBe(true);
+    expect(isWithinDayRange(29, 30, 60)).toBe(false);
+    expect(isWithinDayRange(61, 30, 60)).toBe(false);
+    expect(isWithinDayRange(90, 60, null)).toBe(true);
+    expect(isWithinDayRange(7, null, 14)).toBe(true);
   });
 });

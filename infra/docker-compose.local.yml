@@ -5,11 +5,8 @@ services:
       mailpit: { condition: service_started }
     environment:
       API_EXTERNAL_URL: http://localhost:8000/auth/v1
-      # Magic links must return to the installed desktop app. Browser-based
-      # development URLs remain explicitly allowed below, but are never the
-      # fallback for an email generated without redirect_to.
-      GOTRUE_SITE_URL: nikufra-crm://auth/callback
-      GOTRUE_URI_ALLOW_LIST: nikufra-crm://auth/callback,nikufra-crm://auth/callback?*,http://localhost:1420,http://127.0.0.1:1420,http://localhost:1423,http://127.0.0.1:1423
+      GOTRUE_SITE_URL: http://localhost:1420
+      GOTRUE_URI_ALLOW_LIST: http://localhost:1420,http://127.0.0.1:1420,http://localhost:1423,http://127.0.0.1:1423
       GOTRUE_SMTP_ADMIN_EMAIL: hello@nikufra.ai
       GOTRUE_SMTP_HOST: mailpit
       GOTRUE_SMTP_PORT: 1025
@@ -22,6 +19,7 @@ services:
   functions:
     environment:
       SUPABASE_PUBLIC_URL: http://localhost:8000
+      APP_PUBLIC_URL: http://localhost:1420
 
   studio:
     environment:

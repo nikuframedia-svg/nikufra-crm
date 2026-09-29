@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { initialActivities, initialDrafts, initialLeads, initialOpportunities, owners, stageOrder, stageProbability } from "./seed";
+import { initialActivities, initialDrafts, initialLeads, initialOpportunities, owners, pipelineBoardOrder, stageOrder, stageProbability } from "./seed";
 
 describe("configuração comercial segura", () => {
   it("mantém a progressão do funil e probabilidades válidas", () => {
     expect(stageOrder).toEqual(["nao_contactado", "contactado", "reuniao_marcada", "reuniao_feita", "piloto", "proposta", "cliente"]);
+    expect(pipelineBoardOrder).toEqual([...stageOrder, "perdido"]);
     for (const probability of Object.values(stageProbability)) expect(probability).toBeGreaterThanOrEqual(0);
     expect(stageProbability.piloto).toBeLessThan(stageProbability.proposta);
   });

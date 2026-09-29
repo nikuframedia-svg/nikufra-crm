@@ -15,12 +15,14 @@ interface CRMState {
   emailSelection: string[];
   setEmailSelection: (ids: string[]) => void;
   dataMode: "local" | "supabase";
-  moveOpportunity: (id: string, estado: Stage, loss?: { motivo: string; notas: string }) => void;
+  moveOpportunity: (id: string, estado: Stage, loss?: { motivo: string; notas: string; valorProposta: number }) => Promise<void>;
   addOpportunity: (opportunity: Opportunity, lead: Lead) => void;
   importBatch: (leads: Lead[], opportunities: Opportunity[], options?: { includeNikufraFinancials?: boolean }) => Promise<void>;
   updateOpportunity: (id: string, changes: Partial<Opportunity>) => void;
+  updateCompanyName: (companyId: string, name: string) => Promise<void>;
   updateLead: (id: string, field: keyof Lead, value: string) => void;
   deleteCommercialRecords: (input: { contactIds?: string[]; companyIds?: string[]; opportunityIds?: string[] }) => Promise<CommercialDeletionResult>;
+  dismissFollowUpSuggestion: (contactId: string) => Promise<void>;
   addDrafts: (drafts: Draft[]) => void;
   addActivity: (activity: Activity) => void;
 }
@@ -70,13 +72,15 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       const { data: authData } = await supabase!.auth.getUser();
       const activeUserId = authData.user?.id;
       if (active && activeUserId) setCurrentUserId(activeUserId);
-      const [profilesResult, opportunitiesResult, activitiesResult, contactsResult, historyResult, suggestionsResult] = await Promise.all([
+      const [profilesResult, opportunitiesResult, activitiesResult, contactsResult, historyResult, suggestionsResult, proposalPricesResult] = await Promise.all([
         supabase!.from("profiles").select("id,nome,email,role,cor").eq("ativo", true).order("nome"),
         supabase!.from("oportunidades").select("id,titulo,estado,tipo,valor_estimado,valor_recorrente_anual,probabilidade,owner_id,data_primeiro_contacto,data_reuniao,data_proposta,data_piloto,data_fecho,data_prevista_fecho,ciclo_acordo_meses,avaliacao,notas,created_at,updated_at,empresa_id,contacto_principal_id,empresas(id,nome,vertical,cidade,pais,origem)").eq("arquivado", false).order("updated_at", { ascending: false }),
         supabase!.from("atividades").select("id,oportunidade_id,contacto_id,user_id,tipo,descricao,data,direcao,reuniao_inferida,thread_id,assunto,snippet,empresas(nome),contactos(nome,email)").order("data", { ascending: false }).limit(500),
         supabase!.from("contactos").select("id,empresa_id,nome,cargo,email,telefone,optout,estado,data_reuniao,empresas(id,nome,vertical,cidade,pais,origem)").order("updated_at", { ascending: false }),
         supabase!.from("estado_historico").select("oportunidade_id,changed_at").order("changed_at", { ascending: false }),
         supabase!.from("follow_up_suggestions").select("contact_id,empresa_id,opportunity_id,owner_id,user_id,empresa,contacto_nome,contacto_email,contacto_cargo,estado,ultima_interacao_em,total_interacoes,total_mensagens,emails_enviados,emails_recebidos,reunioes,ultimo_assunto,ultimo_resumo").eq("user_id", activeUserId ?? "00000000-0000-0000-0000-000000000000"),
+        // Kept separate so an app preview can still load against the previous schema before migration.
+        supabase!.from("oportunidades").select("id,valor_proposta").eq("arquivado", false),
       ]);
       if (!active) return;
       if (profilesResult.data?.length) {
@@ -86,10 +90,12 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       if (opportunitiesResult.data) {
         const latestStateChange = new Map<string, string>();
         for (const row of historyResult.data ?? []) if (!latestStateChange.has(row.oportunidade_id)) latestStateChange.set(row.oportunidade_id, row.changed_at);
+        const proposalPriceByOpportunity = new Map((proposalPricesResult.data ?? []).map((row) => [row.id, row.valor_proposta]));
         const serverOpportunities: Opportunity[] = opportunitiesResult.data.map((row) => {
           const company = Array.isArray(row.empresas) ? row.empresas[0] : row.empresas;
           const enteredAt = latestStateChange.get(row.id) ?? row.created_at;
-          return { id: row.id, leadId: row.contacto_principal_id ?? row.id, empresaId: row.empresa_id, empresa: company?.nome ?? "Empresa", titulo: row.titulo, estado: row.estado, tipo: opportunityTypeFromDb[row.tipo] ?? "Consultoria", valor: Number(row.valor_estimado), probabilidade: row.probabilidade, ownerId: row.owner_id, diasNoEstado: Math.max(0, Math.floor((Date.now() - new Date(enteredAt).getTime()) / 86400000)), dataPrimeiroContacto: row.data_primeiro_contacto ?? "", dataReuniao: row.data_reuniao ?? undefined, dataProposta: row.data_proposta ?? undefined, dataPiloto: row.data_piloto ?? undefined, dataFecho: row.data_fecho ?? undefined, dataFechoPrevista: row.data_prevista_fecho ?? "", cicloAcordoMeses: row.ciclo_acordo_meses == null ? undefined : Number(row.ciclo_acordo_meses), recorrenteAnual: row.valor_recorrente_anual ? Number(row.valor_recorrente_anual) : undefined, avaliacao: row.avaliacao ?? undefined, notas: row.notas ?? "" };
+          const proposalPrice = proposalPriceByOpportunity.get(row.id);
+          return { id: row.id, leadId: row.contacto_principal_id ?? row.id, empresaId: row.empresa_id, empresa: company?.nome ?? "Empresa", titulo: row.titulo, estado: row.estado, tipo: opportunityTypeFromDb[row.tipo] ?? "Consultoria", valor: Number(row.valor_estimado), probabilidade: row.probabilidade, ownerId: row.owner_id, diasNoEstado: Math.max(0, Math.floor((Date.now() - new Date(enteredAt).getTime()) / 86400000)), dataPrimeiroContacto: row.data_primeiro_contacto ?? "", dataReuniao: row.data_reuniao ?? undefined, dataProposta: row.data_proposta ?? undefined, dataPiloto: row.data_piloto ?? undefined, dataFecho: row.data_fecho ?? undefined, dataFechoPrevista: row.data_prevista_fecho ?? "", cicloAcordoMeses: row.ciclo_acordo_meses == null ? undefined : Number(row.ciclo_acordo_meses), recorrenteAnual: row.valor_recorrente_anual ? Number(row.valor_recorrente_anual) : undefined, valorProposta: proposalPrice == null ? undefined : Number(proposalPrice), avaliacao: row.avaliacao ?? undefined, notas: row.notas ?? "" };
         });
         const serverLeads: Lead[] = (contactsResult.data ?? []).map((contact) => {
           const company = Array.isArray(contact.empresas) ? contact.empresas[0] : contact.empresas;
@@ -133,7 +139,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     }
 
     void loadServerState();
-    const channel = supabase.channel("crm-live").on("postgres_changes", { event: "*", schema: "public", table: "oportunidades" }, () => void loadServerState()).on("postgres_changes", { event: "*", schema: "public", table: "atividades" }, () => void loadServerState()).on("postgres_changes", { event: "*", schema: "public", table: "contactos" }, () => void loadServerState()).subscribe();
+    const channel = supabase.channel("crm-live").on("postgres_changes", { event: "*", schema: "public", table: "oportunidades" }, () => void loadServerState()).on("postgres_changes", { event: "*", schema: "public", table: "atividades" }, () => void loadServerState()).on("postgres_changes", { event: "*", schema: "public", table: "contactos" }, () => void loadServerState()).on("postgres_changes", { event: "*", schema: "public", table: "empresas" }, () => void loadServerState()).subscribe();
     return () => { active = false; void supabase?.removeChannel(channel); };
   }, []);
 
@@ -141,10 +147,16 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(key, JSON.stringify(value));
   }, []);
 
-  const moveOpportunity = useCallback((id: string, estado: Stage, loss?: { motivo: string; notas: string }) => {
-    if (supabase) void supabase.from("oportunidades").update({ estado, ...(estado === "perdido" ? { motivo_perda: loss?.motivo, notas_perda: loss?.notas || null } : {}) }).eq("id", id).then(({ error }) => { if (error) console.error("Falha ao mover oportunidade", error.message); });
+  const moveOpportunity = useCallback(async (id: string, estado: Stage, loss?: { motivo: string; notas: string; valorProposta: number }) => {
+    if (estado === "perdido" && (!loss?.motivo || !Number.isFinite(loss.valorProposta) || loss.valorProposta < 0)) {
+      throw new Error("Indica o motivo e um preço de proposta válido (0 quando não houve proposta).");
+    }
+    if (supabase) {
+      const { error } = await supabase.from("oportunidades").update({ estado, ...(estado === "perdido" ? { motivo_perda: loss!.motivo, notas_perda: loss!.notas || null, valor_proposta: loss!.valorProposta } : {}) }).eq("id", id);
+      if (error) throw new Error(error.message);
+    }
     setOpportunities((current) => {
-      const next = current.map((item) => item.id === id ? { ...item, estado, probabilidade: stageProbability[estado], diasNoEstado: 0 } : item);
+      const next = current.map((item) => item.id === id ? { ...item, estado, probabilidade: stageProbability[estado], diasNoEstado: 0, ...(estado === "perdido" ? { valorProposta: loss!.valorProposta } : {}) } : item);
       persist("nikufra:v2:opportunities", next);
       return next;
     });
@@ -188,6 +200,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     if (changes.titulo !== undefined) payload.titulo = changes.titulo;
     if (changes.valor !== undefined) payload.valor_estimado = changes.valor;
     if (changes.recorrenteAnual !== undefined) payload.valor_recorrente_anual = changes.recorrenteAnual || null;
+    if (changes.valorProposta !== undefined) payload.valor_proposta = changes.valorProposta;
     if (changes.ownerId !== undefined) payload.owner_id = changes.ownerId;
     if (changes.dataPrimeiroContacto !== undefined) payload.data_primeiro_contacto = changes.dataPrimeiroContacto || null;
     if (changes.dataReuniao !== undefined) payload.data_reuniao = changes.dataReuniao || null;
@@ -220,7 +233,48 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     });
   }, [persist]);
 
+  const updateCompanyName = useCallback(async (companyId: string, name: string) => {
+    const trimmedName = name.trim();
+    if (!trimmedName) throw new Error("O nome da empresa é obrigatório.");
+    if (supabase) {
+      const { error } = await supabase.from("empresas").update({ nome: trimmedName }).eq("id", companyId);
+      if (error) throw new Error(error.message);
+    }
+    const previousName = opportunities.find((item) => item.empresaId === companyId || item.id === companyId)?.empresa
+      ?? leads.find((lead) => lead.empresaId === companyId)?.empresa;
+    setLeads((current) => {
+      const next = current.map((lead) => lead.empresaId === companyId || (!lead.empresaId && lead.empresa === previousName) ? { ...lead, empresa: trimmedName } : lead);
+      persist("nikufra:v2:leads", next);
+      return next;
+    });
+    setOpportunities((current) => {
+      const next = current.map((item) => item.empresaId === companyId || item.id === companyId || (!item.empresaId && item.empresa === previousName) ? { ...item, empresa: trimmedName } : item);
+      persist("nikufra:v2:opportunities", next);
+      return next;
+    });
+    setActivities((current) => current.map((item) => item.empresa === previousName ? { ...item, empresa: trimmedName } : item));
+    setFollowUpSuggestions((current) => current.map((item) => item.empresaId === companyId ? { ...item, empresa: trimmedName } : item));
+  }, [leads, opportunities, persist]);
+
   const updateLead = useCallback((id: string, field: keyof Lead, value: string) => {
+    const companyId = leads.find((lead) => lead.id === id)?.empresaId;
+    if (field === "empresa" && companyId) {
+      const previousName = leads.find((lead) => lead.empresaId === companyId)?.empresa;
+      setLeads((current) => {
+        const next = current.map((lead) => lead.empresaId === companyId ? { ...lead, empresa: value } : lead);
+        persist("nikufra:v2:leads", next);
+        return next;
+      });
+      setOpportunities((current) => {
+        const next = current.map((item) => item.empresaId === companyId ? { ...item, empresa: value } : item);
+        persist("nikufra:v2:opportunities", next);
+        return next;
+      });
+      setActivities((current) => current.map((item) => item.empresa === previousName ? { ...item, empresa: value } : item));
+      setFollowUpSuggestions((current) => current.map((item) => item.empresaId === companyId ? { ...item, empresa: value } : item));
+      if (supabase) void supabase.from("empresas").update({ nome: value }).eq("id", companyId).then(({ error }) => { if (error) console.error("Falha ao editar empresa", error.message); });
+      return;
+    }
     setLeads((current) => {
       const next = current.map((lead) => lead.id === id ? { ...lead, [field]: value } : lead);
       persist("nikufra:v2:leads", next);
@@ -229,16 +283,10 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     if (supabase && ["nome", "cargo", "email", "telefone"].includes(field)) {
       void supabase.from("contactos").update({ [field]: value }).eq("id", id).then(({ error }) => { if (error) console.error("Falha ao editar contacto", error.message); });
     }
-    if (supabase && field === "empresa") {
-      const companyId = leads.find((lead) => lead.id === id)?.empresaId;
-      if (companyId) void supabase.from("empresas").update({ nome: value }).eq("id", companyId).then(({ error }) => { if (error) console.error("Falha ao editar empresa", error.message); });
-    }
     if (field === "vertical") {
-      const companyId = leads.find((lead) => lead.id === id)?.empresaId;
       if (supabase && companyId) void supabase.from("empresas").update({ vertical: verticalToDb[value as Vertical] }).eq("id", companyId).then(({ error }) => { if (error) console.error("Falha ao editar vertical", error.message); });
     }
     if (field === "estado" || field === "ownerId") {
-      const companyId = leads.find((lead) => lead.id === id)?.empresaId;
       if (supabase && field === "estado") {
         const query = supabase.from("contactos").update({ estado: value });
         void (companyId ? query.eq("empresa_id", companyId) : query.eq("id", id)).then(({ error }) => { if (error) console.error("Falha ao atualizar estado dos contactos", error.message); });
@@ -303,6 +351,19 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     return result;
   }, [activities, leads, opportunities, persist]);
 
+  const dismissFollowUpSuggestion = useCallback(async (contactId: string) => {
+    if (supabase) {
+      const { error } = await supabase.from("follow_up_dismissals").upsert({ user_id: currentUserId, contact_id: contactId }, { onConflict: "user_id,contact_id" });
+      if (error) throw new Error(error.message);
+    } else {
+      const storageKey = `nikufra:v2:follow-up-dismissals:${currentUserId}`;
+      const dismissed = new Set(readStored<string[]>(storageKey, []));
+      dismissed.add(contactId);
+      persist(storageKey, [...dismissed]);
+    }
+    setFollowUpSuggestions((current) => current.filter((item) => item.contactId !== contactId || item.userId !== currentUserId));
+  }, [currentUserId, persist]);
+
   const value = useMemo(() => ({
     leads,
     opportunities,
@@ -318,8 +379,10 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     addOpportunity,
     importBatch,
     updateOpportunity,
+    updateCompanyName,
     updateLead,
     deleteCommercialRecords,
+    dismissFollowUpSuggestion,
     addDrafts: (items: Draft[]) => setDrafts((current) => [...items, ...current]),
     addActivity: (item: Activity) => {
       setActivities((current) => [item, ...current]);
@@ -328,7 +391,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
         if (opportunity?.empresaId) void supabase.from("atividades").insert({ oportunidade_id: item.oportunidadeId || null, empresa_id: opportunity.empresaId, user_id: item.userId, tipo: item.tipo === "email" ? "email_enviado" : item.tipo === "proposta" ? "proposta_enviada" : item.tipo, descricao: item.descricao, data: item.data }).then(({ error }) => { if (error) console.error("Falha ao criar atividade", error.message); });
       }
     },
-  }), [activities, addOpportunity, currentUserId, deleteCommercialRecords, drafts, emailSelection, followUpSuggestions, importBatch, leads, moveOpportunity, opportunities, team, updateLead, updateOpportunity]);
+  }), [activities, addOpportunity, currentUserId, deleteCommercialRecords, dismissFollowUpSuggestion, drafts, emailSelection, followUpSuggestions, importBatch, leads, moveOpportunity, opportunities, team, updateCompanyName, updateLead, updateOpportunity]);
 
   return <CRMContext.Provider value={value}>{children}</CRMContext.Provider>;
 }

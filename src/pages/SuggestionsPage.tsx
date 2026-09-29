@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
-import { ArrowUpRight, Clock3, MailPlus, MessageSquareText, Search, UserRoundCheck } from "lucide-react";
+import { ArrowUpRight, Clock3, MailPlus, MessageSquareText, Search, UserRoundCheck, X } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { stageLabels } from "../data/seed";
-import { rankFollowUps } from "../lib/follow-up";
+import { isWithinDayRange, rankFollowUps } from "../lib/follow-up";
 import { useCRM } from "../state/crm-context";
-import type { Stage } from "../types";
-import { Avatar, Button, Card, EmptyState, PageHeader, StageChip } from "../components/ui";
+import type { FollowUpSuggestion, Stage } from "../types";
+import { Avatar, Button, Card, EmptyState, Modal, PageHeader, StageChip } from "../components/ui";
 
 const dateFormatter = new Intl.DateTimeFormat("pt-PT", { day: "2-digit", month: "short", year: "numeric" });
 
@@ -14,23 +14,54 @@ function interactionLabel(total: number) {
 }
 
 export function SuggestionsPage() {
-  const { followUpSuggestions, currentUserId, team, setEmailSelection } = useCRM();
+  const { followUpSuggestions, currentUserId, team, setEmailSelection, dismissFollowUpSuggestion } = useCRM();
   const [query, setQuery] = useState("");
-  const [minimumDays, setMinimumDays] = useState(0);
+  const [minimumDays, setMinimumDays] = useState("");
+  const [maximumDays, setMaximumDays] = useState("");
   const [stage, setStage] = useState<Stage | "all">("all");
+  const [dismissPending, setDismissPending] = useState<FollowUpSuggestion | null>(null);
+  const [dismissBusy, setDismissBusy] = useState(false);
+  const [dismissError, setDismissError] = useState("");
   const ranked = useMemo(() => rankFollowUps(followUpSuggestions), [followUpSuggestions]);
   const normalizedQuery = query.trim().toLocaleLowerCase("pt-PT");
+  const minimum = minimumDays === "" ? null : Number(minimumDays);
+  const maximum = maximumDays === "" ? null : Number(maximumDays);
+  const invalidRange = minimum !== null && maximum !== null && minimum > maximum;
   const visible = useMemo(() => ranked.filter((item) =>
-    item.daysSinceLastInteraction >= minimumDays
+    !invalidRange
+    && isWithinDayRange(item.daysSinceLastInteraction, minimum, maximum)
     && (stage === "all" || item.estado === stage)
     && (!normalizedQuery || `${item.contactoNome} ${item.empresa} ${item.contactoEmail}`.toLocaleLowerCase("pt-PT").includes(normalizedQuery))
-  ), [minimumDays, normalizedQuery, ranked, stage]);
+  ), [invalidRange, maximum, minimum, normalizedQuery, ranked, stage]);
   const currentUser = team.find((owner) => owner.id === currentUserId);
   const staleCount = ranked.filter((item) => item.daysSinceLastInteraction >= 30).length;
   const interactions = ranked.reduce((sum, item) => sum + item.totalInteracoes, 0);
   const replies = ranked.reduce((sum, item) => sum + item.emailsRecebidos, 0);
   const longestSilence = ranked[0]?.daysSinceLastInteraction ?? 0;
   const stages = [...new Set(ranked.map((item) => item.estado))];
+  const dayRangeLabel = invalidRange
+    ? "intervalo inválido"
+    : minimum === null && maximum === null
+    ? "qualquer período"
+    : minimum !== null && maximum !== null
+      ? `${minimum}–${maximum} dias`
+      : minimum !== null
+        ? `${minimum}+ dias`
+        : `até ${maximum} dias`;
+
+  async function handleDismiss() {
+    if (!dismissPending) return;
+    setDismissBusy(true);
+    setDismissError("");
+    try {
+      await dismissFollowUpSuggestion(dismissPending.contactId);
+      setDismissPending(null);
+    } catch (error) {
+      setDismissError(error instanceof Error ? error.message : "Não foi possível rejeitar a sugestão.");
+    } finally {
+      setDismissBusy(false);
+    }
+  }
 
   return (
     <div className="page page--suggestions">
@@ -51,10 +82,19 @@ export function SuggestionsPage() {
         <div className="follow-up-toolbar">
           <div className="table-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Pesquisar pessoa, empresa ou email…" /></div>
           <div className="follow-up-filters">
-            <label>Inatividade<select value={minimumDays} onChange={(event) => setMinimumDays(Number(event.target.value))}><option value={0}>Qualquer período</option><option value={7}>7+ dias</option><option value={14}>14+ dias</option><option value={30}>30+ dias</option><option value={60}>60+ dias</option><option value={90}>90+ dias</option></select></label>
+            <div className={`follow-up-range${invalidRange ? " is-invalid" : ""}`} role="group" aria-label="Intervalo de dias desde o último contacto" aria-describedby={invalidRange ? "follow-up-range-error" : undefined}>
+              <span>Inatividade</span>
+              <label>De<input type="number" min="0" step="1" inputMode="numeric" value={minimumDays} onChange={(event) => setMinimumDays(event.target.value)} placeholder="0" aria-label="Mínimo de dias" aria-invalid={invalidRange} /></label>
+              <i>—</i>
+              <label>Até<input type="number" min="0" step="1" inputMode="numeric" value={maximumDays} onChange={(event) => setMaximumDays(event.target.value)} placeholder="∞" aria-label="Máximo de dias" aria-invalid={invalidRange} /></label>
+              <small>dias</small>
+              {minimumDays || maximumDays ? <button type="button" onClick={() => { setMinimumDays(""); setMaximumDays(""); }}>Limpar</button> : null}
+            </div>
             <label>Estado<select value={stage} onChange={(event) => setStage(event.target.value as Stage | "all")}><option value="all">Todos os estados</option>{stages.map((item) => <option value={item} key={item}>{stageLabels[item]}</option>)}</select></label>
           </div>
         </div>
+
+        {invalidRange ? <p className="follow-up-filter-error" id="follow-up-range-error" role="alert">O número máximo de dias tem de ser igual ou superior ao mínimo.</p> : null}
 
         <div className="follow-up-rule"><span>Prioridade</span><span>Pessoa e empresa</span><span>Último contacto</span><span>Histórico</span><span>Último contexto</span><span>Ação</span></div>
         <div className="follow-up-list">
@@ -65,13 +105,19 @@ export function SuggestionsPage() {
               <div className="follow-up-last"><strong>há {item.daysSinceLastInteraction} dia{item.daysSinceLastInteraction === 1 ? "" : "s"}</strong><time dateTime={item.ultimaInteracaoEm}>{dateFormatter.format(new Date(item.ultimaInteracaoEm))}</time><StageChip stage={item.estado} /></div>
               <div className="follow-up-history"><strong className="mono">{interactionLabel(item.totalInteracoes)}</strong><span>{item.totalMensagens} {item.totalMensagens === 1 ? "mensagem" : "mensagens"} · {item.reunioes} reuni{item.reunioes === 1 ? "ão" : "ões"}</span><small>{item.emailsEnviados} enviados · {item.emailsRecebidos} recebidos</small></div>
               <div className="follow-up-context"><strong>{item.ultimoAssunto}</strong><p>{item.ultimoResumo}</p></div>
-              <div className="follow-up-action">{item.ownerId ? <Avatar ownerId={item.ownerId} size="sm" /> : null}<Link to="/email" onClick={() => setEmailSelection([item.contactId])}><Button><MailPlus size={15} />Preparar</Button></Link></div>
+              <div className="follow-up-action">{item.ownerId ? <Avatar ownerId={item.ownerId} size="sm" /> : null}<Button variant="ghost" onClick={() => { setDismissError(""); setDismissPending(item); }} aria-label={`Rejeitar sugestão para ${item.contactoNome}`}><X size={14} />Rejeitar</Button><Link to="/email" onClick={() => setEmailSelection([item.contactId])}><Button><MailPlus size={15} />Preparar</Button></Link></div>
             </article>
           ))}
-          {!visible.length ? <EmptyState>{ranked.length ? "Nenhuma sugestão corresponde aos filtros atuais." : "Ainda não existem conversas sincronizadas suficientes para sugerir follow-ups."}</EmptyState> : null}
+          {!visible.length ? <EmptyState>{invalidRange ? "Corrige o intervalo de dias para voltar a ver sugestões." : ranked.length ? "Nenhuma sugestão corresponde aos filtros atuais." : "Ainda não existem conversas sincronizadas suficientes para sugerir follow-ups."}</EmptyState> : null}
         </div>
-        <footer className="follow-up-footer"><span>{visible.length} de {ranked.length} sugestões</span><span>Critério: dias sem contacto ↓ · número de interações ↓</span></footer>
+        <footer className="follow-up-footer"><span>{visible.length} de {ranked.length} sugestões · {dayRangeLabel}</span><span>Critério: dias sem contacto ↓ · número de interações ↓</span></footer>
       </Card>
+
+      <Modal open={Boolean(dismissPending)} onClose={() => { if (!dismissBusy) setDismissPending(null); }} title="Rejeitar esta sugestão?" description={`O follow-up de ${dismissPending?.contactoNome ?? "este contacto"} deixará de aparecer na tua fila.`}>
+        <div className="suggestion-dismiss-note"><strong>Apenas para ti.</strong><p>A empresa, o contacto e todo o histórico permanecem no CRM. Esta ação não afeta as sugestões dos outros utilizadores.</p></div>
+        {dismissError ? <div className="auth-error" role="alert">{dismissError}</div> : null}
+        <div className="modal__actions"><Button variant="secondary" disabled={dismissBusy} onClick={() => setDismissPending(null)}>Cancelar</Button><Button variant="danger" disabled={dismissBusy} onClick={() => void handleDismiss()}>{dismissBusy ? "A rejeitar…" : "Rejeitar sugestão"}</Button></div>
+      </Modal>
     </div>
   );
 }

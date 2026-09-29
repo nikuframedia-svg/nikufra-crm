@@ -4,10 +4,13 @@ export const stageOrder: Stage[] = [
   "nao_contactado", "contactado", "reuniao_marcada", "reuniao_feita", "piloto", "proposta", "cliente",
 ];
 
+// "Recusado" is visible on the board, but stays outside the active funnel metrics.
+export const pipelineBoardOrder: Stage[] = [...stageOrder, "perdido"];
+
 export const stageLabels: Record<Stage, string> = {
   nao_contactado: "Não contactado", contactado: "Contactado", reuniao_marcada: "Reunião marcada",
   reuniao_feita: "Reunião feita", proposta: "Proposta", piloto: "Piloto", cliente: "Cliente",
-  perdido: "Perdido", adiado: "Adiado",
+  perdido: "Recusado", adiado: "Adiado",
 };
 
 export const stageProbability: Record<Stage, number> = {

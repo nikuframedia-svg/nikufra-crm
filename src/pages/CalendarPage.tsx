@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { open } from "@tauri-apps/plugin-shell";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, RefreshCw, Users, Video } from "lucide-react";
 import { Button, EmptyState, PageHeader } from "../components/ui";
@@ -83,9 +82,8 @@ export function CalendarPage() {
     return grouped;
   }, [events, weekDays]);
 
-  async function openExternal(url: string) {
-    if ("__TAURI_INTERNALS__" in window) await open(url);
-    else window.open(url, "_blank", "noopener,noreferrer");
+  function openExternal(url: string) {
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   async function syncCalendar() {

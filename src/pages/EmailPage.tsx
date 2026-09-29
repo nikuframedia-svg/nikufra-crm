@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { open } from "@tauri-apps/plugin-shell";
 import { Archive, CheckCircle2, ChevronRight, Clock3, ExternalLink, FilePenLine, Inbox, MailCheck, Plus, RefreshCw, Search, Send, Sparkles, Users } from "lucide-react";
 import { useCRM } from "../state/crm-context";
 import { supabase } from "../lib/supabase";
+import { renderDraftTemplate } from "../lib/email-draft";
 import { formatPercentage } from "../lib/format";
 import type { Draft } from "../types";
 import { Button, Card, PageHeader, StageChip } from "../components/ui";
@@ -63,18 +63,14 @@ export function EmailPage() {
   const repliedContacts = new Set(activities.filter((activity) => activity.tipo === "email" && activity.direcao === "recebido").map((activity) => activity.contactoId).filter(Boolean));
   const contacted = new Set(sentEmails.map((activity) => activity.contactoId).filter(Boolean));
   const replyRate = contacted.size ? 100 * [...repliedContacts].filter((id) => contacted.has(id)).length / contacted.size : null;
+  const previewLead = eligible.find((lead) => selected.has(lead.id));
 
   function chooseTemplate(index: number) { setTemplateIndex(index); setSubject(templates[index].subject); setBody(templates[index].body); setSent(false); }
   function renderTemplate(text: string, lead: typeof leads[number]) {
-    return text
-      .replaceAll("{{nome}}", lead.nome.split(" ")[0])
-      .replaceAll("{{empresa}}", lead.empresa)
-      .replaceAll("{{vertical}}", lead.vertical)
-      .replaceAll("{{remetente}}", currentOwner?.nome ?? "Equipa Nikufra");
+    return renderDraftTemplate(text, lead, currentOwner?.nome);
   }
-  async function handleOpenGmail() {
-    if ("__TAURI_INTERNALS__" in window) await open("https://mail.google.com/mail/u/0/#drafts");
-    else window.open("https://mail.google.com/mail/u/0/#drafts", "_blank", "noopener,noreferrer");
+  function handleOpenGmail() {
+    window.open("https://mail.google.com/mail/u/0/#drafts", "_blank", "noopener,noreferrer");
   }
   async function handleGenerate() {
     setGenerating(true); setError(""); setSent(false);
@@ -126,6 +122,7 @@ export function EmailPage() {
               <label>Assunto<input value={subject} onChange={(event) => setSubject(event.target.value)} /></label>
               <label>Mensagem<textarea value={body} onChange={(event) => setBody(event.target.value)} rows={11} /></label>
               <div className="variable-row"><button>{"{{nome}}"}</button><button>{"{{empresa}}"}</button><button>{"{{vertical}}"}</button><button>{"{{remetente}}"}</button></div>
+              {previewLead ? <div className="draft-preview"><div><span>Pré-visualização</span><small>{previewLead.email}</small></div><strong>{renderTemplate(subject, previewLead)}</strong><pre>{renderTemplate(body, previewLead)}</pre></div> : null}
               {sent ? <div className="success-banner"><CheckCircle2 size={17} /><span><strong>{selected.size} rascunhos criados.</strong> Revê e envia cada um no Gmail.</span></div> : null}
               {error ? <div className="auth-error">{error}. Confirma a ligação Gmail nas definições.</div> : null}
               <Button className="generate-button" disabled={!selected.size || generating} onClick={handleGenerate}><FilePenLine size={16} />{generating ? "A criar rascunhos…" : `Criar ${selected.size || ""} rascunhos`}</Button>

@@ -1,6 +1,6 @@
 begin;
 
--- The desktop only needs synchronization status. Even encrypted refresh-token
+-- The browser client only needs synchronization status. Even encrypted refresh-token
 -- material remains server-only and cannot be selected through PostgREST.
 revoke select on public.google_tokens from authenticated;
 grant select (

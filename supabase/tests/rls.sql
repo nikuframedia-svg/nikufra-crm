@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap;
-select plan(13);
+select plan(14);
 
 select policies_are('public', 'empresas', array['empresas_read','empresas_insert','empresas_update']);
 select policies_are('public', 'contactos', array['contactos_read','contactos_insert','contactos_update']);
@@ -9,6 +9,7 @@ select policies_are('public', 'atividades', array['atividades_read','atividades_
 select policies_are('public', 'faturacao', array['faturacao_read','faturacao_admin_write']);
 select policies_are('public', 'objetivos', array['objetivos_read','objetivos_admin_write']);
 select policies_are('public', 'estado_historico', array['estado_historico_read']);
+select policies_are('public', 'follow_up_dismissals', array['follow_up_dismissals_read','follow_up_dismissals_insert','follow_up_dismissals_delete']);
 
 set local role anon;
 select throws_ok('select * from public.empresas', '42501', null, 'anon não lê empresas');

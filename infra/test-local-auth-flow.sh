@@ -122,7 +122,7 @@ before_magic_id="$(latest_message_id)"
 pkce_verifier="nikufra-crm-e2e-verifier-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 pkce_challenge="$(PKCE_VERIFIER="${pkce_verifier}" node -e "const c=require('node:crypto'); process.stdout.write(c.createHash('sha256').update(process.env.PKCE_VERIFIER).digest('base64url'))")"
 pkce_flow_id="0123456789abcdef0123456789abcdef"
-pkce_redirect="nikufra-crm://auth/callback?sb_flow_id=${pkce_flow_id}"
+pkce_redirect="http://localhost:1420/?sb_flow_id=${pkce_flow_id}"
 pkce_redirect_encoded="$(printf '%s' "${pkce_redirect}" | jq -sRr @uri)"
 otp_status="$(curl -sS -o "${TEST_TEMP_DIR}/otp.json" -w '%{http_code}' \
   -X POST "http://127.0.0.1:8000/auth/v1/otp?redirect_to=${pkce_redirect_encoded}" \
@@ -232,4 +232,4 @@ residual="$("${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc \
   "select (select count(*) from auth.users where email in ('${test_email}','${test_admin_email}')) + (select count(*) from public.user_invitations where email='${test_email}')")"
 [[ "${residual}" == 0 ]] || { echo "O teste deixou dados residuais" >&2; exit 1; }
 
-echo "OK login, sessão persistível, convite por email, reinvite seguro, callback desktop, acesso partilhado, isolamento member e limpeza"
+echo "OK login, sessão persistível, convite por email, reinvite seguro, callback web, acesso partilhado, isolamento member e limpeza"

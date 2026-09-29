@@ -25,7 +25,8 @@ Deno.serve(async (request) => {
     const invitation = { email: normalizedEmail, nome: normalizedName, invited_by: user.id, invited_at: new Date().toISOString(), used_at: null };
     const { error: invitationError } = await admin.from("user_invitations").upsert(invitation, { onConflict: "email" });
     if (invitationError) throw invitationError;
-    const { error } = await admin.auth.admin.inviteUserByEmail(normalizedEmail, { data: { nome: normalizedName }, redirectTo: "nikufra-crm://auth/callback" });
+    const redirectTo = new URL("/", Deno.env.get("APP_PUBLIC_URL") ?? Deno.env.get("SUPABASE_PUBLIC_URL")!).toString();
+    const { error } = await admin.auth.admin.inviteUserByEmail(normalizedEmail, { data: { nome: normalizedName }, redirectTo });
     if (error) {
       if (previousInvitation) await admin.from("user_invitations").upsert(previousInvitation, { onConflict: "email" });
       else await admin.from("user_invitations").delete().eq("email", normalizedEmail).eq("invited_by", user.id);

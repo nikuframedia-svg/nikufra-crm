@@ -58,6 +58,7 @@ export interface Opportunity {
   dataFechoPrevista: string;
   cicloAcordoMeses?: number;
   recorrenteAnual?: number;
+  valorProposta?: number;
   avaliacao?: number;
   notas?: string;
 }

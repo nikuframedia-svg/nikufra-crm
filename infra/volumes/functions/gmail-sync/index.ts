@@ -53,6 +53,12 @@ function titleCase(value: string) {
   return value.split(/[._-]+/).filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ") || "Contacto";
 }
 
+function contactDisplayName(name: string, email?: string | null) {
+  const cleaned = clean(name, 240);
+  if (cleaned && !cleaned.includes("@")) return cleaned;
+  return email ? titleCase(email.split("@")[0]) : "Contacto Google";
+}
+
 function contactName(header: string, email: string) {
   const beforeAddress = header.split("<")[0]?.replaceAll('"', "").trim();
   return beforeAddress && !beforeAddress.includes("@") ? beforeAddress.slice(0, 240) : titleCase(email.split("@")[0]);
@@ -98,6 +104,7 @@ async function mapLimit<T, R>(items: T[], limit: number, mapper: (item: T) => Pr
 async function ensureContact(admin: ReturnType<typeof adminClient>, seed: ContactSeed) {
   const email = clean(seed.email, 320).toLowerCase() || null;
   const resourceName = clean(seed.googleResourceName, 500) || null;
+  const resolvedName = contactDisplayName(seed.name, email);
   if (email) {
     const { data: suppressed } = await admin.from("contact_import_suppressions").select("id").eq("email", email).maybeSingle();
     if (suppressed) return null;
@@ -118,11 +125,11 @@ async function ensureContact(admin: ReturnType<typeof adminClient>, seed: Contac
     if (organization) ({ data: company } = await admin.from("empresas").select("id,nome").eq("nome_normalizado", normalized(organization)).limit(1).maybeSingle());
     if (!company && domain) ({ data: company } = await admin.from("empresas").select("id,nome").eq("email_domain", domain).limit(1).maybeSingle());
     if (!company) {
-      const companyName = organization || (domain ? titleCase(domain.split(".")[0]) : `${clean(seed.name, 220) || "Contacto"} (particular)`);
+      const companyName = organization || (domain ? titleCase(domain.split(".")[0]) : `${resolvedName || "Contacto"} (particular)`);
       const { data, error } = await admin.from("empresas").insert({ nome: companyName, nome_normalizado: normalized(companyName), email_domain: domain, vertical: "outro", pais: "PT", origem: seed.source === "Gmail" ? "outbound_email" : "rede_pessoal", notas: `Criada automaticamente por ${seed.source}` }).select("id,nome").single();
       if (error) throw error; company = data;
     }
-    const payload = { empresa_id: company.id, nome: clean(seed.name, 240) || email || "Contacto Google", cargo: clean(seed.role, 240) || null, email, telefone: clean(seed.phone, 80) || null, google_resource_name: resourceName, principal: false, estado: seed.contacted ? "contactado" : "nao_contactado", notas: `Criado automaticamente por ${seed.source}` };
+    const payload = { empresa_id: company.id, nome: resolvedName, cargo: clean(seed.role, 240) || null, email, telefone: clean(seed.phone, 80) || null, google_resource_name: resourceName, principal: false, estado: seed.contacted ? "contactado" : "nao_contactado", notas: `Criado automaticamente por ${seed.source}` };
     const { data, error } = await admin.from("contactos").insert(payload).select("id,empresa_id,email,nome,estado,data_reuniao,google_resource_name").single();
     if (error) {
       if (email) ({ data: contact } = await admin.from("contactos").select("id,empresa_id,email,nome,estado,data_reuniao,google_resource_name").eq("email", email).maybeSingle());
@@ -132,6 +139,7 @@ async function ensureContact(admin: ReturnType<typeof adminClient>, seed: Contac
   } else {
     const changes: Record<string, unknown> = {};
     if (resourceName && !contact.google_resource_name) changes.google_resource_name = resourceName;
+    if ((contact.nome.includes("@") || ["contacto", "contacto google"].includes(contact.nome.toLowerCase())) && resolvedName !== "Contacto Google") changes.nome = resolvedName;
     if (seed.contacted && contact.estado === "nao_contactado") { changes.estado = "contactado"; contact.estado = "contactado"; }
     if (clean(seed.phone, 80)) changes.telefone = clean(seed.phone, 80);
     if (clean(seed.role, 240)) changes.cargo = clean(seed.role, 240);
@@ -180,7 +188,7 @@ function personSeed(person: Record<string, any>, userId: string, source: "Google
   const primaryOrganization = person.organizations?.find((item: Record<string, any>) => item.current) ?? person.organizations?.[0];
   return {
     userId,
-    name: clean(primaryName?.displayName, 240) || clean(primaryEmail?.value, 320) || "Contacto Google",
+    name: contactDisplayName(clean(primaryName?.displayName, 240), clean(primaryEmail?.value, 320) || null),
     email: clean(primaryEmail?.value, 320) || null,
     phone: clean(primaryPhone?.value, 80) || null,
     role: clean(primaryOrganization?.title, 240) || null,

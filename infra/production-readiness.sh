@@ -55,40 +55,25 @@ else
   fail "backup diário recente"
 fi
 
-update_manifest="$(curl --fail --silent --show-error --max-time 15 "https://${CRM_DOMAIN}/updates/latest.json" 2>/dev/null || true)"
-download_manifest="$(curl --fail --silent --show-error --max-time 15 "https://${CRM_DOMAIN}/updates/downloads.json" 2>/dev/null || true)"
-if jq -e --argjson manifest "${update_manifest:-null}" '
-  ($manifest.version | type == "string" and length > 0) and
-  (["darwin-aarch64", "darwin-x86_64", "windows-x86_64"] | all(. as $platform |
-    $manifest.platforms[$platform].signature | type == "string" and length > 0
-  ))
-' >/dev/null 2>&1 <<<"${update_manifest:-null}"; then
-  pass "manifesto de updates assinado para Mac e Windows"
+web_html="$(curl --fail --silent --show-error --max-time 15 "https://${CRM_DOMAIN}/" 2>/dev/null || true)"
+if grep -q '<div id="root"></div>' <<<"${web_html}"; then
+  pass "aplicação web pública"
 else
-  fail "manifesto de updates assinado ainda não publicado"
+  fail "aplicação web pública"
 fi
 
-if jq -e --argjson downloads "${download_manifest:-null}" '
-  $downloads.trust.updaterSigned == true and
-  $downloads.trust.macosNotarized == true and
-  $downloads.trust.windowsAuthenticode == true
-' >/dev/null 2>&1 <<<"${download_manifest:-null}"; then
-  pass "instaladores notarizados e assinados pelos sistemas operativos"
+asset_path="$(grep -oE '/assets/[^" ]+\.js' <<<"${web_html}" | head -1 || true)"
+if [[ -n "${asset_path}" ]] && curl --fail --silent --show-error --head --max-time 15 \
+  "https://${CRM_DOMAIN}${asset_path}" >/dev/null 2>&1; then
+  pass "assets web versionados"
 else
-  fail "assinaturas oficiais Apple/Windows ainda não verificadas"
+  fail "assets web versionados"
 fi
 
-installers_ready=true
-for installer in Nikufra-CRM-macOS.dmg Nikufra-CRM-Windows.exe; do
-  if ! curl --fail --silent --show-error --head --max-time 15 \
-    "https://${CRM_DOMAIN}/updates/assets/${installer}" >/dev/null 2>&1; then
-    installers_ready=false
-  fi
-done
-if [[ "${installers_ready}" == true ]]; then
-  pass "instaladores públicos estáveis para Mac e Windows"
+if [[ "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 15 "https://${CRM_DOMAIN}/rota-inexistente-do-spa")" == 200 ]]; then
+  pass "fallback de navegação SPA"
 else
-  fail "instaladores públicos para Mac e Windows ainda não publicados"
+  fail "fallback de navegação SPA"
 fi
 
 if [[ "${failures}" -eq 0 ]]; then

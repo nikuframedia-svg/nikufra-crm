@@ -1,11 +1,7 @@
 import { activeUser, adminClient, corsHeaders, decryptToken, gmailAccessToken } from "../_shared/security.ts";
+import { base64UrlUtf8, encodeMimeHeader, encodeMimeTextBody } from "../_shared/mime.ts";
 
 type DraftRequest = { contactoId: string; destinatario: string; assunto: string; mensagem: string };
-
-function base64Url(value: string) {
-  const bytes = new TextEncoder().encode(value);
-  return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-}
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -24,8 +20,16 @@ Deno.serve(async (request) => {
     const filtered = drafts.filter((draft) => eligible.get(draft.contactoId) === draft.destinatario.toLowerCase());
     const accessToken = await gmailAccessToken(await decryptToken(tokenRow.refresh_token_encrypted));
     const results = await Promise.all(filtered.map(async (draft) => {
-      const mime = [`To: ${draft.destinatario}`, `Subject: ${draft.assunto}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "", draft.mensagem].join("\r\n");
-      const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/drafts", { method: "POST", headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" }, body: JSON.stringify({ message: { raw: base64Url(mime) } }) });
+      const mime = [
+        `To: ${draft.destinatario}`,
+        `Subject: ${encodeMimeHeader(draft.assunto)}`,
+        "MIME-Version: 1.0",
+        "Content-Type: text/plain; charset=UTF-8",
+        "Content-Transfer-Encoding: base64",
+        "",
+        encodeMimeTextBody(draft.mensagem),
+      ].join("\r\n");
+      const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/drafts", { method: "POST", headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" }, body: JSON.stringify({ message: { raw: base64UrlUtf8(mime) } }) });
       if (!response.ok) throw new Error(`Falha ao criar rascunho para ${draft.destinatario}`);
       return response.json();
     }));
