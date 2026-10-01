@@ -174,12 +174,129 @@ done
 sed -e '/^CREATE ROLE postgres;$/d' -e '/^ALTER ROLE postgres WITH /d' "${globals_plain}" \
   | docker exec -i "${container_name}" psql -v ON_ERROR_STOP=1 -h /tmp -U postgres -d postgres >/dev/null
 docker exec "${container_name}" createdb -h /tmp -U postgres "${test_db}"
-docker exec -i "${container_name}" pg_restore -h /tmp -U postgres --exit-on-error --no-owner -d "${test_db}" \
-  < "${archive_plain}"
 
 psql_test() {
-  docker exec "${container_name}" psql -v ON_ERROR_STOP=1 -h /tmp -U postgres -d "${test_db}" "$@"
+  docker exec -i "${container_name}" psql -v ON_ERROR_STOP=1 -h /tmp -U postgres -d "${test_db}" "$@"
 }
+
+# Supabase creates graphql_public.graphql from an event trigger while
+# pg_graphql is first installed. pg_dump correctly treats that wrapper as an
+# extension-generated object and omits its definition, but it still preserves
+# its non-default ACL. In a clean logical restore the event trigger itself is
+# restored only after CREATE EXTENSION, so a one-pass pg_restore reaches the
+# ACL with no wrapper function and aborts. Restore the three archive sections
+# explicitly and reconstruct only that well-known generated wrapper between
+# pre-data and post-data. Every other object/ACL remains under pg_restore's
+# global --exit-on-error validation.
+graphql_acl_needle='ACL graphql_public FUNCTION graphql("operationName" text, query text, variables jsonb, extensions jsonb)'
+graphql_acl_count="$(awk -v needle="${graphql_acl_needle}" 'index($0, needle) { count++ } END { print count + 0 }' "${archive_list}")"
+[[ "${graphql_acl_count}" =~ ^[0-9]+$ && "${graphql_acl_count}" -le 1 ]] || {
+  echo "Falha no drill: o arquivo contém ${graphql_acl_count} ACLs pg_graphql inesperados." >&2
+  exit 1
+}
+graphql_acl_expected=false
+[[ "${graphql_acl_count}" == 0 ]] || graphql_acl_expected=true
+graphql_wrapper_repaired=false
+
+if [[ "${graphql_acl_expected}" == true ]]; then
+  # pg_dump classifies this particular ACL as pre-data, before the generated
+  # wrapper it refers to can exist in a fresh cluster. Defer exactly its one
+  # TOC entry; do not exclude any other object or tolerate any restore error.
+  predata_list="${work_dir}/predata-without-generated-graphql-acl.list"
+  graphql_acl_list="${work_dir}/generated-graphql-acl.list"
+  awk -v needle="${graphql_acl_needle}" \
+    '{ if (index($0, needle)) print ";" $0; else print }' "${archive_list}" > "${predata_list}"
+  grep -F "${graphql_acl_needle}" "${archive_list}" > "${graphql_acl_list}"
+  docker exec -i "${container_name}" sh -ceu 'umask 077; cat > /tmp/predata.list' < "${predata_list}"
+  docker exec -i "${container_name}" sh -ceu 'umask 077; cat > /tmp/graphql-acl.list' < "${graphql_acl_list}"
+  docker exec -i "${container_name}" pg_restore -h /tmp -U postgres --exit-on-error --no-owner \
+    --section=pre-data --use-list=/tmp/predata.list -d "${test_db}" < "${archive_plain}"
+else
+  docker exec -i "${container_name}" pg_restore -h /tmp -U postgres --exit-on-error --no-owner \
+    --section=pre-data -d "${test_db}" < "${archive_plain}"
+fi
+
+if [[ "${graphql_acl_expected}" == true ]]; then
+  graphql_predata_state="$(psql_test -Atc "select
+    exists (select 1 from pg_extension where extname='pg_graphql'),
+    to_regnamespace('graphql_public') is not null,
+    to_regprocedure('graphql.resolve(text,jsonb,text,jsonb)') is not null,
+    to_regprocedure('graphql_public.graphql(text,text,jsonb,jsonb)') is not null")"
+  case "${graphql_predata_state}" in
+    't|t|t|t')
+      ;;
+    't|t|t|f')
+      psql_test >/dev/null <<'SQL'
+CREATE FUNCTION graphql_public.graphql(
+  "operationName" text DEFAULT NULL,
+  query text DEFAULT NULL,
+  variables jsonb DEFAULT NULL,
+  extensions jsonb DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE sql
+AS $function$
+  SELECT graphql.resolve(
+    query := query,
+    variables := coalesce(variables, '{}'),
+    "operationName" := "operationName",
+    extensions := extensions
+  );
+$function$;
+ALTER EXTENSION pg_graphql ADD FUNCTION graphql_public.graphql(text, text, jsonb, jsonb);
+ALTER FUNCTION graphql_public.graphql(text, text, jsonb, jsonb) OWNER TO supabase_admin;
+SQL
+      graphql_wrapper_repaired=true
+      ;;
+    *)
+      echo "Falha no drill: o ACL pg_graphql existe no arquivo, mas a extensão/base correspondente não foi restaurada (${graphql_predata_state})." >&2
+      exit 1
+      ;;
+  esac
+
+  # Replay the original ACL from the archive once its generated target exists.
+  # This remains an ordinary fail-closed pg_restore operation, not hand-written
+  # permission substitution.
+  docker exec -i "${container_name}" pg_restore -h /tmp -U postgres --exit-on-error --no-owner \
+    --use-list=/tmp/graphql-acl.list -d "${test_db}" < "${archive_plain}"
+  [[ "$(psql_test -Atc "select to_regprocedure('graphql_public.graphql(text,text,jsonb,jsonb)') is not null")" == t ]] || {
+    echo "Falha no drill: o wrapper pg_graphql desapareceu após reaplicar o ACL original." >&2
+    exit 1
+  }
+fi
+
+docker exec -i "${container_name}" pg_restore -h /tmp -U postgres --exit-on-error --no-owner \
+  --section=data -d "${test_db}" < "${archive_plain}"
+if [[ "${graphql_acl_expected}" == true ]]; then
+  [[ "$(psql_test -Atc "select to_regprocedure('graphql_public.graphql(text,text,jsonb,jsonb)') is not null")" == t ]] || {
+    echo "Falha no drill: o wrapper pg_graphql desapareceu durante o restauro de dados." >&2
+    exit 1
+  }
+fi
+docker exec -i "${container_name}" pg_restore -h /tmp -U postgres --exit-on-error --no-owner \
+  --section=post-data -d "${test_db}" < "${archive_plain}"
+
+if [[ "${graphql_acl_expected}" == true ]]; then
+  [[ "$(psql_test -Atc "select to_regprocedure('graphql_public.graphql(text,text,jsonb,jsonb)') is not null")" == t ]] || {
+    echo "Falha no drill: o wrapper pg_graphql desapareceu durante o restauro post-data." >&2
+    exit 1
+  }
+  psql_test -Atc "select
+    to_regprocedure('graphql_public.graphql(text,text,jsonb,jsonb)') is not null
+    and exists (
+      select 1
+      from pg_depend dependency
+      join pg_extension extension on extension.oid=dependency.refobjid
+      where dependency.classid='pg_proc'::regclass
+        and dependency.objid='graphql_public.graphql(text,text,jsonb,jsonb)'::regprocedure
+        and dependency.deptype='e'
+        and extension.extname='pg_graphql'
+    )
+    and has_function_privilege('anon', 'graphql_public.graphql(text,text,jsonb,jsonb)', 'EXECUTE')
+    and has_function_privilege('authenticated', 'graphql_public.graphql(text,text,jsonb,jsonb)', 'EXECUTE')
+    and has_function_privilege('service_role', 'graphql_public.graphql(text,text,jsonb,jsonb)', 'EXECUTE')" \
+    | grep -qx t
+fi
 
 # Core CRM proof always runs, including service role and a negative RLS/ACL
 # assertion. This also makes a pre-migration backup drill valid on the first
@@ -290,7 +407,7 @@ elapsed="$(( $(date +%s) - started_at ))"
 mkdir -p "${REPORT_DIR}"
 chmod 700 "${REPORT_DIR}"
 report="${REPORT_DIR}/$(date -u +%Y-%m-%dT%H%M%SZ).txt"
-printf 'backup=%s\nglobals=%s\nrestored_at=%s\nelapsed_seconds=%s\ncluster=isolated\nglobals_replayed=true\noutreach_schema=%s\nacl_smoke=%s\ncounts=%s\nresult=ok\n' \
-  "${remote_name}" "${globals_name}" "$(date -u +%FT%TZ)" "${elapsed}" "${outreach_schema}" "${acl_smoke}" "${counts}" > "${report}"
+printf 'backup=%s\nglobals=%s\nrestored_at=%s\nelapsed_seconds=%s\ncluster=isolated\nglobals_replayed=true\npg_graphql_wrapper_repaired=%s\noutreach_schema=%s\nacl_smoke=%s\ncounts=%s\nresult=ok\n' \
+  "${remote_name}" "${globals_name}" "$(date -u +%FT%TZ)" "${elapsed}" "${graphql_wrapper_repaired}" "${outreach_schema}" "${acl_smoke}" "${counts}" > "${report}"
 chmod 600 "${report}"
 echo "Restauro integral comprovado em ${elapsed}s: ${counts}. Relatório: ${report}"
