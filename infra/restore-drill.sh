@@ -104,6 +104,7 @@ cleanup() {
 trap cleanup EXIT
 
 archive="${work_dir}/${remote_name}"
+archive_plain="${work_dir}/${remote_name%.gpg}"
 globals_archive="${work_dir}/${globals_name}"
 globals_plain="${work_dir}/${globals_name%.gpg}"
 "${RCLONE_BIN}" copyto "${RCLONE_REMOTE}/daily/${remote_name}" "${archive}"
@@ -120,11 +121,16 @@ grep -q '^CREATE ROLE service_role;' "${globals_plain}"
 
 # ACL entries must be present in the logical archive; otherwise a successful
 # data restore would silently lose the authorization model.
-archive_list="${work_dir}/archive.list"
+# Decipher to the private, automatically cleaned work directory first. Listing
+# a custom archive directly from a pipe lets pg_restore close stdin after the
+# TOC and makes gpg fail with SIGPIPE even when the archive is valid.
 gpg --batch --quiet --pinentry-mode loopback --passphrase-file "${BACKUP_ENCRYPTION_KEY_FILE}" \
-  --decrypt "${archive}" | docker run --rm -i --network none --read-only \
+  --output "${archive_plain}" --decrypt "${archive}"
+chmod 600 "${archive_plain}"
+archive_list="${work_dir}/archive.list"
+docker run --rm -i --network none --read-only \
     --cap-drop ALL --security-opt no-new-privileges:true --entrypoint pg_restore \
-    "${POSTGRES_IMAGE}" --list > "${archive_list}"
+    "${POSTGRES_IMAGE}" --list < "${archive_plain}" > "${archive_list}"
 grep -Eq ' (ACL|DEFAULT ACL) ' "${archive_list}" || {
   echo "O dump offsite não contém ACLs/default ACLs." >&2
   exit 1
@@ -167,8 +173,8 @@ done
 sed -e '/^CREATE ROLE postgres;$/d' -e '/^ALTER ROLE postgres WITH /d' "${globals_plain}" \
   | docker exec -i "${container_name}" psql -v ON_ERROR_STOP=1 -h /tmp -U postgres -d postgres >/dev/null
 docker exec "${container_name}" createdb -h /tmp -U postgres "${test_db}"
-gpg --batch --quiet --pinentry-mode loopback --passphrase-file "${BACKUP_ENCRYPTION_KEY_FILE}" \
-  --decrypt "${archive}" | docker exec -i "${container_name}" pg_restore -h /tmp -U postgres --exit-on-error --no-owner -d "${test_db}"
+docker exec -i "${container_name}" pg_restore -h /tmp -U postgres --exit-on-error --no-owner -d "${test_db}" \
+  < "${archive_plain}"
 
 psql_test() {
   docker exec "${container_name}" psql -v ON_ERROR_STOP=1 -h /tmp -U postgres -d "${test_db}" "$@"

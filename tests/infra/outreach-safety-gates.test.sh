@@ -145,6 +145,21 @@ grep -Fq "name='202609300002_outreach_invariants_and_migration.sql'" "${restore_
 grep -Fq "to_regprocedure('private.outreach_assert_provider_permit(uuid,text)') is not null" "${restore_drill}" \
   || fail "restore drill não usa sentinels independentes suficientes para 300002"
 
+# Listing a custom pg_dump archive is allowed to stop after its TOC. Piping
+# gpg directly into that command turns the expected early close into SIGPIPE
+# under pipefail, so backup verification must consume the complete plaintext
+# and the restore drill must list a private temporary file.
+backup_production="${ROOT}/infra/backup-production.sh"
+if grep -Eq -- '--decrypt .*\| .*pg_restore --list' "${backup_production}" "${restore_drill}"; then
+  fail "validação de backup ainda pode gerar falso SIGPIPE do gpg"
+fi
+grep -Fq 'daily_plain_hash="$(' "${backup_production}" \
+  || fail "backup não valida integralmente o plaintext cifrado"
+grep -Fq 'archive_plain="${work_dir}/${remote_name%.gpg}"' "${restore_drill}" \
+  || fail "restore drill não materializa o dump decifrado no workdir privado"
+grep -Fq '< "${archive_plain}" > "${archive_list}"' "${restore_drill}" \
+  || fail "restore drill não lista o ficheiro decifrado sem pipeline prematuro"
+
 classifier_definition="$(awk '/^classify_outreach_schema\(\) \{/{copy=1} copy{print} copy && /^}/{exit}' "${restore_drill}")"
 [[ -n "${classifier_definition}" ]] || fail "classificador de fase Outreach ausente"
 eval "${classifier_definition}"
