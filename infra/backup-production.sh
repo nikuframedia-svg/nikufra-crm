@@ -85,11 +85,29 @@ mv -- "${globals_encrypted_partial}" "${globals_encrypted}"
 (cd "${DAILY_DIR}" && sha256sum "$(basename "${globals_encrypted}")" > "$(basename "${globals_encrypted}").sha256")
 chmod 600 "${globals_encrypted}.sha256"
 
-# Autentica a cifra e valida o formato antes de qualquer upload.
-gpg --batch --quiet --pinentry-mode loopback --passphrase-file "${BACKUP_ENCRYPTION_KEY_FILE}" \
-  --decrypt "${encrypted}" | "${COMPOSE[@]}" exec -T db pg_restore --list >/dev/null
-gpg --batch --quiet --pinentry-mode loopback --passphrase-file "${BACKUP_ENCRYPTION_KEY_FILE}" \
-  --decrypt "${globals_encrypted}" >/dev/null
+# Autentica a cifra e consome todo o plaintext antes de qualquer upload.
+# `pg_restore --list` pode fechar stdin depois de ler apenas o TOC de um dump
+# custom, o que provoca SIGPIPE no gpg e um falso negativo com `pipefail`.
+# O formato já foi validado acima no dump original; aqui comparamos o hash do
+# fluxo integral decifrado com o artefacto original para provar a cifra.
+daily_plain_hash="$(
+  gpg --batch --quiet --pinentry-mode loopback --passphrase-file "${BACKUP_ENCRYPTION_KEY_FILE}" \
+    --decrypt "${encrypted}" | sha256sum | awk '{print $1}'
+)"
+daily_expected_hash="$(awk '{print $1}' "${daily}.sha256")"
+[[ "${daily_plain_hash}" == "${daily_expected_hash}" ]] || {
+  echo "A cifra do dump não reproduz o backup original." >&2
+  exit 1
+}
+globals_plain_hash="$(
+  gpg --batch --quiet --pinentry-mode loopback --passphrase-file "${BACKUP_ENCRYPTION_KEY_FILE}" \
+    --decrypt "${globals_encrypted}" | sha256sum | awk '{print $1}'
+)"
+globals_expected_hash="$(awk '{print $1}' "${globals}.sha256")"
+[[ "${globals_plain_hash}" == "${globals_expected_hash}" ]] || {
+  echo "A cifra de roles/globals não reproduz o backup original." >&2
+  exit 1
+}
 grep -q '^CREATE ROLE ' "${globals}"
 "${RCLONE_BIN}" copyto "${encrypted}" "${RCLONE_REMOTE}/daily/$(basename "${encrypted}")"
 "${RCLONE_BIN}" copyto "${encrypted}.sha256" "${RCLONE_REMOTE}/daily/$(basename "${encrypted}.sha256")"
