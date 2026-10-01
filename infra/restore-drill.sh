@@ -7,6 +7,62 @@ BACKUP_ROOT="${NIKUFRA_BACKUP_ROOT:-/home/luis/services/nikufra-crm/backups}"
 REPORT_DIR="${BACKUP_ROOT}/restore-drills"
 POSTGRES_IMAGE="supabase/postgres:15.8.1.085"
 
+classify_outreach_schema() {
+  local ledger_present="$1"
+  local base_recorded="$2"
+  local invariants_recorded="$3"
+  local base_all="$4"
+  local base_any="$5"
+  local invariants_all="$6"
+  local invariants_any="$7"
+  local flag
+
+  for flag in "$@"; do
+    [[ "${flag}" =~ ^[tf]$ ]] || return 2
+  done
+  [[ "${base_all}" == f || "${base_any}" == t ]] || return 1
+  [[ "${invariants_all}" == f || "${invariants_any}" == t ]] || return 1
+
+  # Before the first unified deploy there may be no migration ledger at all,
+  # or a ledger containing only historical CRM migrations. Both are coherent
+  # only while every Outreach sentinel is absent.
+  if [[ "${ledger_present}" == f ]]; then
+    if [[ "${base_recorded}" == f && "${invariants_recorded}" == f \
+      && "${base_any}" == f && "${invariants_any}" == f ]]; then
+      printf '%s\n' absent
+      return 0
+    fi
+    return 1
+  fi
+  if [[ "${base_recorded}" == f && "${invariants_recorded}" == f ]]; then
+    if [[ "${base_any}" == f && "${invariants_any}" == f ]]; then
+      printf '%s\n' absent
+      return 0
+    fi
+    return 1
+  fi
+
+  # 202609300001 and its ledger row commit atomically. A partial rollout is
+  # therefore valid only when all base objects exist and no 300002 sentinel or
+  # ledger row exists yet.
+  if [[ "${base_recorded}" == t && "${invariants_recorded}" == f \
+    && "${base_all}" == t && "${invariants_any}" == f ]]; then
+    printf '%s\n' partial
+    return 0
+  fi
+
+  # Likewise, a completed rollout requires both atomic ledger rows and every
+  # selected sentinel from both migrations. Anything else is schema drift or
+  # an incomplete restore and must not produce a successful recovery report.
+  if [[ "${base_recorded}" == t && "${invariants_recorded}" == t \
+    && "${base_all}" == t && "${invariants_all}" == t ]]; then
+    printf '%s\n' complete
+    return 0
+  fi
+
+  return 1
+}
+
 [[ -f "${ENV_FILE}" ]] || { echo "Falta ${ENV_FILE}." >&2; exit 1; }
 set -a
 # shellcheck disable=SC1090
@@ -127,9 +183,74 @@ if psql_test -c "set role authenticated; select 1 from auth.users limit 1" >/dev
   exit 1
 fi
 
-outreach_present="$(psql_test -Atc "select to_regclass('public.outreach_campaigns') is not null")"
+# Migration 202609300001 creates the normalized base and 202609300002 installs
+# the operational invariants. The ledger is the authority for which atomic
+# phase committed; multiple independent objects prove that the corresponding
+# phase was restored in full. Probe ledger existence separately because SQL
+# resolves a missing relation even from an unselected CASE branch.
+migration_ledger_present="$(psql_test -Atc \
+  "select to_regclass('nikufra_meta.schema_migrations') is not null")"
+outreach_base_recorded=f
+outreach_invariants_recorded=f
+if [[ "${migration_ledger_present}" == t ]]; then
+  outreach_ledger_flags="$(psql_test -Atc "select
+    count(*) filter (where name='202609300001_outreach_normalized_schema.sql') = 1,
+    count(*) filter (where name='202609300002_outreach_invariants_and_migration.sql') = 1
+    from nikufra_meta.schema_migrations")"
+  IFS='|' read -r outreach_base_recorded outreach_invariants_recorded <<<"${outreach_ledger_flags}"
+fi
+
+outreach_object_flags="$(psql_test -Atc "select
+  (
+    to_regtype('public.outreach_system_mode') is not null
+    and to_regclass('public.outreach_system_state') is not null
+    and to_regclass('public.outreach_campaigns') is not null
+    and to_regclass('public.communication_suppressions') is not null
+    and to_regclass('private.outreach_credentials') is not null
+    and exists (
+      select 1 from pg_attribute
+      where attrelid=to_regclass('public.profiles')
+        and attname='outreach_role' and not attisdropped
+    )
+  ),
+  (
+    to_regtype('public.outreach_system_mode') is not null
+    or to_regclass('public.outreach_system_state') is not null
+    or to_regclass('public.outreach_campaigns') is not null
+    or to_regclass('public.communication_suppressions') is not null
+    or to_regclass('private.outreach_credentials') is not null
+    or exists (
+      select 1 from pg_attribute
+      where attrelid=to_regclass('public.profiles')
+        and attname='outreach_role' and not attisdropped
+    )
+  ),
+  (
+    to_regprocedure('public.claim_google_provider_message(text,text)') is not null
+    and to_regprocedure('private.import_outreach_legacy_snapshot(jsonb,boolean)') is not null
+    and to_regprocedure('private.outreach_assert_provider_permit(uuid,text)') is not null
+  ),
+  (
+    to_regprocedure('public.claim_google_provider_message(text,text)') is not null
+    or to_regprocedure('private.import_outreach_legacy_snapshot(jsonb,boolean)') is not null
+    or to_regprocedure('private.outreach_assert_provider_permit(uuid,text)') is not null
+  )")"
+IFS='|' read -r outreach_base_all outreach_base_any \
+  outreach_invariants_all outreach_invariants_any <<<"${outreach_object_flags}"
+
+if ! outreach_schema="$(classify_outreach_schema \
+  "${migration_ledger_present}" \
+  "${outreach_base_recorded}" \
+  "${outreach_invariants_recorded}" \
+  "${outreach_base_all}" \
+  "${outreach_base_any}" \
+  "${outreach_invariants_all}" \
+  "${outreach_invariants_any}")"; then
+  echo "Falha no drill: ledger e objetos Outreach estão incoerentes (ledger=${migration_ledger_present}, base_row=${outreach_base_recorded}, invariants_row=${outreach_invariants_recorded}, base_all=${outreach_base_all}, base_any=${outreach_base_any}, invariants_all=${outreach_invariants_all}, invariants_any=${outreach_invariants_any})." >&2
+  exit 1
+fi
 acl_smoke="service_role,authenticated-auth-negative"
-if [[ "${outreach_present}" == t ]]; then
+if [[ "${outreach_schema}" == complete ]]; then
   grep -q '^CREATE ROLE outreach_service;' "${globals_plain}"
   grep -q '^CREATE ROLE nikufra_wal;' "${globals_plain}"
   psql_test -Atc "select exists (select 1 from pg_roles role where role.rolname='outreach_service' and role.rolcanlogin and not role.rolsuper and not role.rolinherit and not role.rolbypassrls and not role.rolcreatedb and not role.rolcreaterole and not role.rolreplication and not exists (select 1 from pg_auth_members membership where membership.member=role.oid)) and exists (select 1 from pg_roles role where role.rolname='nikufra_wal' and role.rolcanlogin and role.rolreplication and not role.rolsuper and not role.rolinherit and not role.rolbypassrls and not role.rolcreatedb and not role.rolcreaterole and not exists (select 1 from pg_auth_members membership where membership.member=role.oid))" | grep -qx t
@@ -162,7 +283,7 @@ elapsed="$(( $(date +%s) - started_at ))"
 mkdir -p "${REPORT_DIR}"
 chmod 700 "${REPORT_DIR}"
 report="${REPORT_DIR}/$(date -u +%Y-%m-%dT%H%M%SZ).txt"
-printf 'backup=%s\nglobals=%s\nrestored_at=%s\nelapsed_seconds=%s\ncluster=isolated\nglobals_replayed=true\nacl_smoke=%s\ncounts=%s\nresult=ok\n' \
-  "${remote_name}" "${globals_name}" "$(date -u +%FT%TZ)" "${elapsed}" "${acl_smoke}" "${counts}" > "${report}"
+printf 'backup=%s\nglobals=%s\nrestored_at=%s\nelapsed_seconds=%s\ncluster=isolated\nglobals_replayed=true\noutreach_schema=%s\nacl_smoke=%s\ncounts=%s\nresult=ok\n' \
+  "${remote_name}" "${globals_name}" "$(date -u +%FT%TZ)" "${elapsed}" "${outreach_schema}" "${acl_smoke}" "${counts}" > "${report}"
 chmod 600 "${report}"
 echo "Restauro integral comprovado em ${elapsed}s: ${counts}. Relatório: ${report}"

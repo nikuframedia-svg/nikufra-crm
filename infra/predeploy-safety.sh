@@ -38,8 +38,14 @@ if [[ -n "${legacy_outreach_running}" ]]; then
   exit 1
 fi
 
-persisted_state="$("${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc \
-  "select case when to_regclass('public.outreach_system_state') is null then 'not-installed' else (select mode::text || ':' || send_enabled::text from public.outreach_system_state where id=true) end")"
+state_table_installed="$("${COMPOSE[@]}" exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d postgres -Atc \
+  "select to_regclass('public.outreach_system_state') is not null")"
+if [[ "${state_table_installed}" == t ]]; then
+  persisted_state="$("${COMPOSE[@]}" exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d postgres -Atc \
+    "select mode::text || ':' || send_enabled::text from public.outreach_system_state where id=true")"
+else
+  persisted_state=not-installed
+fi
 if [[ "${persisted_state}" != "not-installed" && "${persisted_state}" != "disabled:false" ]]; then
   echo "O hard gate persistido não está desligado (${persisted_state})." >&2
   exit 1
