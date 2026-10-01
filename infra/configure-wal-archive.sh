@@ -52,6 +52,35 @@ begin
     raise exception 'nikufra_wal role hardening verification failed';
   end if;
 end $$;
+
+-- PostgreSQL's parsed view is the authority: fail before starting the WAL
+-- receiver if the intended rule is missing, duplicated or rejected. Compare
+-- the database and role arrays directly so broader lists cannot pass.
+do $$
+declare
+  matching_hba_rules bigint;
+begin
+  if exists (select 1 from pg_hba_file_rules where error is not null) then
+    raise exception 'pg_hba.conf contains invalid rules';
+  end if;
+
+  select count(*)
+  into matching_hba_rules
+  from pg_hba_file_rules
+  where type = 'host'
+    and database = array['replication']::text[]
+    and user_name = array['nikufra_wal']::text[]
+    and address = 'samenet'
+    and netmask is null
+    and auth_method = 'scram-sha-256'
+    and coalesce(cardinality(options), 0) = 0
+    and error is null;
+
+  if matching_hba_rules <> 1 then
+    raise exception 'nikufra_wal HBA verification failed: expected one rule, found %',
+      matching_hba_rules;
+  end if;
+end $$;
 SQL
 
 echo "Role de replicação e diretórios PITR preparados."
