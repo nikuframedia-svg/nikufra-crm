@@ -146,10 +146,11 @@ docker run --rm --network none -v "${volume_name}:/data" --entrypoint chown \
 docker run -d --name "${container_name}" --network none --user 105:106 \
   --read-only --cap-drop ALL --security-opt no-new-privileges:true \
   --tmpfs /tmp:size=64m,noexec,nosuid,nodev \
+  --tmpfs /run/pgsodium:rw,exec,size=64k,mode=0700,uid=105,gid=106,nosuid,nodev \
   --tmpfs /var/run/postgresql:size=8m,noexec,nosuid,nodev \
   -v "${volume_name}:/var/lib/postgresql/data" --entrypoint bash \
   "${POSTGRES_IMAGE}" -ceu \
-  "initdb -D /var/lib/postgresql/data --auth-local=trust --auth-host=reject >/tmp/initdb.log && exec postgres -D /var/lib/postgresql/data -c config_file=/etc/postgresql/postgresql.conf -c hba_file=/var/lib/postgresql/data/pg_hba.conf -c ident_file=/var/lib/postgresql/data/pg_ident.conf -c listen_addresses='' -c unix_socket_directories=/tmp -c cron.database_name=${test_db}" >/dev/null
+  "umask 077; head -c 32 /dev/urandom | od -A n -t x1 | tr -d ' \\n' > /run/pgsodium/root.key; printf '%s\\n' '#!/bin/sh' 'exec cat /run/pgsodium/root.key' > /run/pgsodium/getkey.sh; chmod 0400 /run/pgsodium/root.key; chmod 0500 /run/pgsodium/getkey.sh /run/pgsodium; initdb -D /var/lib/postgresql/data --auth-local=trust --auth-host=reject >/tmp/initdb.log && exec postgres -D /var/lib/postgresql/data -c config_file=/etc/postgresql/postgresql.conf -c hba_file=/var/lib/postgresql/data/pg_hba.conf -c ident_file=/var/lib/postgresql/data/pg_ident.conf -c listen_addresses='' -c unix_socket_directories=/tmp -c cron.database_name=${test_db} -c pgsodium.getkey_script=/run/pgsodium/getkey.sh -c vault.getkey_script=/run/pgsodium/getkey.sh" >/dev/null
 container_started=true
 
 ready=false

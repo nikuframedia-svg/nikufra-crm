@@ -159,6 +159,17 @@ grep -Fq 'archive_plain="${work_dir}/${remote_name%.gpg}"' "${restore_drill}" \
   || fail "restore drill não materializa o dump decifrado no workdir privado"
 grep -Fq '< "${archive_plain}" > "${archive_list}"' "${restore_drill}" \
   || fail "restore drill não lista o ficheiro decifrado sem pipeline prematuro"
+grep -Fq -- '--tmpfs /run/pgsodium:rw,exec,size=64k,mode=0700,uid=105,gid=106,nosuid,nodev' "${restore_drill}" \
+  || fail "restore drill read-only não fornece keydir pgsodium privado e gravável"
+if grep -Fq -- '--tmpfs /etc/postgresql-custom:' "${restore_drill}"; then
+  fail "restore drill esconde os includes Supabase ao sobrepor /etc/postgresql-custom"
+fi
+grep -Fq "chmod 0400 /run/pgsodium/root.key" "${restore_drill}" \
+  || fail "chave pgsodium efémera não fica limitada ao utilizador postgres"
+grep -Fq "chmod 0500 /run/pgsodium/getkey.sh /run/pgsodium" "${restore_drill}" \
+  || fail "script e diretório pgsodium efémeros permanecem substituíveis após bootstrap"
+grep -Fq -- '-c pgsodium.getkey_script=/run/pgsodium/getkey.sh -c vault.getkey_script=/run/pgsodium/getkey.sh' "${restore_drill}" \
+  || fail "restore drill não encaminha pgsodium/vault para a chave efémera"
 
 classifier_definition="$(awk '/^classify_outreach_schema\(\) \{/{copy=1} copy{print} copy && /^}/{exit}' "${restore_drill}")"
 [[ -n "${classifier_definition}" ]] || fail "classificador de fase Outreach ausente"
