@@ -28,6 +28,7 @@ chmod 700 "${key_dir}"
 
 validate_key_file() {
   "${DOCKER_BIN}" run --rm --network none --read-only --cap-drop ALL \
+    --cap-add DAC_READ_SEARCH \
     --security-opt no-new-privileges:true \
     -v "${key_file}:/key:ro" --entrypoint sh "${POSTGRES_IMAGE}" -ceu '
       key="$(cat /key)"
@@ -114,7 +115,8 @@ if [[ -n "${db_container}" ]] && "${DOCKER_BIN}" exec "${db_container}" test -f 
   running_hash="$("${DOCKER_BIN}" exec "${db_container}" sha256sum /etc/postgresql-custom/pgsodium_root.key | awk '{print $1}')"
   persisted_hash="$(
     "${DOCKER_BIN}" run --rm --network none --read-only --cap-drop ALL \
-      --security-opt no-new-privileges:true -v "${key_file}:/key:ro" \
+      --cap-add DAC_READ_SEARCH --security-opt no-new-privileges:true \
+      -v "${key_file}:/key:ro" \
       --entrypoint sha256sum "${POSTGRES_IMAGE}" /key | awk '{print $1}'
   )"
   [[ "${running_hash}" == "${persisted_hash}" ]] || {
