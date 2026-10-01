@@ -18,15 +18,21 @@ As credenciais Google são a única configuração partilhada entre local e serv
 ### Chave SSH restrita do CI
 
 O workflow de produção usa um único forced command. Antes de o ativar, instalar
-`release-publish.sh` no checkout persistente e associar **a chave pública de
-deploy**, nunca a privada, ao utilizador de serviço:
+o validador e depois `release-publish.sh` no checkout persistente, e associar
+**a chave pública de deploy**, nunca a privada, ao utilizador de serviço:
 
 ```bash
+install -m 755 infra/verify-outreach-image-archive.py /home/luis/services/nikufra-crm/infra/verify-outreach-image-archive.py
 install -m 755 infra/release-publish.sh /home/luis/services/nikufra-crm/infra/release-publish.sh
 install -d -m 700 ~/.ssh
 printf '%s\n' 'restrict,command="/home/luis/services/nikufra-crm/infra/release-publish.sh" ssh-ed25519 <DEPLOY_PUBLIC_KEY>' >> ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
 ```
+
+Ao atualizar estes dois ficheiros, instalar sempre primeiro o validador e só
+depois o publisher, antes de iniciar o workflow. A autocópia no fim de uma
+release bem-sucedida mantém o bootstrap corrente, mas não consegue corrigir um
+forced command antigo quando essa mesma versão antiga já bloqueia o deploy.
 
 `restrict` desliga PTY, forwarding, agent e `~/.ssh/rc`. O forced command só
 aceita `publish-backend`, `verify-backend`, `publish-web` e

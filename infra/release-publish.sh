@@ -40,6 +40,12 @@ OUTREACH_IMAGE_ID=".outreach-image.id"
 OUTREACH_IMAGE_REF=".outreach-image.ref"
 CORE_IMAGE_MANIFEST=".core-images.manifest"
 CORE_IMAGE_CHECKSUM=".core-images.sha256"
+OUTREACH_IMAGE_VALIDATOR="${SCRIPT_DIR}/verify-outreach-image-archive.py"
+
+[[ -f "${OUTREACH_IMAGE_VALIDATOR}" && ! -L "${OUTREACH_IMAGE_VALIDATOR}" ]] || {
+  echo "Validador do archive Outreach ausente ou inseguro." >&2
+  exit 1
+}
 
 sha256_file() {
   sha256sum "$1" | awk '{print $1}'
@@ -82,39 +88,7 @@ verify_outreach_image_release() {
     echo "Referência da imagem Outreach não corresponde às fontes da release." >&2
     return 1
   }
-  python3 - "${archive}" "${expected_id}" "${expected_ref}" <<'PY'
-import json
-import pathlib
-import sys
-import tarfile
-
-archive, expected_id, expected_ref = sys.argv[1:]
-with tarfile.open(archive, "r:") as bundle:
-    manifest_member = bundle.getmember("manifest.json")
-    if not manifest_member.isfile() or manifest_member.size > 1024 * 1024:
-        raise SystemExit("Manifest OCI ausente ou inválido")
-    manifest_file = bundle.extractfile(manifest_member)
-    if manifest_file is None:
-        raise SystemExit("Manifest OCI ilegível")
-    manifest = json.load(manifest_file)
-    if not isinstance(manifest, list) or len(manifest) != 1:
-        raise SystemExit("Archive Outreach deve conter exatamente uma imagem")
-    entry = manifest[0]
-    if entry.get("RepoTags") != [expected_ref]:
-        raise SystemExit("Archive Outreach contém referência inesperada")
-    config = entry.get("Config")
-    if not isinstance(config, str) or pathlib.PurePosixPath(config).name.removesuffix(".json") != expected_id.removeprefix("sha256:"):
-        raise SystemExit("Archive Outreach não contém o Image ID declarado")
-    config_member = bundle.getmember(config)
-    if not config_member.isfile():
-        raise SystemExit("Config da imagem Outreach não é ficheiro regular")
-    layers = entry.get("Layers")
-    if not isinstance(layers, list) or not layers:
-        raise SystemExit("Archive Outreach não contém layers")
-    for layer in layers:
-        if not isinstance(layer, str) or not bundle.getmember(layer).isfile():
-            raise SystemExit("Layer inválida no archive Outreach")
-PY
+  python3 "${OUTREACH_IMAGE_VALIDATOR}" "${archive}" "${expected_id}" "${expected_ref}"
 }
 
 export_outreach_image() {
@@ -627,6 +601,7 @@ required = {
     "infra/release-publish.sh",
     "infra/release-sentinel.sh",
     "infra/restore-drill.sh",
+    "infra/verify-outreach-image-archive.py",
     "infra/wal-offsite-sync.sh",
     "infra/web-publish.sh",
     "infra/docker-compose.yml",
@@ -815,6 +790,10 @@ PY
     # Keep the stable forced-command bootstrap current for the next run. The
     # secret env and backup tree in RELEASE_ROOT are never replaced.
     if [[ "${SCRIPT_DIR}" != "${release_dir}/infra" ]]; then
+      install -m 755 "${release_dir}/infra/verify-outreach-image-archive.py" \
+        "${SCRIPT_DIR}/.verify-outreach-image-archive.py.new"
+      mv -f -- "${SCRIPT_DIR}/.verify-outreach-image-archive.py.new" \
+        "${SCRIPT_DIR}/verify-outreach-image-archive.py"
       install -m 755 "${release_dir}/infra/release-publish.sh" "${SCRIPT_DIR}/.release-publish.sh.new"
       mv -f -- "${SCRIPT_DIR}/.release-publish.sh.new" "${SCRIPT_DIR}/release-publish.sh"
     fi
