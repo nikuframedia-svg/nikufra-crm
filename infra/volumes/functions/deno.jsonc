@@ -1,6 +1,6 @@
 {
   "imports": {
-    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.112.3",
-    "standardwebhooks": "https://esm.sh/standardwebhooks@1.0.0"
+    "@supabase/supabase-js": "./vendor/supabase-js.bundle.js",
+    "standardwebhooks": "./vendor/standardwebhooks.bundle.js"
   }
 }

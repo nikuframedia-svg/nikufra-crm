@@ -9,6 +9,7 @@ Aplicação web interna para gerir pipeline, relações comerciais, atividade, m
 - Tabela editável de empresas e contactos, ficha completa, seleção e importação CSV com reconhecimento automático de colunas.
 - Sugestões de follow-up por antiguidade e frequência, com intervalo temporal e opção de rejeitar.
 - Gmail com histórico, templates, opt-out e criação de rascunhos — nunca envia automaticamente.
+- Outreach integrado com audiências CRM, campanhas, sequências, caixa de respostas, mailboxes e deliverability, protegido por canary e kill switch.
 - Google Calendar da equipa em modo de leitura.
 - Chat de equipa em tempo real com canais, conversas privadas, membros e agentes Claude com ferramentas MCP remotas.
 - Métricas, faturação, objetivos, eliminação auditada de lançamentos, performance de equipa, atribuições, roles e segurança.
@@ -52,13 +53,14 @@ Um administrador pode configurar um agente Anthropic e, opcionalmente, um ou mai
 
 ```bash
 pnpm security:audit
-pnpm test
-pnpm build
+pnpm test:all
+pnpm build:all
 ```
 
 ## Estrutura
 
 - `src/`: aplicação React.
+- `services/outreach/`: API e worker privados do módulo Outreach.
 - `supabase/migrations/`: schema, triggers, RLS e métricas SQL.
 - `supabase/tests/`: testes das políticas críticas.
 - `infra/`: deployment web, proxy, TLS, autenticação, sync e backups.
@@ -70,3 +72,5 @@ pnpm build
 O browser recebe apenas a chave pública `anon`. A `SERVICE_ROLE_KEY`, os segredos Google e a chave de encriptação vivem apenas no servidor. Cada utilizador tem sessão persistente no browser e tokens Google cifrados e isolados por titular; os dados CRM partilhados são controlados por RLS e roles.
 
 Antes de uma alteração de infraestrutura: executar os testes, confirmar um backup recente, validar o restauro e verificar `infra/production-readiness.sh`. A aplicação web mantém uma versão anterior no servidor para rollback atómico.
+
+O rollout e a operação segura do módulo de campanhas estão documentados em [docs/outreach-operations.md](docs/outreach-operations.md). O outbound nasce desligado e só pode passar por `disabled → canary → live` com todos os gates técnicos e aprovação administrativa.

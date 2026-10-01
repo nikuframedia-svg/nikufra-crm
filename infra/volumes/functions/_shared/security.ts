@@ -54,12 +54,47 @@ export async function decryptToken(value: string) {
 }
 
 export async function gmailAccessToken(refreshToken: string) {
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_id: Deno.env.get("GOOGLE_CLIENT_ID")!, client_secret: Deno.env.get("GOOGLE_CLIENT_SECRET")!, refresh_token: refreshToken, grant_type: "refresh_token" }),
-  });
-  if (!response.ok) throw new Error(`Google token refresh falhou (${response.status})`);
-  const payload = await response.json();
-  return payload.access_token as string;
+  const clientId = Deno.env.get("GOOGLE_CLIENT_ID");
+  const clientSecret = Deno.env.get("GOOGLE_CLIENT_SECRET");
+  if (!clientId || !clientSecret) throw new Error("Google OAuth não está configurado no servidor");
+
+  let lastError = "resposta desconhecida";
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        signal: AbortSignal.timeout(15_000),
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken, grant_type: "refresh_token" }),
+      });
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "erro de rede";
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** attempt)));
+        continue;
+      }
+      throw new Error(`Google token refresh indisponível após 3 tentativas (${lastError})`);
+    }
+
+    const payload = await response.json().catch(() => ({})) as {
+      access_token?: string;
+      error?: string;
+      error_description?: string;
+    };
+    if (response.ok && payload.access_token) return payload.access_token;
+
+    lastError = payload.error_description || payload.error || `HTTP ${response.status}`;
+    const transient = response.status === 429 || response.status >= 500;
+    if (!transient || attempt === 2) {
+      const kind = transient ? "indisponível após 3 tentativas" : "recusado; volta a autorizar a conta se o acesso foi revogado";
+      throw new Error(`Google token refresh ${kind} (${response.status}: ${lastError})`);
+    }
+    const retryAfter = Number(response.headers.get("retry-after"));
+    const delay = Number.isFinite(retryAfter) && retryAfter > 0
+      ? Math.min(retryAfter * 1000, 5_000)
+      : 250 * (2 ** attempt);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+  throw new Error(`Google token refresh falhou (${lastError})`);
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import {
   BarChart3,
@@ -20,12 +20,15 @@ import {
   Moon,
   Plus,
   Search,
+  Send,
   Settings,
   Sun,
   Users,
 } from "lucide-react";
 import { useCRM } from "../state/crm-context";
 import { supabase } from "../lib/supabase";
+import { canSeeOutreachNavigation } from "../features/outreach/access";
+import { useSettings as useOutreachSettings } from "../features/outreach/hooks";
 import { Wordmark } from "./Logo";
 import { Button, Modal, StageChip } from "./ui";
 
@@ -35,6 +38,7 @@ const navItems = [
   { to: "/pipeline", label: "Pipeline", icon: KanbanSquare },
   { to: "/leads", label: "Empresas e leads", icon: Building2 },
   { to: "/email", label: "Email", icon: Mail },
+  { to: "/outreach", label: "Outreach", icon: Send },
   { to: "/chat", label: "Chat", icon: MessageCircleMore },
   { to: "/calendario", label: "Calendário", icon: CalendarDays },
   { to: "/metricas", label: "Métricas", icon: BarChart3 },
@@ -46,11 +50,13 @@ export function AppShell() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const { leads, opportunities, addActivity, team, dataMode, currentUserId } = useCRM();
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const [dark, setDark] = useState(() => localStorage.getItem("nikufra:theme") === "dark");
   const [commandOpen, setCommandOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const sidebarRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -70,14 +76,38 @@ export function AppShell() {
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
 
+  useEffect(() => { setMobileOpen(false); }, [pathname]);
+
+  useEffect(() => {
+    if (!mobileOpen || !sidebarRef.current || !window.matchMedia("(max-width: 820px)").matches) return;
+    const node = sidebarRef.current;
+    const previous = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusable = Array.from(node.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+    focusable[0]?.focus();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); setMobileOpen(false); return; }
+      if (event.key !== "Tab" || !focusable.length) return;
+      const first = focusable[0]; const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    node.addEventListener("keydown", handleKey);
+    return () => { node.removeEventListener("keydown", handleKey); document.body.style.overflow = previousOverflow; previous?.focus(); };
+  }, [mobileOpen]);
+
   const searchResults = useMemo(() => {
     const normalized = query.toLowerCase().trim();
     if (!normalized) return [];
     return leads.filter((lead) => `${lead.nome} ${lead.empresa} ${lead.email}`.toLowerCase().includes(normalized)).slice(0, 6);
   }, [leads, query]);
 
-  const activeLabel = pathname.startsWith("/empresas/") ? "Ficha de empresa" : navItems.find((item) => item.to === pathname)?.label ?? "Definições";
-  const currentUser = team.find((owner) => owner.id === currentUserId) ?? team[0];
+  const currentUser = team.find((owner) => owner.id === currentUserId) ?? (dataMode === "local" ? team[0] : undefined);
+  const outreachSettings = useOutreachSettings(Boolean(currentUser));
+  const outreachAdminOnly = outreachSettings.data?.adminOnly ?? (import.meta.env.VITE_OUTREACH_ADMIN_ONLY !== "false");
+  const visibleNavItems = navItems.filter((item) => item.to !== "/outreach" || canSeeOutreachNavigation(outreachAdminOnly, currentUser?.role));
+  const activeLabel = pathname.startsWith("/empresas/") ? "Ficha de empresa" : navItems.find((item) => item.to === "/" ? pathname === "/" : pathname.startsWith(item.to))?.label ?? "Definições";
 
   function handleNewActivity(formData: FormData) {
     const opportunityId = String(formData.get("opportunityId"));
@@ -100,15 +130,16 @@ export function AppShell() {
   }
 
   return (
-    <div className={`app-shell ${collapsed ? "app-shell--collapsed" : ""}`}>
-      <aside className="sidebar">
-        <div className="sidebar__brand"><Wordmark compact={collapsed} /><button className="icon-button" onClick={() => setCollapsed((value) => !value)} aria-label="Alternar barra lateral"><Menu size={17} /></button></div>
+    <div className={`app-shell ${collapsed ? "app-shell--collapsed" : ""} ${mobileOpen ? "app-shell--drawer-open" : ""}`}>
+      <button className="sidebar-scrim" aria-label="Fechar menu" tabIndex={mobileOpen ? 0 : -1} onClick={() => setMobileOpen(false)} />
+      <aside ref={sidebarRef} id="main-navigation" className={`sidebar ${mobileOpen ? "sidebar--open" : ""}`} aria-label="Menu principal">
+        <div className="sidebar__brand"><Wordmark compact={collapsed && !mobileOpen} /><button className="icon-button sidebar-collapse" onClick={() => mobileOpen ? setMobileOpen(false) : setCollapsed((value) => !value)} aria-label={mobileOpen ? "Fechar menu" : "Alternar barra lateral"}><Menu size={17} /></button></div>
         <button className="global-search" onClick={() => setCommandOpen(true)}><Search size={16} /><span>Pesquisar...</span><kbd>⌘K</kbd></button>
         <nav aria-label="Navegação principal">
           <p className="nav-label">Trabalho</p>
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon;
-            return <Link key={item.to} to={item.to} className="nav-item" activeProps={{ className: "nav-item nav-item--active" }}><Icon size={17} /><span>{item.label}</span></Link>;
+            return <Link key={item.to} to={item.to} className="nav-item" activeOptions={{ exact: item.to === "/" }} activeProps={{ className: "nav-item nav-item--active" }}><Icon size={17} /><span>{item.label}</span></Link>;
           })}
           <p className="nav-label nav-label--second">Sistema</p>
           <Link to="/definicoes" className="nav-item" activeProps={{ className: "nav-item nav-item--active" }}><Settings size={17} /><span>Definições</span></Link>
@@ -119,7 +150,7 @@ export function AppShell() {
       </aside>
       <div className="workspace">
         <div className="titlebar">
-          <div><span className="status-dot" />{activeLabel}<small>{dataMode === "supabase" ? "Sincronizado com servidor" : "Dataset Nikufra real · local"}</small></div>
+          <div><button className="icon-button mobile-menu-button" aria-label="Abrir menu" aria-controls="main-navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(true)}><Menu size={18} /></button><span className="status-dot" />{activeLabel}<small>{dataMode === "supabase" ? "Sincronizado com servidor" : "Dataset Nikufra real · local"}</small></div>
           <div className="titlebar__actions">
             <button className="icon-button" onClick={() => setDark((value) => !value)} aria-label="Alternar tema">{dark ? <Sun size={17} /> : <Moon size={17} />}</button>
             <button className="icon-button" aria-label="Notificações"><Bell size={17} /></button>

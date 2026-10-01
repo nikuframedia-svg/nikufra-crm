@@ -14,8 +14,28 @@ const RevenuePage = lazy(() => import("./pages/RevenuePage").then((module) => ({
 const TeamPage = lazy(() => import("./pages/TeamPage").then((module) => ({ default: module.TeamPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const CompanyPage = lazy(() => import("./pages/CompanyPage").then((module) => ({ default: module.CompanyPage })));
+const OutreachLayout = lazy(() => import("./features/outreach/components").then((module) => ({ default: module.OutreachLayout })));
+const OutreachOverviewPage = lazy(() => import("./features/outreach/pages/OverviewPage").then((module) => ({ default: module.OutreachOverviewPage })));
+const OutreachCampaignsPage = lazy(() => import("./features/outreach/pages/CampaignsPage").then((module) => ({ default: module.OutreachCampaignsPage })));
+const OutreachCampaignDetailPage = lazy(() => import("./features/outreach/pages/CampaignDetailPage").then((module) => ({ default: module.OutreachCampaignDetailPage })));
+const OutreachRepliesPage = lazy(() => import("./features/outreach/pages/RepliesPage").then((module) => ({ default: module.OutreachRepliesPage })));
+const OutreachAudiencesPage = lazy(() => import("./features/outreach/pages/AudiencesPage").then((module) => ({ default: module.OutreachAudiencesPage })));
+const OutreachMailboxesPage = lazy(() => import("./features/outreach/pages/MailboxesPage").then((module) => ({ default: module.OutreachMailboxesPage })));
+const OutreachDeliverabilityPage = lazy(() => import("./features/outreach/pages/DeliverabilityPage").then((module) => ({ default: module.OutreachDeliverabilityPage })));
+const OutreachSettingsPage = lazy(() => import("./features/outreach/pages/SettingsPage").then((module) => ({ default: module.OutreachSettingsPage })));
 
 const rootRoute = createRootRoute({ component: AppShell });
+const outreachRoute = createRoute({ getParentRoute: () => rootRoute, path: "/outreach", component: OutreachLayout });
+const outreachRoutes = [
+  createRoute({ getParentRoute: () => outreachRoute, path: "/", component: OutreachOverviewPage }),
+  createRoute({ getParentRoute: () => outreachRoute, path: "/campanhas", component: OutreachCampaignsPage }),
+  createRoute({ getParentRoute: () => outreachRoute, path: "/campanhas/$campaignId", component: OutreachCampaignDetailPage }),
+  createRoute({ getParentRoute: () => outreachRoute, path: "/respostas", component: OutreachRepliesPage }),
+  createRoute({ getParentRoute: () => outreachRoute, path: "/audiencias", component: OutreachAudiencesPage }),
+  createRoute({ getParentRoute: () => outreachRoute, path: "/mailboxes", component: OutreachMailboxesPage }),
+  createRoute({ getParentRoute: () => outreachRoute, path: "/deliverability", component: OutreachDeliverabilityPage }),
+  createRoute({ getParentRoute: () => outreachRoute, path: "/definicoes", component: OutreachSettingsPage }),
+];
 const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/", component: OverviewPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/sugestoes", component: SuggestionsPage }),
@@ -29,6 +49,7 @@ const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/equipa", component: TeamPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/definicoes", component: SettingsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/empresas/$companyId", component: CompanyPage }),
+  outreachRoute.addChildren(outreachRoutes),
 ];
 
 const routeTree = rootRoute.addChildren(routes);

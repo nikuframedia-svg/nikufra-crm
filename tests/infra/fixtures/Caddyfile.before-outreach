@@ -1,0 +1,28 @@
+{
+  email ops@example.com
+}
+
+crm.nikufra.ai {
+  encode zstd gzip
+
+  @api path /auth/* /rest/* /realtime/* /functions/* /.well-known/*
+  handle @api {
+    reverse_proxy 127.0.0.1:8800
+  }
+
+  @assets path /assets/*
+  handle @assets {
+    root * /srv/ocr-portal/crm-app
+    file_server
+  }
+
+  handle {
+    root * /srv/ocr-portal/crm-app
+    try_files {path} /index.html
+    file_server
+  }
+}
+
+other.example.com {
+  respond "untouched"
+}

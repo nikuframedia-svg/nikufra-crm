@@ -19,6 +19,8 @@ if [[ ! -e "${DOCKER_CONFIG_DIR}/cli-plugins/docker-compose" && -x /Applications
   ln -s /Applications/Docker.app/Contents/Resources/cli-plugins/docker-compose "${DOCKER_CONFIG_DIR}/cli-plugins/docker-compose"
 fi
 export DOCKER_CONFIG="${DOCKER_CONFIG_DIR}"
-export DOCKER_HOST="unix://${HOME}/.docker/run/docker.sock"
+if [[ -S "${HOME}/.docker/run/docker.sock" ]]; then
+  export DOCKER_HOST="unix://${HOME}/.docker/run/docker.sock"
+fi
 
 "${DOCKER_BIN}" compose --env-file "${SCRIPT_DIR}/.env" -f "${SCRIPT_DIR}/docker-compose.yml" -f "${SCRIPT_DIR}/docker-compose.local.yml" stop

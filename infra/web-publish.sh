@@ -11,18 +11,48 @@ set -Eeuo pipefail
 PUBLISH_ROOT="${NIKUFRA_WEB_PUBLISH_ROOT:-/home/luis/stacks/caddy/portal}"
 ACTIVE_DIR="${PUBLISH_ROOT}/crm-app"
 PREVIOUS_DIR="${PUBLISH_ROOT}/crm-app.previous"
-ARCHIVE="$(mktemp "${PUBLISH_ROOT}/.crm-web.XXXXXX.tar.gz")"
+RELEASE_MARKER="${PUBLISH_ROOT}/crm-app.release"
+ARCHIVE_SOURCE="${NIKUFRA_WEB_ARCHIVE_SOURCE:-}"
+VALIDATE_ONLY="${NIKUFRA_WEB_VALIDATE_ONLY:-false}"
+RELEASE_ID="${NIKUFRA_WEB_RELEASE_ID:-}"
+EXPECTED_ARCHIVE_SHA256="${NIKUFRA_WEB_BUNDLE_SHA256:-}"
+archive_owned=false
+if [[ -n "${ARCHIVE_SOURCE}" ]]; then
+  [[ "${ARCHIVE_SOURCE}" == /* && -f "${ARCHIVE_SOURCE}" && ! -L "${ARCHIVE_SOURCE}" ]] || {
+    echo "Arquivo web interno inválido" >&2
+    exit 1
+  }
+  ARCHIVE="${ARCHIVE_SOURCE}"
+else
+  ARCHIVE="$(mktemp "${PUBLISH_ROOT}/.crm-web.XXXXXX.tar.gz")"
+  archive_owned=true
+fi
 STAGE="$(mktemp -d "${PUBLISH_ROOT}/.crm-web-stage.XXXXXX")"
+marker_partial=""
 
 cleanup() {
-  rm -f -- "${ARCHIVE}"
+  if [[ "${archive_owned}" == true ]]; then rm -f -- "${ARCHIVE}"; fi
+  if [[ -n "${marker_partial}" ]]; then rm -f -- "${marker_partial}"; fi
   if [[ -d "${STAGE}" ]]; then rm -rf -- "${STAGE}"; fi
 }
 trap cleanup EXIT
 
 umask 022
-timeout 120 dd bs=1M count=256 iflag=fullblock of="${ARCHIVE}" status=none
+if [[ "${archive_owned}" == true ]]; then
+  timeout 120 dd bs=1M count=256 iflag=fullblock of="${ARCHIVE}" status=none
+fi
 [[ -s "${ARCHIVE}" ]] || { echo "Build web vazia" >&2; exit 1; }
+archive_sha256="$(sha256sum "${ARCHIVE}" | awk '{print $1}')"
+if [[ -n "${EXPECTED_ARCHIVE_SHA256}" ]]; then
+  [[ "${EXPECTED_ARCHIVE_SHA256}" =~ ^[0-9a-f]{64}$ && "${archive_sha256}" == "${EXPECTED_ARCHIVE_SHA256}" ]] || {
+    echo "Checksum do build web diverge" >&2
+    exit 1
+  }
+fi
+if [[ -n "${RELEASE_ID}" ]]; then
+  [[ "${RELEASE_ID}" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$ ]] || { echo "Release web inválida" >&2; exit 1; }
+fi
+[[ "${VALIDATE_ONLY}" == false || "${VALIDATE_ONLY}" == true ]] || { echo "Modo de validação inválido" >&2; exit 1; }
 
 python3 - "${ARCHIVE}" <<'PY'
 import pathlib
@@ -59,11 +89,34 @@ grep -q '<div id="root"></div>' "${STAGE}/index.html" || { echo "Entrada React i
 find "${STAGE}" -type d -exec chmod 755 {} +
 find "${STAGE}" -type f -exec chmod 644 {} +
 
+if [[ "${VALIDATE_ONLY}" == true ]]; then
+  echo "Build web validada (${archive_sha256})"
+  exit 0
+fi
+
+if [[ -n "${RELEASE_ID}" ]]; then
+  marker_partial="$(mktemp "${PUBLISH_ROOT}/.crm-app.release.XXXXXX")"
+  printf 'release_id=%s\nbundle_sha256=%s\n' "${RELEASE_ID}" "${archive_sha256}" > "${marker_partial}"
+  chmod 644 "${marker_partial}"
+fi
+
 rm -rf -- "${PREVIOUS_DIR}"
 if [[ -d "${ACTIVE_DIR}" ]]; then mv -- "${ACTIVE_DIR}" "${PREVIOUS_DIR}"; fi
 if ! mv -- "${STAGE}" "${ACTIVE_DIR}"; then
   if [[ -d "${PREVIOUS_DIR}" ]]; then mv -- "${PREVIOUS_DIR}" "${ACTIVE_DIR}"; fi
   exit 1
+fi
+
+if [[ -n "${RELEASE_ID}" ]]; then
+  if ! mv -f -- "${marker_partial}" "${RELEASE_MARKER}"; then
+    # The marker is part of the atomic publication proof. If it cannot move,
+    # restore the previous document root before reporting failure.
+    if mv -- "${ACTIVE_DIR}" "${STAGE}"; then
+      if [[ -d "${PREVIOUS_DIR}" ]]; then mv -- "${PREVIOUS_DIR}" "${ACTIVE_DIR}"; fi
+    fi
+    exit 1
+  fi
+  marker_partial=""
 fi
 
 echo "Aplicação web publicada em ${ACTIVE_DIR}"

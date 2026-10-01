@@ -1,0 +1,12 @@
+process.env.NODE_ENV = "test";
+process.env.DATABASE_URL = "postgresql://outreach:outreach@127.0.0.1:5432/outreach_test";
+process.env.SUPABASE_URL = "http://127.0.0.1:54321";
+process.env.SUPABASE_ANON_KEY = "test-anon-key";
+process.env.OUTREACH_PUBLIC_URL = "https://crm.nikufra.ai";
+process.env.OUTREACH_FRONTEND_URL = "https://crm.nikufra.ai";
+process.env.OUTREACH_CORS_ORIGINS = "https://crm.nikufra.ai";
+process.env.OUTREACH_SEND_ENABLED = "false";
+process.env.OUTREACH_ADMIN_ONLY = "true";
+process.env.OUTREACH_ENCRYPTION_KEYS = "1:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=,2:AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
+process.env.OUTREACH_ACTIVE_KEY_VERSION = "2";
+process.env.OUTREACH_HMAC_SECRET = "0123456789abcdef0123456789abcdef";

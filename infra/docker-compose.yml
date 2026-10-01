@@ -1,5 +1,32 @@
 name: nikufra-crm
 
+x-outreach-environment: &outreach-environment
+  DATABASE_URL: postgresql://outreach_service:${OUTREACH_DATABASE_PASSWORD}@db:5432/postgres
+  SUPABASE_URL: http://kong:8000
+  SUPABASE_ANON_KEY: ${ANON_KEY}
+  OUTREACH_PUBLIC_URL: https://${CRM_DOMAIN}
+  OUTREACH_FRONTEND_URL: https://${CRM_DOMAIN}
+  OUTREACH_CORS_ORIGINS: https://${CRM_DOMAIN}
+  OUTREACH_SEND_ENABLED: ${OUTREACH_SEND_ENABLED:-false}
+  OUTREACH_SHADOW_MODE: ${OUTREACH_SHADOW_MODE:-true}
+  OUTREACH_ADMIN_ONLY: ${OUTREACH_ADMIN_ONLY:-true}
+  OUTREACH_INBOUND_ENABLED: "true"
+  OUTREACH_ENCRYPTION_KEYS: ${OUTREACH_ENCRYPTION_KEYS}
+  OUTREACH_ACTIVE_KEY_VERSION: ${OUTREACH_ENCRYPTION_CURRENT_VERSION:-1}
+  OUTREACH_HMAC_SECRET: ${OUTREACH_STATE_HMAC_SECRET}
+  OUTREACH_WEBHOOK_SECRET: ${OUTREACH_WEBHOOK_SECRET}
+  OUTREACH_UNSUBSCRIBE_SECRET: ${OUTREACH_UNSUBSCRIBE_SECRET}
+  OUTREACH_CANARY_ALLOWLIST: ${OUTREACH_CANARY_ALLOWLIST:-joao@nikufra.ai,joaomilhazes71@gmail.com}
+  OUTREACH_ENABLED_PROVIDERS: google
+  GOOGLE_CLIENT_ID: ${OUTREACH_GOOGLE_CLIENT_ID}
+  GOOGLE_CLIENT_SECRET: ${OUTREACH_GOOGLE_CLIENT_SECRET}
+  GOOGLE_PUBSUB_VERIFICATION_TOKEN: ${OUTREACH_GOOGLE_PUBSUB_VERIFICATION_TOKEN:-}
+  OUTREACH_SCHEDULER_INTERVAL_SECONDS: ${OUTREACH_SCHEDULER_INTERVAL_SECONDS:-15}
+  OUTREACH_INBOUND_INTERVAL_SECONDS: ${OUTREACH_INBOUND_SYNC_INTERVAL_SECONDS:-60}
+  OUTREACH_WORKER_HEALTH_PORT: 8788
+  OUTREACH_ENABLE_MICROSOFT: "false"
+  OUTREACH_ENABLE_SMTP: "false"
+
 services:
   db:
     image: supabase/postgres:15.8.1.085
@@ -206,11 +233,69 @@ services:
       retries: 5
     networks: [backend]
 
+  outreach-api:
+    build:
+      context: ..
+      dockerfile: services/outreach/Dockerfile
+    image: nikufra-outreach:${OUTREACH_IMAGE_TAG:-local}
+    restart: unless-stopped
+    init: true
+    depends_on:
+      db: { condition: service_healthy }
+      auth: { condition: service_healthy }
+      kong: { condition: service_healthy }
+    environment:
+      <<: *outreach-environment
+      OUTREACH_PROCESS: api
+      SERVER_PORT: 8787
+    expose: ["8787"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 200
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks: [backend]
+
+  outreach-worker:
+    image: nikufra-outreach:${OUTREACH_IMAGE_TAG:-local}
+    restart: unless-stopped
+    init: true
+    depends_on:
+      db: { condition: service_healthy }
+      outreach-api: { condition: service_healthy }
+    command: ["node", "dist/worker.js"]
+    environment:
+      <<: *outreach-environment
+      OUTREACH_PROCESS: worker
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 200
+    stop_grace_period: 45s
+    expose: ["8788"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8788/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks: [backend]
+
   caddy:
     image: caddy:2.10.2-alpine
     restart: unless-stopped
     depends_on:
       kong: { condition: service_healthy }
+      outreach-api: { condition: service_healthy }
     environment:
       CRM_DOMAIN: ${CRM_DOMAIN}
       TLS_EMAIL: ${TLS_EMAIL}

@@ -29,6 +29,14 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
 
+  outreach-api:
+    environment:
+      OUTREACH_PUBLIC_URL: http://localhost:1420
+      OUTREACH_FRONTEND_URL: http://localhost:1420
+      OUTREACH_CORS_ORIGINS: http://localhost:1420,http://127.0.0.1:1420
+    ports:
+      - "127.0.0.1:${OUTREACH_API_PORT:-8787}:8787"
+
   mailpit:
     image: axllent/mailpit:v1.31.0
     restart: unless-stopped

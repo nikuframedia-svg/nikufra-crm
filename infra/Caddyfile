@@ -20,6 +20,11 @@
     reverse_proxy kong:8000
   }
 
+  @outreach path /api/outreach/*
+  handle @outreach {
+    reverse_proxy outreach-api:8787
+  }
+
   @assets path /assets/*
   handle @assets {
     root * /srv/crm
