@@ -21,9 +21,11 @@ pass() { printf 'OK   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1"; failures=$((failures + 1)); }
 db_value() { "${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc "$1"; }
 
+# `lsf` emits an offset-free timestamp in the process timezone. Normalize it
+# to UTC because `record_is_recent` deliberately parses the field as UTC.
 remote_record() {
   local remote_dir="$1" include="$2"
-  "${RCLONE_BIN}" lsf "${remote_dir}" --files-only --include "${include}" \
+  TZ=UTC "${RCLONE_BIN}" lsf "${remote_dir}" --files-only --include "${include}" \
     --format 'tp' --separator '|' 2>/dev/null | sort | tail -1
 }
 
@@ -41,7 +43,7 @@ record_is_recent() {
 
 remote_named_record() {
   local remote_dir="$1" name="$2"
-  "${RCLONE_BIN}" lsf "${remote_dir}" --files-only --include "${name}" \
+  TZ=UTC "${RCLONE_BIN}" lsf "${remote_dir}" --files-only --include "${name}" \
     --format 'tp' --separator '|' 2>/dev/null | awk -F'|' -v expected="${name}" '$2 == expected { print; exit }'
 }
 
@@ -110,7 +112,9 @@ unauthenticated="$(curl --silent --output /dev/null --write-out '%{http_code}' -
 
 schema_ready="$(db_value "select to_regclass('public.outreach_campaigns') is not null and to_regclass('public.communication_suppressions') is not null and to_regclass('private.outreach_credentials') is not null")"
 [[ "${schema_ready}" == t ]] && pass "schema normalizado aplicado" || fail "schema Outreach incompleto"
-rls_ready="$(db_value "select coalesce(bool_and(relrowsecurity and relforcerowsecurity),false) from pg_class where relnamespace='public'::regnamespace and relname like 'outreach_%'")"
+# pg_class also contains indexes, whose RLS flags are always false. Restrict the
+# aggregate to the public tables that form the canonical Outreach schema.
+rls_ready="$(db_value "select coalesce(bool_and(relrowsecurity and relforcerowsecurity),false) from pg_class where relnamespace='public'::regnamespace and relkind in ('r','p') and (relname like 'outreach_%' or relname='communication_suppressions')")"
 [[ "${rls_ready}" == t ]] && pass "RLS e FORCE RLS ativos" || fail "RLS Outreach incompleto"
 private_web_grants="$(db_value "select count(*) from information_schema.table_privileges where table_schema='private' and grantee in ('anon','authenticated','PUBLIC')")"
 [[ "${private_web_grants}" == 0 ]] && pass "schema private sem grants de browser" || fail "foram encontrados ${private_web_grants} grants de browser em private"
