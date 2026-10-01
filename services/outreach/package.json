@@ -21,16 +21,16 @@
     "imapflow": "2.1.2",
     "mailparser": "3.9.32",
     "nodemailer": "10.0.13",
-    "pg": "8.16.3",
-    "zod": "4.1.8"
+    "pg": "8.23.0",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@types/mailparser": "3.9.0",
-    "@types/node": "22.13.10",
+    "@types/node": "22.20.4",
     "@types/nodemailer": "8.0.2",
-    "@types/pg": "8.15.5",
-    "tsx": "4.20.5",
-    "typescript": "5.5.4",
+    "@types/pg": "8.23.1",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
     "vitest": "4.1.11"
   },
   "pnpm": {
