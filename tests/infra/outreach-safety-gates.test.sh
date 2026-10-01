@@ -83,6 +83,23 @@ grep -Fq "private.outreach_delivery_ledger where status in ('sending','accepted'
   "${ROOT}/infra/outreach-readiness.sh" \
   || fail "readiness live não bloqueia ledgers de entrega não terminais"
 
+# `rclone lsf` renders its offset-free modification time in the process local
+# timezone. Readiness parses that field as UTC, so both listing helpers must
+# force UTC or a host east of UTC rejects fresh uploads as future-dated.
+unset -f remote_record remote_named_record
+eval "$(awk '/^remote_record\(\) \{/{copy=1} copy{print} copy && /^}$/{exit}' "${ROOT}/infra/outreach-readiness.sh")"
+eval "$(awk '/^remote_named_record\(\) \{/{copy=1} copy{print} copy && /^}$/{exit}' "${ROOT}/infra/outreach-readiness.sh")"
+cat > "${WORK}/rclone-tz-probe" <<'EOF'
+#!/usr/bin/env bash
+printf '%s|expected.gpg\n' "${TZ:-unset}"
+EOF
+chmod +x "${WORK}/rclone-tz-probe"
+RCLONE_BIN="${WORK}/rclone-tz-probe"
+[[ "$(TZ=Europe/Berlin remote_record remote:bucket '*.gpg')" == 'UTC|expected.gpg' ]] \
+  || fail "listagem do objeto offsite não força timestamps UTC"
+[[ "$(TZ=Europe/Berlin remote_named_record remote:bucket expected.gpg)" == 'UTC|expected.gpg' ]] \
+  || fail "listagem do sidecar offsite não força timestamps UTC"
+
 # PostgreSQL resolves every relation in a CASE expression before evaluating
 # the chosen branch. The first production deploy must therefore prove table
 # existence in a separate statement before it can query the Outreach row.

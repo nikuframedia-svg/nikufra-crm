@@ -21,9 +21,11 @@ pass() { printf 'OK   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1"; failures=$((failures + 1)); }
 db_value() { "${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc "$1"; }
 
+# `lsf` emits an offset-free timestamp in the process timezone. Normalize it
+# to UTC because `record_is_recent` deliberately parses the field as UTC.
 remote_record() {
   local remote_dir="$1" include="$2"
-  "${RCLONE_BIN}" lsf "${remote_dir}" --files-only --include "${include}" \
+  TZ=UTC "${RCLONE_BIN}" lsf "${remote_dir}" --files-only --include "${include}" \
     --format 'tp' --separator '|' 2>/dev/null | sort | tail -1
 }
 
@@ -41,7 +43,7 @@ record_is_recent() {
 
 remote_named_record() {
   local remote_dir="$1" name="$2"
-  "${RCLONE_BIN}" lsf "${remote_dir}" --files-only --include "${name}" \
+  TZ=UTC "${RCLONE_BIN}" lsf "${remote_dir}" --files-only --include "${name}" \
     --format 'tp' --separator '|' 2>/dev/null | awk -F'|' -v expected="${name}" '$2 == expected { print; exit }'
 }
 
