@@ -53,6 +53,8 @@ printf '%s\n' \
   'target_lsn=0/ABCDEF' \
   'restored_lsn=0/ABCE00' \
   'counts={"profiles":1}' \
+  'pgsodium_key=base-2026-10-01T115900Z.pgsodium-root.key.gpg' \
+  'vault_smoke=true' \
   'rpo_max_seconds=900' \
   'rto_max_seconds=14400' \
   'result=ok' > "${report}"
@@ -97,6 +99,28 @@ fi
 # not the following invariants/functions migration. The deploy gate must handle
 # that partial state without statically resolving an absent function.
 deploy="${ROOT}/infra/deploy-production.sh"
+configure_pgsodium_line="$(grep -Fn '"${SCRIPT_DIR}/configure-pgsodium.sh"' "${deploy}" | head -1 | cut -d: -f1)"
+first_compose_up_line="$(grep -Fn '"${COMPOSE[@]}" up -d --wait "${SERVICES[@]}"' "${deploy}" | head -1 | cut -d: -f1)"
+[[ -n "${configure_pgsodium_line}" && -n "${first_compose_up_line}" \
+  && "${configure_pgsodium_line}" -lt "${first_compose_up_line}" ]] \
+  || fail "deploy não persiste a chave pgsodium antes de poder recriar o DB"
+grep -Fq '${PGSODIUM_ROOT_KEY_FILE}:/etc/postgresql-custom/pgsodium_root.key:ro' \
+  "${ROOT}/infra/docker-compose.yml" \
+  || fail "Compose não monta apenas a root key pgsodium em read-only"
+grep -Fq '/data/PG_VERSION' "${ROOT}/infra/configure-pgsodium.sh" \
+  || fail "configuração pgsodium não recusa gerar nova key sobre PGDATA existente"
+grep -Fq 'Recusado gerar uma chave nova.' "${ROOT}/infra/configure-pgsodium.sh" \
+  || fail "configuração pgsodium não falha fechada sem key recuperável"
+if grep -Fq -- ':/etc/postgresql-custom:ro' "${ROOT}/infra/docker-compose.yml"; then
+  fail "Compose sobrepõe todo o diretório postgresql-custom"
+fi
+vault_rebuild_line="$(grep -Fn "delete from vault.secrets" "${deploy}" | head -1 | cut -d: -f1)"
+preflight_line="$(grep -Fn '"${SCRIPT_DIR}/predeploy-safety.sh"' "${deploy}" | head -1 | cut -d: -f1)"
+[[ -n "${vault_rebuild_line}" && -n "${preflight_line}" \
+  && "${vault_rebuild_line}" -lt "${preflight_line}" ]] \
+  || fail "Vault não é reparado transacionalmente antes do primeiro backup"
+grep -Fq "begin;" "${deploy}" || fail "rebuild Vault não abre transação"
+grep -Fq "commit;" "${deploy}" || fail "rebuild Vault não fecha transação"
 resume_gate="$(sed -n '/# Force the persisted switch/,/^[[:space:]]*SQL$/p' "${deploy}")"
 grep -Fq "to_regprocedure(" <<< "${resume_gate}" \
   || fail "deploy não testa a existência da função de transição"
@@ -159,17 +183,29 @@ grep -Fq 'archive_plain="${work_dir}/${remote_name%.gpg}"' "${restore_drill}" \
   || fail "restore drill não materializa o dump decifrado no workdir privado"
 grep -Fq '< "${archive_plain}" > "${archive_list}"' "${restore_drill}" \
   || fail "restore drill não lista o ficheiro decifrado sem pipeline prematuro"
-grep -Fq -- '--tmpfs /run/pgsodium:rw,exec,size=64k,mode=0700,uid=105,gid=106,nosuid,nodev' "${restore_drill}" \
-  || fail "restore drill read-only não fornece keydir pgsodium privado e gravável"
 if grep -Fq -- '--tmpfs /etc/postgresql-custom:' "${restore_drill}"; then
   fail "restore drill esconde os includes Supabase ao sobrepor /etc/postgresql-custom"
 fi
-grep -Fq "chmod 0400 /run/pgsodium/root.key" "${restore_drill}" \
-  || fail "chave pgsodium efémera não fica limitada ao utilizador postgres"
-grep -Fq "chmod 0500 /run/pgsodium/getkey.sh /run/pgsodium" "${restore_drill}" \
-  || fail "script e diretório pgsodium efémeros permanecem substituíveis após bootstrap"
-grep -Fq -- '-c pgsodium.getkey_script=/run/pgsodium/getkey.sh -c vault.getkey_script=/run/pgsodium/getkey.sh' "${restore_drill}" \
-  || fail "restore drill não encaminha pgsodium/vault para a chave efémera"
+grep -Fq -- '-v "${pgsodium_plain}:/etc/postgresql-custom/pgsodium_root.key:ro"' "${restore_drill}" \
+  || fail "restore drill não monta o companion pgsodium exato em read-only"
+grep -Fq 'vault.decrypted_secrets' "${restore_drill}" \
+  || fail "restore drill não força um smoke real de desencriptação Vault"
+grep -Fq 'vault_smoke=true' "${restore_drill}" \
+  || fail "relatório lógico não regista o smoke Vault"
+grep -Fq 'pgsodium-root.key.gpg' "${backup_production}" \
+  || fail "backup lógico não cria companion pgsodium cifrado"
+grep -Fq 'exec -T -u 105:106 db cat /etc/postgresql-custom/pgsodium_root.key' "${backup_production}" \
+  || fail "backup lógico não lê a key 0400 como o utilizador PostgreSQL"
+grep -Fq 'pgsodium-root.key.gpg' "${ROOT}/infra/basebackup-production.sh" \
+  || fail "base backup não cria companion pgsodium cifrado"
+grep -Fq 'exec -T -u 105:106 db cat /etc/postgresql-custom/pgsodium_root.key' "${ROOT}/infra/basebackup-production.sh" \
+  || fail "base backup não lê a key 0400 como o utilizador PostgreSQL"
+grep -Fq 'pgsodium-root.key.gpg' "${ROOT}/infra/pitr-restore-drill.sh" \
+  || fail "drill PITR não exige o companion pgsodium"
+grep -Fq -- '-c archive_mode=off -c shared_preload_libraries=pgsodium' "${ROOT}/infra/pitr-restore-drill.sh" \
+  || fail "drill PITR não carrega pgsodium com a key restaurada"
+grep -Fq 'vault_smoke=true' "${ROOT}/infra/pitr-restore-drill.sh" \
+  || fail "relatório PITR não regista o smoke Vault"
 
 # Supabase's pg_graphql wrapper is generated by an event trigger and its body
 # is absent from pg_dump even though its ACL is retained. The drill must repair
@@ -344,6 +380,7 @@ required_runtime=(
   infra/configure-caddy-outreach.sh
   infra/configure-outreach-db.sh
   infra/configure-outreach.sh
+  infra/configure-pgsodium.sh
   infra/configure-wal-archive.sh
   infra/deploy-production.sh
   infra/install-backup-schedule.sh

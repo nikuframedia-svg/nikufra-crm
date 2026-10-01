@@ -58,6 +58,7 @@ Executar no host, a partir de `infra/`, antes da primeira migration:
 ```bash
 ./configure-outreach.sh
 ./configure-backups.sh
+./configure-pgsodium.sh
 ./backup-production.sh
 ./restore-drill.sh
 df -h /
@@ -66,6 +67,10 @@ df -h /
 O disco tem de estar abaixo de 80%. A chave indicada por
 `BACKUP_ENCRYPTION_KEY_FILE` deve ser copiada para um cofre separado; nunca para
 o mesmo remote dos arquivos. `RCLONE_REMOTE` tem de apontar para storage offsite.
+`configure-pgsodium.sh` adota a chave do DB já em execução na primeira
+transição e depois mantém-na num ficheiro externo ao overlay Docker, montado
+apenas no PostgreSQL e em read-only. Uma divergência entre a cópia persistida e
+o container aborta o deploy; nunca substituir ou rodar esta chave isoladamente.
 
 Depois do deploy:
 
@@ -80,9 +85,11 @@ O deploy instala esta agenda do utilizador do serviço:
 - WAL cifrado offsite a cada 10 minutos;
 - dump lógico cifrado diário;
 - base backup físico cifrado semanal;
+- companion pgsodium cifrado e com checksum para cada dump/base backup;
 - restauro lógico integral mensal, com ACL/RLS e duração;
 - ensaio PITR físico mensal, que arranca um PostgreSQL isolado, reproduz WAL e
-  prova RPO máximo de 15 minutos e RTO máximo de 4 horas.
+  prova RPO máximo de 15 minutos, RTO máximo de 4 horas e desencriptação real
+  do Vault com o companion correspondente.
 
 O slot físico permanente `nikufra_offsite` tem retenção máxima configurada por
 `POSTGRES_MAX_SLOT_WAL_KEEP_SIZE` (4 GiB por omissão). Os healthchecks falham se

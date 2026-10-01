@@ -38,6 +38,9 @@ services:
       JWT_EXP: ${JWT_EXPIRY:-3600}
     volumes:
       - db-data:/var/lib/postgresql/data
+      # Vault/pgsodium ciphertext in PGDATA is unusable without this external
+      # root key. Bind the single file, never the whole custom-config directory.
+      - ${PGSODIUM_ROOT_KEY_FILE}:/etc/postgresql-custom/pgsodium_root.key:ro
       - ./init/realtime.sql:/docker-entrypoint-initdb.d/migrations/99-realtime.sql:ro
       - ./init/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-nikufra-roles.sql:ro
     healthcheck:

@@ -58,19 +58,22 @@ verify_remote_checksum_pair() {
 }
 
 valid_recent_pitr_report() {
-  local report base elapsed target_lsn restored_lsn
+  local report base key_artifact elapsed target_lsn restored_lsn
   while IFS= read -r report; do
     base="$(sed -n 's/^base=//p' "${report}" | tail -1)"
+    key_artifact="$(sed -n 's/^pgsodium_key=//p' "${report}" | tail -1)"
     elapsed="$(sed -n 's/^elapsed_seconds=//p' "${report}" | tail -1)"
     target_lsn="$(sed -n 's/^target_lsn=//p' "${report}" | tail -1)"
     restored_lsn="$(sed -n 's/^restored_lsn=//p' "${report}" | tail -1)"
     if [[ "${base}" =~ ^base-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{6}Z\.tar\.gpg$ \
+      && "${key_artifact}" == "${base%.tar.gpg}.pgsodium-root.key.gpg" \
       && "${elapsed}" =~ ^[0-9]+$ && "${elapsed}" -le 14400 \
       && "${target_lsn}" =~ ^[0-9A-F]+/[0-9A-F]+$ \
       && "${restored_lsn}" =~ ^[0-9A-F]+/[0-9A-F]+$ \
       && "$(grep -c '^result=ok$' "${report}" || true)" == 1 \
       && "$(grep -c '^rpo_max_seconds=900$' "${report}" || true)" == 1 \
-      && "$(grep -c '^rto_max_seconds=14400$' "${report}" || true)" == 1 ]]; then
+      && "$(grep -c '^rto_max_seconds=14400$' "${report}" || true)" == 1 \
+      && "$(grep -c '^vault_smoke=true$' "${report}" || true)" == 1 ]]; then
       printf '%s\n' "${report}"
       return 0
     fi
@@ -170,23 +173,31 @@ dump_record=""
 dump_checksum_record=""
 globals_record=""
 globals_checksum_record=""
+pgsodium_record=""
+pgsodium_checksum_record=""
 if [[ -x "${RCLONE_BIN}" && -n "${RCLONE_REMOTE:-}" ]]; then
   dump_record="$(remote_record "${RCLONE_REMOTE}/daily/" '*.dump.gpg' || true)"
   dump_name="${dump_record#*|}"
   if [[ "${dump_name}" =~ ^nikufra-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{6}Z\.dump\.gpg$ ]]; then
     dump_checksum_record="$(remote_named_record "${RCLONE_REMOTE}/daily/" "${dump_name}.sha256" || true)"
     globals_name="${dump_name%.dump.gpg}.globals.sql.gpg"
+    pgsodium_name="${dump_name%.dump.gpg}.pgsodium-root.key.gpg"
     globals_record="$(remote_named_record "${RCLONE_REMOTE}/daily/" "${globals_name}" || true)"
     globals_checksum_record="$(remote_named_record "${RCLONE_REMOTE}/daily/" "${globals_name}.sha256" || true)"
+    pgsodium_record="$(remote_named_record "${RCLONE_REMOTE}/daily/" "${pgsodium_name}" || true)"
+    pgsodium_checksum_record="$(remote_named_record "${RCLONE_REMOTE}/daily/" "${pgsodium_name}.sha256" || true)"
   fi
 fi
 if record_is_recent "${dump_record}" 172800 \
   && record_is_recent "${dump_checksum_record}" 172800 \
   && record_is_recent "${globals_record}" 172800 \
-  && record_is_recent "${globals_checksum_record}" 172800; then
-  pass "backup cifrado, roles e checksums offsite com menos de 48 horas"
+  && record_is_recent "${globals_checksum_record}" 172800 \
+  && record_is_recent "${pgsodium_record}" 172800 \
+  && record_is_recent "${pgsodium_checksum_record}" 172800 \
+  && verify_remote_checksum_pair "${RCLONE_REMOTE}/daily" "${pgsodium_name}"; then
+  pass "backup cifrado, roles, companion pgsodium e checksums offsite com menos de 48 horas"
 else
-  fail "backup offsite completo (dump, roles e checksums <=48h) não comprovado"
+  fail "backup offsite completo (dump, roles, pgsodium e checksums <=48h) não comprovado"
 fi
 
 # A weekly physical base is the bounded starting point for WAL replay. Merely
@@ -194,19 +205,27 @@ fi
 # object and its checksum directly against the offsite remote.
 base_record=""
 base_checksum_record=""
+base_pgsodium_record=""
+base_pgsodium_checksum_record=""
 if [[ -x "${RCLONE_BIN}" && -n "${RCLONE_REMOTE:-}" ]]; then
   base_record="$(remote_record "${RCLONE_REMOTE}/base/" 'base-*.tar.gpg' || true)"
 fi
 base_name="${base_record#*|}"
 if [[ "${base_name}" =~ ^base-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{6}Z\.tar\.gpg$ ]]; then
   base_checksum_record="$(remote_named_record "${RCLONE_REMOTE}/base/" "${base_name}.sha256" || true)"
+  base_pgsodium_name="${base_name%.tar.gpg}.pgsodium-root.key.gpg"
+  base_pgsodium_record="$(remote_named_record "${RCLONE_REMOTE}/base/" "${base_pgsodium_name}" || true)"
+  base_pgsodium_checksum_record="$(remote_named_record "${RCLONE_REMOTE}/base/" "${base_pgsodium_name}.sha256" || true)"
 fi
 if record_is_recent "${base_record}" 691200 \
   && record_is_recent "${base_checksum_record}" 691200 \
-  && verify_remote_checksum_pair "${RCLONE_REMOTE}/base" "${base_name}"; then
-  pass "base backup físico e checksum offsite autenticados com menos de 8 dias"
+  && record_is_recent "${base_pgsodium_record}" 691200 \
+  && record_is_recent "${base_pgsodium_checksum_record}" 691200 \
+  && verify_remote_checksum_pair "${RCLONE_REMOTE}/base" "${base_name}" \
+  && verify_remote_checksum_pair "${RCLONE_REMOTE}/base" "${base_pgsodium_name}"; then
+  pass "base backup físico, companion pgsodium e checksums offsite autenticados com menos de 8 dias"
 else
-  fail "base backup físico offsite recente e íntegro (<=8 dias) não comprovado"
+  fail "base backup físico+pgsodium offsite recente e íntegro (<=8 dias) não comprovado"
 fi
 
 pitr_report="$(valid_recent_pitr_report || true)"
@@ -250,7 +269,19 @@ if [[ "${target}" != --dark ]]; then
       fail "mailboxes de canary incompletas (${canary_ready:-0}/${canary_total:-0} em ramp=1, ativas e com DNS <=24h)"
     fi
   fi
-  if find "${BACKUP_ROOT}/restore-drills" -maxdepth 1 -type f -name '*.txt' -mtime -35 -exec grep -l '^result=ok$' {} + 2>/dev/null | grep -q .; then pass "ensaio de restauro integral recente"; else fail "ensaio de restauro integral não comprovado"; fi
+  logical_restore_proven=false
+  while IFS= read -r restore_report; do
+    if [[ "$(grep -c '^vault_smoke=true$' "${restore_report}" || true)" == 1 \
+      && "$(grep -c '^result=ok$' "${restore_report}" || true)" == 1 ]]; then
+      logical_restore_proven=true
+      break
+    fi
+  done < <(find "${BACKUP_ROOT}/restore-drills" -maxdepth 1 -type f -name '*.txt' -mtime -35 -print 2>/dev/null | sort -r)
+  if [[ "${logical_restore_proven}" == true ]]; then
+    pass "ensaio de restauro integral recente com Vault desencriptável"
+  else
+    fail "ensaio de restauro integral com Vault desencriptável não comprovado"
+  fi
 fi
 
 if [[ "${target}" == --for-live ]]; then

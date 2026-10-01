@@ -50,6 +50,10 @@ fi
 if [[ "${DEPLOY_MODE}" == --release ]]; then
   "${SCRIPT_DIR}/configure-outreach.sh"
   "${SCRIPT_DIR}/configure-backups.sh"
+  # Must run before Compose can recreate the DB container. On the first
+  # rollout this adopts its current overlay key; all later rollouts validate
+  # the persistent external copy used by the exact bind mount.
+  "${SCRIPT_DIR}/configure-pgsodium.sh"
 fi
 
 set -a
@@ -58,19 +62,22 @@ source "${ENV_FILE}"
 set +a
 
 valid_recent_pitr_report() {
-  local report base elapsed target_lsn restored_lsn
+  local report base key_artifact elapsed target_lsn restored_lsn
   while IFS= read -r report; do
     base="$(sed -n 's/^base=//p' "${report}" | tail -1)"
+    key_artifact="$(sed -n 's/^pgsodium_key=//p' "${report}" | tail -1)"
     elapsed="$(sed -n 's/^elapsed_seconds=//p' "${report}" | tail -1)"
     target_lsn="$(sed -n 's/^target_lsn=//p' "${report}" | tail -1)"
     restored_lsn="$(sed -n 's/^restored_lsn=//p' "${report}" | tail -1)"
     if [[ "${base}" =~ ^base-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{6}Z\.tar\.gpg$ \
+      && "${key_artifact}" == "${base%.tar.gpg}.pgsodium-root.key.gpg" \
       && "${elapsed}" =~ ^[0-9]+$ && "${elapsed}" -le 14400 \
       && "${target_lsn}" =~ ^[0-9A-F]+/[0-9A-F]+$ \
       && "${restored_lsn}" =~ ^[0-9A-F]+/[0-9A-F]+$ \
       && "$(grep -c '^result=ok$' "${report}" || true)" == 1 \
       && "$(grep -c '^rpo_max_seconds=900$' "${report}" || true)" == 1 \
-      && "$(grep -c '^rto_max_seconds=14400$' "${report}" || true)" == 1 ]]; then
+      && "$(grep -c '^rto_max_seconds=14400$' "${report}" || true)" == 1 \
+      && "$(grep -c '^vault_smoke=true$' "${report}" || true)" == 1 ]]; then
       printf '%s\n' "${report}"
       return 0
     fi
@@ -120,9 +127,9 @@ fi
 
 CRM_API_PORT="${CRM_API_PORT:-8800}"
 if [[ "${DEPLOY_MODE}" == --rollback-preloaded ]]; then
-  required=(CRM_DOMAIN POSTGRES_PASSWORD JWT_SECRET ANON_KEY SERVICE_ROLE_KEY SECRET_KEY_BASE REALTIME_DB_ENC_KEY TOKEN_ENCRYPTION_KEY OUTREACH_DATABASE_PASSWORD OUTREACH_ENCRYPTION_KEYS OUTREACH_ENCRYPTION_CURRENT_VERSION OUTREACH_STATE_HMAC_SECRET OUTREACH_WEBHOOK_SECRET OUTREACH_UNSUBSCRIBE_SECRET OUTREACH_GOOGLE_CLIENT_ID OUTREACH_GOOGLE_CLIENT_SECRET OUTREACH_CANARY_ALLOWLIST)
+  required=(CRM_DOMAIN POSTGRES_PASSWORD JWT_SECRET ANON_KEY SERVICE_ROLE_KEY SECRET_KEY_BASE REALTIME_DB_ENC_KEY TOKEN_ENCRYPTION_KEY PGSODIUM_ROOT_KEY_FILE OUTREACH_DATABASE_PASSWORD OUTREACH_ENCRYPTION_KEYS OUTREACH_ENCRYPTION_CURRENT_VERSION OUTREACH_STATE_HMAC_SECRET OUTREACH_WEBHOOK_SECRET OUTREACH_UNSUBSCRIBE_SECRET OUTREACH_GOOGLE_CLIENT_ID OUTREACH_GOOGLE_CLIENT_SECRET OUTREACH_CANARY_ALLOWLIST)
 else
-  required=(CRM_DOMAIN POSTGRES_PASSWORD JWT_SECRET ANON_KEY SERVICE_ROLE_KEY SECRET_KEY_BASE REALTIME_DB_ENC_KEY TOKEN_ENCRYPTION_KEY SMTP_ADMIN_EMAIL SMTP_HOST SMTP_PORT GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET OUTREACH_DATABASE_PASSWORD OUTREACH_ENCRYPTION_KEYS OUTREACH_ENCRYPTION_CURRENT_VERSION OUTREACH_STATE_HMAC_SECRET OUTREACH_WEBHOOK_SECRET OUTREACH_UNSUBSCRIBE_SECRET OUTREACH_GOOGLE_CLIENT_ID OUTREACH_GOOGLE_CLIENT_SECRET OUTREACH_CANARY_ALLOWLIST WAL_ARCHIVE_PASSWORD BACKUP_ENCRYPTION_KEY_FILE RCLONE_REMOTE)
+  required=(CRM_DOMAIN POSTGRES_PASSWORD JWT_SECRET ANON_KEY SERVICE_ROLE_KEY SECRET_KEY_BASE REALTIME_DB_ENC_KEY TOKEN_ENCRYPTION_KEY PGSODIUM_ROOT_KEY_FILE SMTP_ADMIN_EMAIL SMTP_HOST SMTP_PORT GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET OUTREACH_DATABASE_PASSWORD OUTREACH_ENCRYPTION_KEYS OUTREACH_ENCRYPTION_CURRENT_VERSION OUTREACH_STATE_HMAC_SECRET OUTREACH_WEBHOOK_SECRET OUTREACH_UNSUBSCRIBE_SECRET OUTREACH_GOOGLE_CLIENT_ID OUTREACH_GOOGLE_CLIENT_SECRET OUTREACH_CANARY_ALLOWLIST WAL_ARCHIVE_PASSWORD BACKUP_ENCRYPTION_KEY_FILE RCLONE_REMOTE)
 fi
 for key in "${required[@]}"; do
   if [[ -z "${!key:-}" ]]; then
@@ -362,26 +369,59 @@ begin
   end if;
 end $$;
 SQL
+
+# These are the only Vault values owned by this application. They are fully
+# derivable from current configuration, while vault.update_secret first tries
+# to decrypt the previous ciphertext and cannot recover after a historical
+# container-only pgsodium key was lost. Replace both names in one transaction,
+# then force a real decrypt/equality check before any backup can be accepted.
+sync_url="http://kong:8000/functions/v1/gmail-sync"
+[[ "${sync_url}" != *$'\n'* && "${sync_url}" != *$'\t'* && "${sync_url}" != *\\* \
+  && "${SERVICE_ROLE_KEY}" != *$'\n'* && "${SERVICE_ROLE_KEY}" != *$'\t'* \
+  && "${SERVICE_ROLE_KEY}" != *\\* ]] || {
+  echo "Os valores do Vault contêm separadores proibidos." >&2
+  exit 1
+}
+{
+  printf '%s\n' \
+    'begin;' \
+    'create temp table nikufra_vault_inputs(name text primary key, secret text not null) on commit drop;' \
+    'copy nikufra_vault_inputs(name, secret) from stdin;'
+  printf 'gmail_sync_url\t%s\n' "${sync_url}"
+  printf 'gmail_sync_service_key\t%s\n' "${SERVICE_ROLE_KEY}"
+  printf '%s\n' '\.'
+  cat <<'SQL'
+delete from vault.secrets
+where name in ('gmail_sync_url', 'gmail_sync_service_key');
+select vault.create_secret(secret, name)
+from nikufra_vault_inputs
+order by name;
+
+do $$
+begin
+  if (select count(*) from vault.secrets
+      where name in ('gmail_sync_url', 'gmail_sync_service_key')) <> 2
+    or exists (
+      select 1
+      from nikufra_vault_inputs expected
+      left join vault.decrypted_secrets actual using (name)
+      where actual.name is null or actual.decrypted_secret <> expected.secret
+    ) then
+    raise exception 'Vault Gmail sync verification failed';
+  end if;
+end $$;
+commit;
+SQL
+} | "${COMPOSE[@]}" exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d postgres >/dev/null
+
 "${SCRIPT_DIR}/predeploy-safety.sh"
 "${SCRIPT_DIR}/configure-outreach-db.sh" production
 "${SCRIPT_DIR}/configure-wal-archive.sh"
 
 "${SCRIPT_DIR}/apply-migrations.sh" production
 
-# The scheduler runs inside Postgres on the private Compose network. Keeping
-# this call internal avoids a DNS/TLS round trip and never exposes the service
-# role credential outside the host.
-sync_url="http://kong:8000/functions/v1/gmail-sync"
 "${COMPOSE[@]}" exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d postgres \
-  --set=sync_url="${sync_url}" --set=service_key="${SERVICE_ROLE_KEY}" <<'SQL'
-select vault.create_secret(:'sync_url', 'gmail_sync_url')
-where not exists (select 1 from vault.secrets where name = 'gmail_sync_url');
-select vault.update_secret(id, :'sync_url') from vault.secrets where name = 'gmail_sync_url';
-select vault.create_secret(:'service_key', 'gmail_sync_service_key')
-where not exists (select 1 from vault.secrets where name = 'gmail_sync_service_key');
-select vault.update_secret(id, :'service_key') from vault.secrets where name = 'gmail_sync_service_key';
-notify pgrst, 'reload schema';
-SQL
+  -c "notify pgrst, 'reload schema'" >/dev/null
 
 "${COMPOSE[@]}" exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d postgres \
   --set=allowlist="${OUTREACH_CANARY_ALLOWLIST}" <<'SQL'

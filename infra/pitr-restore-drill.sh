@@ -25,6 +25,7 @@ base_name="$("${RCLONE_BIN}" lsf "${RCLONE_REMOTE}/base/" --files-only --include
   echo "Não existe um base backup offsite reconhecido." >&2
   exit 1
 }
+pgsodium_name="${base_name%.tar.gpg}.pgsodium-root.key.gpg"
 
 work_dir="$(mktemp -d "${BACKUP_ROOT}/.pitr-drill.XXXXXX")"
 container_name="nikufra-pitr-drill-$(date -u +%Y%m%d%H%M%S)-$$"
@@ -42,9 +43,23 @@ cleanup() {
 trap cleanup EXIT
 
 base_archive="${work_dir}/${base_name}"
+pgsodium_archive="${work_dir}/${pgsodium_name}"
+pgsodium_plain="${work_dir}/pgsodium_root.key"
 "${RCLONE_BIN}" copyto "${RCLONE_REMOTE}/base/${base_name}" "${base_archive}"
 "${RCLONE_BIN}" copyto "${RCLONE_REMOTE}/base/${base_name}.sha256" "${base_archive}.sha256"
+"${RCLONE_BIN}" copyto "${RCLONE_REMOTE}/base/${pgsodium_name}" "${pgsodium_archive}"
+"${RCLONE_BIN}" copyto "${RCLONE_REMOTE}/base/${pgsodium_name}.sha256" "${pgsodium_archive}.sha256"
 (cd "${work_dir}" && sha256sum --check "${base_name}.sha256")
+(cd "${work_dir}" && sha256sum --check "${pgsodium_name}.sha256")
+gpg --batch --quiet --pinentry-mode loopback --passphrase-file "${BACKUP_ENCRYPTION_KEY_FILE}" \
+  --output "${pgsodium_plain}" --decrypt "${pgsodium_archive}"
+chmod 600 "${pgsodium_plain}"
+pgsodium_value="$(< "${pgsodium_plain}")"
+[[ "${#pgsodium_value}" == 64 && "${pgsodium_value}" != *[!0-9a-f]* ]] || {
+  echo "O companion pgsodium do base backup é inválido." >&2
+  exit 1
+}
+unset pgsodium_value
 gpg --batch --quiet --pinentry-mode loopback --passphrase-file "${BACKUP_ENCRYPTION_KEY_FILE}" \
   --decrypt "${base_archive}" | tar -C "${work_dir}" -xf -
 
@@ -57,6 +72,10 @@ data_dir="${work_dir}/${plain_name}"
 
 data_uid="$(stat -c '%u' "${data_dir}")"
 data_gid="$(stat -c '%g' "${data_dir}")"
+docker run --rm --network none --read-only --cap-drop ALL --cap-add CHOWN --cap-add FOWNER \
+  --security-opt no-new-privileges:true -v "${pgsodium_plain}:/key" --entrypoint sh \
+  "${POSTGRES_IMAGE}" -ceu 'chown "$1:$2" /key; chmod 0400 /key' \
+  -- "${data_uid}" "${data_gid}"
 docker run --rm --network none --user "${data_uid}:${data_gid}" \
   --read-only --cap-drop ALL --security-opt no-new-privileges:true \
   -v "${data_dir}:/restore-data:ro" --entrypoint pg_verifybackup \
@@ -107,9 +126,12 @@ docker run -d --name "${container_name}" --network none --user "${data_uid}:${da
   --read-only --cap-drop ALL --security-opt no-new-privileges:true \
   --tmpfs /tmp:size=64m,noexec,nosuid,nodev \
   -v "${data_dir}:/restore-data" -v "${wal_plain}:/restore-wal:ro" \
+  -v "${pgsodium_plain}:/etc/postgresql-custom/pgsodium_root.key:ro" \
   --entrypoint postgres "${POSTGRES_IMAGE}" -D /restore-data \
   -c listen_addresses='' -c unix_socket_directories=/tmp -c ssl=off \
-  -c archive_mode=off -c shared_preload_libraries='' >/dev/null
+  -c archive_mode=off -c shared_preload_libraries=pgsodium \
+  -c pgsodium.getkey_script=/usr/lib/postgresql/bin/pgsodium_getkey.sh \
+  -c vault.getkey_script=/usr/lib/postgresql/bin/pgsodium_getkey.sh >/dev/null
 container_started=true
 
 ready=false
@@ -139,6 +161,14 @@ lsn_reached="$(docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" "${container_nam
   exit 1
 }
 
+vault_smoke="$(docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" "${container_name}" \
+  psql -h /tmp -U postgres -d postgres -Atc \
+  "select count(*) = count(decrypted_secret) and coalesce(bool_and(octet_length(decrypted_secret) > 0), true) from vault.decrypted_secrets")"
+[[ "${vault_smoke}" == t ]] || {
+  echo "PITR recuperou os dados, mas Vault não desencripta com o companion pgsodium." >&2
+  exit 1
+}
+
 counts="$(docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" "${container_name}" \
   psql -h /tmp -U postgres -d postgres -Atc \
   "select json_build_object('profiles',(select count(*) from public.profiles),'empresas',(select count(*) from public.empresas),'contactos',(select count(*) from public.contactos),'oportunidades',(select count(*) from public.oportunidades))")"
@@ -148,7 +178,7 @@ elapsed="$(( $(date +%s) - started_at ))"
 mkdir -p "${REPORT_DIR}"
 chmod 700 "${REPORT_DIR}"
 report="${REPORT_DIR}/$(date -u +%Y-%m-%dT%H%M%SZ).txt"
-printf 'base=%s\nrestored_at=%s\nelapsed_seconds=%s\ntarget_lsn=%s\nrestored_lsn=%s\ncounts=%s\nrpo_max_seconds=900\nrto_max_seconds=14400\nresult=ok\n' \
-  "${base_name}" "$(date -u +%FT%TZ)" "${elapsed}" "${target_lsn}" "${restored_lsn}" "${counts}" > "${report}"
+printf 'base=%s\npgsodium_key=%s\nrestored_at=%s\nelapsed_seconds=%s\ntarget_lsn=%s\nrestored_lsn=%s\ncounts=%s\nvault_smoke=true\nrpo_max_seconds=900\nrto_max_seconds=14400\nresult=ok\n' \
+  "${base_name}" "${pgsodium_name}" "$(date -u +%FT%TZ)" "${elapsed}" "${target_lsn}" "${restored_lsn}" "${counts}" > "${report}"
 chmod 600 "${report}"
 echo "PITR físico comprovado até ${restored_lsn} em ${elapsed}s. Relatório: ${report}"
