@@ -100,6 +100,18 @@ RCLONE_BIN="${WORK}/rclone-tz-probe"
 [[ "$(TZ=Europe/Berlin remote_named_record remote:bucket expected.gpg)" == 'UTC|expected.gpg' ]] \
   || fail "listagem do sidecar offsite não força timestamps UTC"
 
+# pg_class includes indexes as well as tables. Indexes report both RLS flags as
+# false, so readiness must aggregate only ordinary/partitioned tables while
+# retaining the fail-closed bool_and across every canonical Outreach table.
+rls_probe="$(grep -F 'rls_ready="$(db_value "' "${ROOT}/infra/outreach-readiness.sh")"
+[[ -n "${rls_probe}" ]] || fail "probe RLS de readiness ausente"
+grep -Fq "coalesce(bool_and(relrowsecurity and relforcerowsecurity),false)" <<< "${rls_probe}" \
+  || fail "probe RLS deixou de exigir ENABLE e FORCE em todas as tabelas"
+grep -Fq "relkind in ('r','p')" <<< "${rls_probe}" \
+  || fail "probe RLS volta a agregar índices ou outros objetos pg_class"
+grep -Fq "relname='communication_suppressions'" <<< "${rls_probe}" \
+  || fail "probe RLS omite a tabela canónica de suppressions"
+
 # PostgreSQL resolves every relation in a CASE expression before evaluating
 # the chosen branch. The first production deploy must therefore prove table
 # existence in a separate statement before it can query the Outreach row.

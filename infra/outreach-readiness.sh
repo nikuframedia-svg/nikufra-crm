@@ -112,7 +112,9 @@ unauthenticated="$(curl --silent --output /dev/null --write-out '%{http_code}' -
 
 schema_ready="$(db_value "select to_regclass('public.outreach_campaigns') is not null and to_regclass('public.communication_suppressions') is not null and to_regclass('private.outreach_credentials') is not null")"
 [[ "${schema_ready}" == t ]] && pass "schema normalizado aplicado" || fail "schema Outreach incompleto"
-rls_ready="$(db_value "select coalesce(bool_and(relrowsecurity and relforcerowsecurity),false) from pg_class where relnamespace='public'::regnamespace and relname like 'outreach_%'")"
+# pg_class also contains indexes, whose RLS flags are always false. Restrict the
+# aggregate to the public tables that form the canonical Outreach schema.
+rls_ready="$(db_value "select coalesce(bool_and(relrowsecurity and relforcerowsecurity),false) from pg_class where relnamespace='public'::regnamespace and relkind in ('r','p') and (relname like 'outreach_%' or relname='communication_suppressions')")"
 [[ "${rls_ready}" == t ]] && pass "RLS e FORCE RLS ativos" || fail "RLS Outreach incompleto"
 private_web_grants="$(db_value "select count(*) from information_schema.table_privileges where table_schema='private' and grantee in ('anon','authenticated','PUBLIC')")"
 [[ "${private_web_grants}" == 0 ]] && pass "schema private sem grants de browser" || fail "foram encontrados ${private_web_grants} grants de browser em private"
