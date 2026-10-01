@@ -8,7 +8,7 @@ trap cleanup EXIT
 
 mkdir -p "${WORK}/bin"
 cp "${ROOT}/tests/infra/fixtures/Caddyfile.before-outreach" "${WORK}/Caddyfile"
-original_inode="$(stat -f '%i' "${WORK}/Caddyfile" 2>/dev/null || stat -c '%i' "${WORK}/Caddyfile")"
+original_inode="$(stat -c '%i' "${WORK}/Caddyfile" 2>/dev/null || stat -f '%i' "${WORK}/Caddyfile")"
 
 cat > "${WORK}/bin/docker" <<'SH'
 #!/usr/bin/env bash
@@ -33,7 +33,7 @@ OUTREACH_API_PORT=8787 \
 test "$(grep -c 'BEGIN NIKUFRA CRM OUTREACH MANAGED' "${WORK}/Caddyfile")" = 1
 test "$(grep -c 'END NIKUFRA CRM OUTREACH MANAGED' "${WORK}/Caddyfile")" = 1
 test "$(grep -c 'reverse_proxy 127.0.0.1:8787' "${WORK}/Caddyfile")" = 1
-test "$(stat -f '%i' "${WORK}/Caddyfile" 2>/dev/null || stat -c '%i' "${WORK}/Caddyfile")" = "${original_inode}"
+test "$(stat -c '%i' "${WORK}/Caddyfile" 2>/dev/null || stat -f '%i' "${WORK}/Caddyfile")" = "${original_inode}"
 first_hash="$(sha256sum "${WORK}/Caddyfile" | awk '{print $1}')"
 
 PATH="${WORK}/bin:${PATH}" \
