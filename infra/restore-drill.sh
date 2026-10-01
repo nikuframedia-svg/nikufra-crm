@@ -127,9 +127,26 @@ if psql_test -c "set role authenticated; select 1 from auth.users limit 1" >/dev
   exit 1
 fi
 
-outreach_present="$(psql_test -Atc "select to_regclass('public.outreach_campaigns') is not null")"
+outreach_base_present="$(psql_test -Atc "select to_regclass('public.outreach_campaigns') is not null")"
+# Migration 202609300001 creates the normalized tables, while 202609300002
+# installs the invariants/import/provider functions that make the Outreach
+# schema operational. A backup taken between those two atomic migrations is a
+# valid recovery point: keep proving the core CRM restore, but do not require
+# the later Outreach roles/ACL smoke until both built-in-signature sentinels
+# exist. This lets the next deployment safely resume the second migration.
+outreach_complete="$(psql_test -Atc "select
+  to_regclass('public.outreach_campaigns') is not null
+  and to_regprocedure('public.claim_google_provider_message(text,text)') is not null
+  and to_regprocedure('private.import_outreach_legacy_snapshot(jsonb,boolean)') is not null")"
+outreach_schema="absent"
+if [[ "${outreach_base_present}" == t ]]; then
+  outreach_schema="partial"
+fi
+if [[ "${outreach_complete}" == t ]]; then
+  outreach_schema="complete"
+fi
 acl_smoke="service_role,authenticated-auth-negative"
-if [[ "${outreach_present}" == t ]]; then
+if [[ "${outreach_schema}" == complete ]]; then
   grep -q '^CREATE ROLE outreach_service;' "${globals_plain}"
   grep -q '^CREATE ROLE nikufra_wal;' "${globals_plain}"
   psql_test -Atc "select exists (select 1 from pg_roles role where role.rolname='outreach_service' and role.rolcanlogin and not role.rolsuper and not role.rolinherit and not role.rolbypassrls and not role.rolcreatedb and not role.rolcreaterole and not role.rolreplication and not exists (select 1 from pg_auth_members membership where membership.member=role.oid)) and exists (select 1 from pg_roles role where role.rolname='nikufra_wal' and role.rolcanlogin and role.rolreplication and not role.rolsuper and not role.rolinherit and not role.rolbypassrls and not role.rolcreatedb and not role.rolcreaterole and not exists (select 1 from pg_auth_members membership where membership.member=role.oid))" | grep -qx t
@@ -162,7 +179,7 @@ elapsed="$(( $(date +%s) - started_at ))"
 mkdir -p "${REPORT_DIR}"
 chmod 700 "${REPORT_DIR}"
 report="${REPORT_DIR}/$(date -u +%Y-%m-%dT%H%M%SZ).txt"
-printf 'backup=%s\nglobals=%s\nrestored_at=%s\nelapsed_seconds=%s\ncluster=isolated\nglobals_replayed=true\nacl_smoke=%s\ncounts=%s\nresult=ok\n' \
-  "${remote_name}" "${globals_name}" "$(date -u +%FT%TZ)" "${elapsed}" "${acl_smoke}" "${counts}" > "${report}"
+printf 'backup=%s\nglobals=%s\nrestored_at=%s\nelapsed_seconds=%s\ncluster=isolated\nglobals_replayed=true\noutreach_schema=%s\nacl_smoke=%s\ncounts=%s\nresult=ok\n' \
+  "${remote_name}" "${globals_name}" "$(date -u +%FT%TZ)" "${elapsed}" "${outreach_schema}" "${acl_smoke}" "${counts}" > "${report}"
 chmod 600 "${report}"
 echo "Restauro integral comprovado em ${elapsed}s: ${counts}. Relatório: ${report}"

@@ -93,11 +93,61 @@ if grep -Eq "case when to_regclass\('public\.outreach_system_state'\).*from publ
   fail "preflight volta a referenciar a tabela inexistente dentro de CASE"
 fi
 
+# A failed first rollout may have committed the normalized schema migration but
+# not the following invariants/functions migration. The deploy gate must handle
+# that partial state without statically resolving an absent function.
+deploy="${ROOT}/infra/deploy-production.sh"
+resume_gate="$(sed -n '/# Force the persisted switch/,/^[[:space:]]*SQL$/p' "${deploy}")"
+grep -Fq "to_regprocedure(" <<< "${resume_gate}" \
+  || fail "deploy não testa a existência da função de transição"
+grep -Fq 'execute $transition$' <<< "${resume_gate}" \
+  || fail "deploy resolve estaticamente uma função ausente no estado parcial"
+grep -Fq 'update public.outreach_system_state' <<< "${resume_gate}" \
+  || fail "deploy não tem fallback para a migration base já aplicada"
+grep -Fq "mode = 'disabled'" <<< "${resume_gate}" \
+  || fail "fallback parcial não força mode=disabled"
+grep -Fq 'send_enabled = false' <<< "${resume_gate}" \
+  || fail "fallback parcial não força send_enabled=false"
+transition_probe_line="$(grep -Fn 'to_regprocedure(' <<< "${resume_gate}" | head -1 | cut -d: -f1)"
+dynamic_transition_line="$(grep -Fn 'execute $transition$' <<< "${resume_gate}" | cut -d: -f1)"
+fallback_disable_line="$(grep -Fn 'update public.outreach_system_state' <<< "${resume_gate}" | cut -d: -f1)"
+[[ -n "${transition_probe_line}" && -n "${dynamic_transition_line}" && -n "${fallback_disable_line}" \
+  && "${transition_probe_line}" -lt "${dynamic_transition_line}" \
+  && "${dynamic_transition_line}" -lt "${fallback_disable_line}" ]] \
+  || fail "ordem do gate de retoma first-deploy não é fail-closed"
+
+# A logical backup may legitimately capture the database after migration
+# 202609300001 committed and before 202609300002 did. The restore drill must
+# classify that state as partial and keep the core CRM proof usable; a base
+# table alone cannot select the later Outreach roles/functions/ACL smoke.
+restore_drill="${ROOT}/infra/restore-drill.sh"
+base_probe_line="$(grep -Fn "to_regclass('public.outreach_campaigns') is not null" "${restore_drill}" | head -1 | cut -d: -f1)"
+provider_sentinel_line="$(grep -Fn "to_regprocedure('public.claim_google_provider_message(text,text)') is not null" "${restore_drill}" | head -1 | cut -d: -f1)"
+import_sentinel_line="$(grep -Fn "to_regprocedure('private.import_outreach_legacy_snapshot(jsonb,boolean)') is not null" "${restore_drill}" | head -1 | cut -d: -f1)"
+complete_gate_line="$(grep -Fn 'if [[ "${outreach_schema}" == complete ]]; then' "${restore_drill}" | cut -d: -f1)"
+[[ -n "${base_probe_line}" && -n "${provider_sentinel_line}" \
+  && -n "${import_sentinel_line}" && -n "${complete_gate_line}" \
+  && "${base_probe_line}" -lt "${provider_sentinel_line}" \
+  && "${provider_sentinel_line}" -lt "${complete_gate_line}" \
+  && "${import_sentinel_line}" -lt "${complete_gate_line}" ]] \
+  || fail "restore drill não distingue o schema base 300001 do schema completo 300002"
+restore_phase_block="$(sed -n '/^outreach_base_present=/,/^acl_smoke=/p' "${restore_drill}")"
+grep -Fq 'outreach_schema="partial"' <<< "${restore_phase_block}" \
+  || fail "restore drill não classifica a janela entre migrations como partial"
+grep -Fq 'outreach_schema="complete"' <<< "${restore_phase_block}" \
+  || fail "restore drill não classifica a migration de invariantes como complete"
+[[ "$(grep -Fc 'if [[ "${outreach_base_present}" == t ]]; then' "${restore_drill}")" == 1 ]] \
+  || fail "restore drill usa o schema base fora da classificação de fase"
+role_smoke_line="$(grep -Fn "grep -q '^CREATE ROLE outreach_service;'" "${restore_drill}" | cut -d: -f1)"
+[[ -n "${role_smoke_line}" && "${complete_gate_line}" -lt "${role_smoke_line}" ]] \
+  || fail "restore drill exige roles Outreach antes de provar o schema completo"
+grep -Fq 'outreach_schema=%s' "${restore_drill}" \
+  || fail "relatório de restauro não regista absent/partial/complete"
+
 # A rollback must prove/import the immutable image before downtime, then take
 # only the explicit offline activation path. It must never fall through to the
 # normal deploy branch that builds, migrates, backs up, or probes the Internet.
 publisher="${ROOT}/infra/release-publish.sh"
-deploy="${ROOT}/infra/deploy-production.sh"
 sentinel="${ROOT}/infra/release-sentinel.sh"
 rollback_block="$(awk '/^  rollback-release\)/{copy=1} copy{print} copy && /^    ;;$/{exit}' "${publisher}")"
 web_validate_line="$(grep -Fn 'validate_stored_web "${release_dir}" "${release_id}"' <<< "${rollback_block}" | cut -d: -f1)"
@@ -117,6 +167,14 @@ grep -Fq 'release-sentinel.sh" --local-dark' <<< "${rollback_block}" \
   || fail "rollback não usa sentinel local antes da ativação"
 
 rollback_mode_block="$(awk '/^if \[\[ "\$\{DEPLOY_MODE\}" == --rollback-preloaded \]\]; then/{copy=1} copy{print} copy && /^  exit 0$/{exit}' "${deploy}")"
+grep -Fq "to_regprocedure(" <<< "${rollback_mode_block}" \
+  || fail "rollback não testa a função de transição no schema parcial"
+grep -Fq 'execute $transition$' <<< "${rollback_mode_block}" \
+  || fail "rollback resolve estaticamente a função de transição ausente"
+grep -Fq 'update public.outreach_system_state' <<< "${rollback_mode_block}" \
+  || fail "rollback não força disabled:false quando só a migration base existe"
+grep -Fq "select to_regclass('public.outreach_system_state') is not null" <<< "${rollback_mode_block}" \
+  || fail "rollback consulta o estado sem provar primeiro a tabela"
 preflight_line="$(grep -Fn 'core_manifest="${PROJECT_DIR}/.core-images.manifest"' <<< "${rollback_mode_block}" | cut -d: -f1)"
 mode_stop_line="$(grep -Fn 'stop outreach-worker outreach-api' <<< "${rollback_mode_block}" | cut -d: -f1)"
 [[ -n "${preflight_line}" && -n "${mode_stop_line}" && "${preflight_line}" -lt "${mode_stop_line}" ]] \

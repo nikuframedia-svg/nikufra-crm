@@ -254,12 +254,36 @@ if [[ "${DEPLOY_MODE}" == --rollback-preloaded ]]; then
 do $$
 begin
   if to_regclass('public.outreach_system_state') is not null then
-    perform private.outreach_transition_system(
-      'disabled', null, false, 'rollback_preloaded_safety_gate'
-    );
+    if to_regprocedure(
+      'private.outreach_transition_system(public.outreach_system_mode,uuid,boolean,text)'
+    ) is not null then
+      execute $transition$
+        select private.outreach_transition_system(
+          'disabled'::public.outreach_system_mode,
+          null::uuid,
+          false,
+          'rollback_preloaded_safety_gate'
+        )
+      $transition$;
+    else
+      update public.outreach_system_state
+      set mode = 'disabled',
+          send_enabled = false,
+          approved_by = null,
+          approved_at = null,
+          kill_reason = 'rollback_preloaded_safety_gate',
+          updated_at = now()
+      where id;
+    end if;
   end if;
 end $$;
 SQL
+  rollback_state_table="$("${COMPOSE[@]}" exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d postgres -Atc \
+    "select to_regclass('public.outreach_system_state') is not null")"
+  [[ "${rollback_state_table}" == t ]] || {
+    echo "Rollback não confirmou a tabela de estado Outreach." >&2
+    exit 1
+  }
   rollback_state="$("${COMPOSE[@]}" exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d postgres -Atc \
     "select mode || ':' || send_enabled::text from public.outreach_system_state where id")"
   [[ "${rollback_state}" == disabled:false ]] || {
@@ -308,9 +332,33 @@ running_senders="$("${COMPOSE[@]}" ps --status running --services outreach-api o
 do $$
 begin
   if to_regclass('public.outreach_system_state') is not null then
-    perform private.outreach_transition_system(
-      'disabled', null, false, 'deployment_safety_gate'
-    );
+    if to_regprocedure(
+      'private.outreach_transition_system(public.outreach_system_mode,uuid,boolean,text)'
+    ) is not null then
+      -- The first migration may have committed while the invariants migration
+      -- did not. Resolve the transition function only at execution time so a
+      -- partial first install can safely resume instead of failing at parse.
+      execute $transition$
+        select private.outreach_transition_system(
+          'disabled'::public.outreach_system_mode,
+          null::uuid,
+          false,
+          'deployment_safety_gate'
+        )
+      $transition$;
+    else
+      -- 202609300001 already enforces disabled => send_enabled=false, but set
+      -- both columns explicitly so a partially installed database is closed
+      -- before backup, restore rehearsal, and the remaining migrations.
+      update public.outreach_system_state
+      set mode = 'disabled',
+          send_enabled = false,
+          approved_by = null,
+          approved_at = null,
+          kill_reason = 'deployment_safety_gate',
+          updated_at = now()
+      where id;
+    end if;
   end if;
 end $$;
 SQL
