@@ -4,6 +4,19 @@ services:
     # ceiling. If the offsite receiver is unavailable long enough to exhaust
     # this budget, PostgreSQL marks the slot lost instead of filling the disk;
     # the documented recovery path then creates a new base backup.
+    # The image's `host all all` HBA entries deliberately do not match physical
+    # replication. Add one idempotent, role-scoped rule for peers on a directly
+    # attached network before handing control back to the vendor entrypoint.
+    entrypoint:
+      - bash
+      - -ceu
+      - |
+        hba_file=/etc/postgresql/pg_hba.conf
+        hba_rule='host replication nikufra_wal samenet scram-sha-256'
+        grep -Fqx -- "$${hba_rule}" "$${hba_file}" \
+          || printf '%s\n' "$${hba_rule}" >> "$${hba_file}"
+        exec docker-entrypoint.sh "$$@"
+      - --
     command:
       - postgres
       - -D

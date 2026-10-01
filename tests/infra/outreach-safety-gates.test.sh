@@ -116,6 +116,58 @@ grep -Fq 'Recusado gerar uma chave nova.' "${ROOT}/infra/configure-pgsodium.sh" 
 if grep -Fq -- ':/etc/postgresql-custom:ro' "${ROOT}/infra/docker-compose.yml"; then
   fail "Compose sobrepõe todo o diretório postgresql-custom"
 fi
+
+# `host all all` does not authorize a physical replication connection. Keep
+# the receiver's HBA access limited to its dedicated role, SCRAM and a network
+# directly attached to PostgreSQL; the startup patch must also be idempotent
+# and preserve the pinned image's entrypoint initialization.
+production_compose="${ROOT}/infra/docker-compose.production.yml"
+base_compose="${ROOT}/infra/docker-compose.yml"
+configure_wal="${ROOT}/infra/configure-wal-archive.sh"
+hba_rule='host replication nikufra_wal samenet scram-sha-256'
+[[ "$(grep -Fxc "        hba_rule='${hba_rule}'" "${production_compose}")" == 1 ]] \
+  || fail "Compose não instala exatamente uma regra HBA restrita para o receiver WAL"
+grep -Fq 'grep -Fqx -- "$${hba_rule}" "$${hba_file}"' "${production_compose}" \
+  || fail "regra HBA do receiver WAL não é instalada de forma idempotente"
+grep -Fq 'exec docker-entrypoint.sh "$$@"' "${production_compose}" \
+  || fail "wrapper HBA não devolve controlo ao entrypoint PostgreSQL"
+if grep -Eq "hba_rule='host[[:space:]]+replication[[:space:]]+(all|nikufra_wal)[[:space:]]+(all|0\\.0\\.0\\.0/0|::0/0)[[:space:]]+(trust|md5|scram-sha-256)'" "${production_compose}"; then
+  fail "regra HBA do receiver WAL permite origem ou role demasiado ampla"
+fi
+db_compose_block="$(sed -n '/^  db:$/,/^  auth:$/p' "${base_compose}")"
+production_db_compose_block="$(sed -n '/^  db:$/,/^  kong:$/p' "${production_compose}")"
+grep -Fxq '    networks: [backend]' <<< "${db_compose_block}" \
+  || fail "DB não está limitado à rede backend assumida pela regra HBA samenet"
+if grep -Eq '^[[:space:]]+(ports|network_mode):' <<< "${db_compose_block}"; then
+  fail "DB expõe rede fora do backend assumido pela regra HBA samenet"
+fi
+if grep -Eq '^[[:space:]]+(ports|network_mode|networks):' <<< "${production_db_compose_block}"; then
+  fail "override de produção alarga a rede backend assumida pela regra HBA samenet"
+fi
+grep -Fq 'from pg_hba_file_rules' "${configure_wal}" \
+  || fail "configuração WAL não valida a regra através do parser PostgreSQL"
+grep -Fq 'if exists (select 1 from pg_hba_file_rules where error is not null)' "${configure_wal}" \
+  || fail "configuração WAL não falha perante erros globais de parsing HBA"
+grep -Fq "database = array['replication']::text[]" "${configure_wal}" \
+  || fail "validação HBA não compara exatamente o array database"
+grep -Fq "user_name = array['nikufra_wal']::text[]" "${configure_wal}" \
+  || fail "validação HBA não compara exatamente o array user_name"
+for hba_predicate in \
+  "type = 'host'" \
+  "address = 'samenet'" \
+  'netmask is null' \
+  "auth_method = 'scram-sha-256'" \
+  'coalesce(cardinality(options), 0) = 0' \
+  'error is null' \
+  'matching_hba_rules <> 1'; do
+  grep -Fq "${hba_predicate}" "${configure_wal}" \
+    || fail "validação HBA omite predicado: ${hba_predicate}"
+done
+role_hardening_line="$(grep -Fn 'role hardening verification failed' "${configure_wal}" | cut -d: -f1)"
+hba_verification_line="$(grep -Fn 'nikufra_wal HBA verification failed' "${configure_wal}" | cut -d: -f1)"
+[[ -n "${role_hardening_line}" && -n "${hba_verification_line}" \
+  && "${role_hardening_line}" -lt "${hba_verification_line}" ]] \
+  || fail "validação HBA não ocorre depois do hardening da role WAL"
 vault_rebuild_line="$(grep -Fn "delete from vault.secrets" "${deploy}" | head -1 | cut -d: -f1)"
 preflight_line="$(grep -Fn '"${SCRIPT_DIR}/predeploy-safety.sh"' "${deploy}" | head -1 | cut -d: -f1)"
 [[ -n "${vault_rebuild_line}" && -n "${preflight_line}" \
