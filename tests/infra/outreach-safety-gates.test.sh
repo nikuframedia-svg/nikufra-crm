@@ -111,6 +111,8 @@ grep -Fq '/data/PG_VERSION' "${ROOT}/infra/configure-pgsodium.sh" \
   || fail "configuração pgsodium não recusa gerar nova key sobre PGDATA existente"
 grep -Fq 'Recusado gerar uma chave nova.' "${ROOT}/infra/configure-pgsodium.sh" \
   || fail "configuração pgsodium não falha fechada sem key recuperável"
+[[ "$(grep -c -- '--cap-add DAC_READ_SEARCH' "${ROOT}/infra/configure-pgsodium.sh")" -ge 2 ]] \
+  || fail "validadores pgsodium não leem a chave host restrita com a capability mínima"
 if grep -Fq -- ':/etc/postgresql-custom:ro' "${ROOT}/infra/docker-compose.yml"; then
   fail "Compose sobrepõe todo o diretório postgresql-custom"
 fi
