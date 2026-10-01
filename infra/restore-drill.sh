@@ -7,6 +7,62 @@ BACKUP_ROOT="${NIKUFRA_BACKUP_ROOT:-/home/luis/services/nikufra-crm/backups}"
 REPORT_DIR="${BACKUP_ROOT}/restore-drills"
 POSTGRES_IMAGE="supabase/postgres:15.8.1.085"
 
+classify_outreach_schema() {
+  local ledger_present="$1"
+  local base_recorded="$2"
+  local invariants_recorded="$3"
+  local base_all="$4"
+  local base_any="$5"
+  local invariants_all="$6"
+  local invariants_any="$7"
+  local flag
+
+  for flag in "$@"; do
+    [[ "${flag}" =~ ^[tf]$ ]] || return 2
+  done
+  [[ "${base_all}" == f || "${base_any}" == t ]] || return 1
+  [[ "${invariants_all}" == f || "${invariants_any}" == t ]] || return 1
+
+  # Before the first unified deploy there may be no migration ledger at all,
+  # or a ledger containing only historical CRM migrations. Both are coherent
+  # only while every Outreach sentinel is absent.
+  if [[ "${ledger_present}" == f ]]; then
+    if [[ "${base_recorded}" == f && "${invariants_recorded}" == f \
+      && "${base_any}" == f && "${invariants_any}" == f ]]; then
+      printf '%s\n' absent
+      return 0
+    fi
+    return 1
+  fi
+  if [[ "${base_recorded}" == f && "${invariants_recorded}" == f ]]; then
+    if [[ "${base_any}" == f && "${invariants_any}" == f ]]; then
+      printf '%s\n' absent
+      return 0
+    fi
+    return 1
+  fi
+
+  # 202609300001 and its ledger row commit atomically. A partial rollout is
+  # therefore valid only when all base objects exist and no 300002 sentinel or
+  # ledger row exists yet.
+  if [[ "${base_recorded}" == t && "${invariants_recorded}" == f \
+    && "${base_all}" == t && "${invariants_any}" == f ]]; then
+    printf '%s\n' partial
+    return 0
+  fi
+
+  # Likewise, a completed rollout requires both atomic ledger rows and every
+  # selected sentinel from both migrations. Anything else is schema drift or
+  # an incomplete restore and must not produce a successful recovery report.
+  if [[ "${base_recorded}" == t && "${invariants_recorded}" == t \
+    && "${base_all}" == t && "${invariants_all}" == t ]]; then
+    printf '%s\n' complete
+    return 0
+  fi
+
+  return 1
+}
+
 [[ -f "${ENV_FILE}" ]] || { echo "Falta ${ENV_FILE}." >&2; exit 1; }
 set -a
 # shellcheck disable=SC1090
@@ -127,23 +183,71 @@ if psql_test -c "set role authenticated; select 1 from auth.users limit 1" >/dev
   exit 1
 fi
 
-outreach_base_present="$(psql_test -Atc "select to_regclass('public.outreach_campaigns') is not null")"
-# Migration 202609300001 creates the normalized tables, while 202609300002
-# installs the invariants/import/provider functions that make the Outreach
-# schema operational. A backup taken between those two atomic migrations is a
-# valid recovery point: keep proving the core CRM restore, but do not require
-# the later Outreach roles/ACL smoke until both built-in-signature sentinels
-# exist. This lets the next deployment safely resume the second migration.
-outreach_complete="$(psql_test -Atc "select
-  to_regclass('public.outreach_campaigns') is not null
-  and to_regprocedure('public.claim_google_provider_message(text,text)') is not null
-  and to_regprocedure('private.import_outreach_legacy_snapshot(jsonb,boolean)') is not null")"
-outreach_schema="absent"
-if [[ "${outreach_base_present}" == t ]]; then
-  outreach_schema="partial"
+# Migration 202609300001 creates the normalized base and 202609300002 installs
+# the operational invariants. The ledger is the authority for which atomic
+# phase committed; multiple independent objects prove that the corresponding
+# phase was restored in full. Probe ledger existence separately because SQL
+# resolves a missing relation even from an unselected CASE branch.
+migration_ledger_present="$(psql_test -Atc \
+  "select to_regclass('nikufra_meta.schema_migrations') is not null")"
+outreach_base_recorded=f
+outreach_invariants_recorded=f
+if [[ "${migration_ledger_present}" == t ]]; then
+  outreach_ledger_flags="$(psql_test -Atc "select
+    count(*) filter (where name='202609300001_outreach_normalized_schema.sql') = 1,
+    count(*) filter (where name='202609300002_outreach_invariants_and_migration.sql') = 1
+    from nikufra_meta.schema_migrations")"
+  IFS='|' read -r outreach_base_recorded outreach_invariants_recorded <<<"${outreach_ledger_flags}"
 fi
-if [[ "${outreach_complete}" == t ]]; then
-  outreach_schema="complete"
+
+outreach_object_flags="$(psql_test -Atc "select
+  (
+    to_regtype('public.outreach_system_mode') is not null
+    and to_regclass('public.outreach_system_state') is not null
+    and to_regclass('public.outreach_campaigns') is not null
+    and to_regclass('public.communication_suppressions') is not null
+    and to_regclass('private.outreach_credentials') is not null
+    and exists (
+      select 1 from pg_attribute
+      where attrelid=to_regclass('public.profiles')
+        and attname='outreach_role' and not attisdropped
+    )
+  ),
+  (
+    to_regtype('public.outreach_system_mode') is not null
+    or to_regclass('public.outreach_system_state') is not null
+    or to_regclass('public.outreach_campaigns') is not null
+    or to_regclass('public.communication_suppressions') is not null
+    or to_regclass('private.outreach_credentials') is not null
+    or exists (
+      select 1 from pg_attribute
+      where attrelid=to_regclass('public.profiles')
+        and attname='outreach_role' and not attisdropped
+    )
+  ),
+  (
+    to_regprocedure('public.claim_google_provider_message(text,text)') is not null
+    and to_regprocedure('private.import_outreach_legacy_snapshot(jsonb,boolean)') is not null
+    and to_regprocedure('private.outreach_assert_provider_permit(uuid,text)') is not null
+  ),
+  (
+    to_regprocedure('public.claim_google_provider_message(text,text)') is not null
+    or to_regprocedure('private.import_outreach_legacy_snapshot(jsonb,boolean)') is not null
+    or to_regprocedure('private.outreach_assert_provider_permit(uuid,text)') is not null
+  )")"
+IFS='|' read -r outreach_base_all outreach_base_any \
+  outreach_invariants_all outreach_invariants_any <<<"${outreach_object_flags}"
+
+if ! outreach_schema="$(classify_outreach_schema \
+  "${migration_ledger_present}" \
+  "${outreach_base_recorded}" \
+  "${outreach_invariants_recorded}" \
+  "${outreach_base_all}" \
+  "${outreach_base_any}" \
+  "${outreach_invariants_all}" \
+  "${outreach_invariants_any}")"; then
+  echo "Falha no drill: ledger e objetos Outreach estão incoerentes (ledger=${migration_ledger_present}, base_row=${outreach_base_recorded}, invariants_row=${outreach_invariants_recorded}, base_all=${outreach_base_all}, base_any=${outreach_base_any}, invariants_all=${outreach_invariants_all}, invariants_any=${outreach_invariants_any})." >&2
+  exit 1
 fi
 acl_smoke="service_role,authenticated-auth-negative"
 if [[ "${outreach_schema}" == complete ]]; then

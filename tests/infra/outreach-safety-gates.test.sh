@@ -118,26 +118,68 @@ fallback_disable_line="$(grep -Fn 'update public.outreach_system_state' <<< "${r
 
 # A logical backup may legitimately capture the database after migration
 # 202609300001 committed and before 202609300002 did. The restore drill must
-# classify that state as partial and keep the core CRM proof usable; a base
-# table alone cannot select the later Outreach roles/functions/ACL smoke.
+# cross-check the atomic migration ledger with independent object sentinels:
+# coherent absent/partial/complete phases pass, while every drift combination
+# fails instead of being downgraded to a successful core-only restore.
 restore_drill="${ROOT}/infra/restore-drill.sh"
+ledger_probe_line="$(grep -Fn "select to_regclass('nikufra_meta.schema_migrations') is not null" "${restore_drill}" | cut -d: -f1)"
+ledger_query_line="$(grep -Fn "name='202609300001_outreach_normalized_schema.sql'" "${restore_drill}" | cut -d: -f1)"
 base_probe_line="$(grep -Fn "to_regclass('public.outreach_campaigns') is not null" "${restore_drill}" | head -1 | cut -d: -f1)"
 provider_sentinel_line="$(grep -Fn "to_regprocedure('public.claim_google_provider_message(text,text)') is not null" "${restore_drill}" | head -1 | cut -d: -f1)"
 import_sentinel_line="$(grep -Fn "to_regprocedure('private.import_outreach_legacy_snapshot(jsonb,boolean)') is not null" "${restore_drill}" | head -1 | cut -d: -f1)"
 complete_gate_line="$(grep -Fn 'if [[ "${outreach_schema}" == complete ]]; then' "${restore_drill}" | cut -d: -f1)"
-[[ -n "${base_probe_line}" && -n "${provider_sentinel_line}" \
+[[ -n "${ledger_probe_line}" && -n "${ledger_query_line}" \
+  && "${ledger_probe_line}" -lt "${ledger_query_line}" \
+  && -n "${base_probe_line}" && -n "${provider_sentinel_line}" \
   && -n "${import_sentinel_line}" && -n "${complete_gate_line}" \
+  && "${ledger_query_line}" -lt "${base_probe_line}" \
   && "${base_probe_line}" -lt "${provider_sentinel_line}" \
   && "${provider_sentinel_line}" -lt "${complete_gate_line}" \
   && "${import_sentinel_line}" -lt "${complete_gate_line}" ]] \
   || fail "restore drill não distingue o schema base 300001 do schema completo 300002"
-restore_phase_block="$(sed -n '/^outreach_base_present=/,/^acl_smoke=/p' "${restore_drill}")"
-grep -Fq 'outreach_schema="partial"' <<< "${restore_phase_block}" \
-  || fail "restore drill não classifica a janela entre migrations como partial"
-grep -Fq 'outreach_schema="complete"' <<< "${restore_phase_block}" \
-  || fail "restore drill não classifica a migration de invariantes como complete"
-[[ "$(grep -Fc 'if [[ "${outreach_base_present}" == t ]]; then' "${restore_drill}")" == 1 ]] \
-  || fail "restore drill usa o schema base fora da classificação de fase"
+if grep -Eq "case when to_regclass\('nikufra_meta\.schema_migrations'\).*from nikufra_meta\.schema_migrations" "${restore_drill}"; then
+  fail "restore drill referencia o ledger inexistente dentro de CASE"
+fi
+grep -Fq "name='202609300002_outreach_invariants_and_migration.sql'" "${restore_drill}" \
+  || fail "restore drill não cruza a segunda migration com os sentinels operacionais"
+grep -Fq "to_regprocedure('private.outreach_assert_provider_permit(uuid,text)') is not null" "${restore_drill}" \
+  || fail "restore drill não usa sentinels independentes suficientes para 300002"
+
+classifier_definition="$(awk '/^classify_outreach_schema\(\) \{/{copy=1} copy{print} copy && /^}/{exit}' "${restore_drill}")"
+[[ -n "${classifier_definition}" ]] || fail "classificador de fase Outreach ausente"
+eval "${classifier_definition}"
+[[ "$(classify_outreach_schema f f f f f f f)" == absent ]] \
+  || fail "classificador rejeita first-deploy sem ledger"
+[[ "$(classify_outreach_schema t f f f f f f)" == absent ]] \
+  || fail "classificador rejeita ledger apenas com migrations CRM"
+[[ "$(classify_outreach_schema t t f t t f f)" == partial ]] \
+  || fail "classificador rejeita a janela atómica 300001→300002"
+[[ "$(classify_outreach_schema t t t t t t t)" == complete ]] \
+  || fail "classificador rejeita o schema Outreach completo"
+
+drift_cases=(
+  'f f f t t f f'
+  'f t f f f f f'
+  't f f t t f f'
+  't f f t f f f'
+  't t f f t f f'
+  't t f t t f t'
+  't t f t t t t'
+  't f t t t t t'
+  't t t t t f t'
+  't t t t t f f'
+  't t t t t t f'
+)
+for drift_case in "${drift_cases[@]}"; do
+  # shellcheck disable=SC2086
+  if classify_outreach_schema ${drift_case} >/dev/null; then
+    fail "classificador aceitou drift ledger↔objetos: ${drift_case}"
+  fi
+done
+if classify_outreach_schema x f f f f f f >/dev/null; then
+  fail "classificador aceitou uma leitura de estado inválida"
+fi
+
 role_smoke_line="$(grep -Fn "grep -q '^CREATE ROLE outreach_service;'" "${restore_drill}" | cut -d: -f1)"
 [[ -n "${role_smoke_line}" && "${complete_gate_line}" -lt "${role_smoke_line}" ]] \
   || fail "restore drill exige roles Outreach antes de provar o schema completo"
