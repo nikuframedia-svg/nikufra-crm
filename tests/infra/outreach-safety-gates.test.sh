@@ -81,6 +81,18 @@ grep -Fq "private.outreach_delivery_ledger where status in ('sending','accepted'
   "${ROOT}/infra/outreach-readiness.sh" \
   || fail "readiness live não bloqueia ledgers de entrega não terminais"
 
+# PostgreSQL resolves every relation in a CASE expression before evaluating
+# the chosen branch. The first production deploy must therefore prove table
+# existence in a separate statement before it can query the Outreach row.
+predeploy="${ROOT}/infra/predeploy-safety.sh"
+state_probe_line="$(grep -Fn "select to_regclass('public.outreach_system_state') is not null" "${predeploy}" | cut -d: -f1)"
+state_query_line="$(grep -Fn "select mode::text || ':' || send_enabled::text from public.outreach_system_state" "${predeploy}" | cut -d: -f1)"
+[[ -n "${state_probe_line}" && -n "${state_query_line}" && "${state_probe_line}" -lt "${state_query_line}" ]] \
+  || fail "preflight não separa a descoberta da tabela da consulta ao estado Outreach"
+if grep -Eq "case when to_regclass\('public\.outreach_system_state'\).*from public\.outreach_system_state" "${predeploy}"; then
+  fail "preflight volta a referenciar a tabela inexistente dentro de CASE"
+fi
+
 # A rollback must prove/import the immutable image before downtime, then take
 # only the explicit offline activation path. It must never fall through to the
 # normal deploy branch that builds, migrates, backs up, or probes the Internet.
