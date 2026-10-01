@@ -520,6 +520,7 @@ required_runtime=(
   infra/release-publish.sh
   infra/release-sentinel.sh
   infra/restore-drill.sh
+  infra/verify-outreach-image-archive.py
   infra/wal-offsite-sync.sh
   infra/web-publish.sh
 )
@@ -639,5 +640,8 @@ COPYFILE_DISABLE=1 tar -C "${archive_fixture}" -czf "${invalid_archive_bundle}" 
 if python3 - "${invalid_archive_bundle}" <<< "${validator_program}" >/dev/null 2>&1; then
   fail "validador aceitou diretório no lugar de ficheiro obrigatório"
 fi
+
+python3 "${ROOT}/tests/infra/verify-outreach-image-archive.test.py" \
+  || fail "validador de archives Outreach falhou as fixtures legacy/OCI"
 
 echo "OK: gates de shadow, recuperação e rollback OCI validados"
