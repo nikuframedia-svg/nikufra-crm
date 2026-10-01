@@ -124,6 +124,9 @@ fi
 production_compose="${ROOT}/infra/docker-compose.production.yml"
 base_compose="${ROOT}/infra/docker-compose.yml"
 configure_wal="${ROOT}/infra/configure-wal-archive.sh"
+wal_sync="${ROOT}/infra/wal-offsite-sync.sh"
+basebackup_production="${ROOT}/infra/basebackup-production.sh"
+pitr_drill="${ROOT}/infra/pitr-restore-drill.sh"
 hba_rule='host replication nikufra_wal samenet scram-sha-256'
 [[ "$(grep -Fxc "        hba_rule='${hba_rule}'" "${production_compose}")" == 1 ]] \
   || fail "Compose não instala exatamente uma regra HBA restrita para o receiver WAL"
@@ -168,6 +171,50 @@ hba_verification_line="$(grep -Fn 'nikufra_wal HBA verification failed' "${confi
 [[ -n "${role_hardening_line}" && -n "${hba_verification_line}" \
   && "${role_hardening_line}" -lt "${hba_verification_line}" ]] \
   || fail "validação HBA não ocorre depois do hardening da role WAL"
+
+# Supabase revokes pg_switch_wal() from the non-superuser `postgres` role.
+# Use the existing administrative credential only for the WAL operations; the
+# network-facing replication role must not gain a GRANT or pg_checkpoint.
+if grep -Eiq 'grant[[:space:]].*[[:space:]]to[[:space:]]+nikufra_wal|pg_checkpoint' "${configure_wal}"; then
+  fail "correção do switch WAL alarga persistentemente a role nikufra_wal"
+fi
+if grep -ERiq --include='*.sh' \
+  'grant[[:space:]].*(pg_switch_wal|pg_checkpoint)' "${ROOT}/infra"; then
+  fail "infraestrutura concede persistentemente pg_switch_wal ou pg_checkpoint"
+fi
+wal_switch_block="$(sed -n '/# Fecha um segmento/,/^archived=false$/p' "${wal_sync}")"
+grep -Fq 'WAL_ADMIN_PSQL=(' <<< "${wal_switch_block}" \
+  || fail "sincronização WAL não isola a ligação administrativa"
+grep -Fq 'exec -T db sh -ceu' <<< "${wal_switch_block}" \
+  || fail "sincronização WAL não resolve a credencial dentro do contentor"
+grep -Fq 'export PGPASSWORD="${POSTGRES_PASSWORD:?}"' <<< "${wal_switch_block}" \
+  || fail "sincronização WAL não autentica o administrador pela env do contentor"
+if grep -Fq -- '-e PGPASSWORD=' <<< "${wal_switch_block}"; then
+  fail "sincronização WAL expõe a password expandida nos argumentos Docker do host"
+fi
+grep -Fq 'exec psql -X -w -v ON_ERROR_STOP=1 -h /var/run/postgresql' <<< "${wal_switch_block}" \
+  || fail "ligação WAL não fixa socket, psqlrc, non-interactive e fail-fast"
+grep -Fq -- '-U supabase_admin' <<< "${wal_switch_block}" \
+  || fail "sincronização WAL não usa a role autorizada pela imagem Supabase"
+if grep -Eq -- '-U (postgres|nikufra_wal)' <<< "${wal_switch_block}"; then
+  fail "sincronização WAL executa o switch com uma role sem permissão mínima"
+fi
+grep -Fq "show wal_level" <<< "${wal_switch_block}" \
+  || fail "sincronização WAL não valida wal_level antes do marcador lógico"
+grep -Fq '[[ "${wal_level}" == logical ]]' <<< "${wal_switch_block}" \
+  || fail "sincronização WAL aceita wal_level incompatível com o marcador"
+wal_marker_line="$(grep -Fn "pg_logical_emit_message(false,'nikufra_wal_sync_v1','')" "${wal_sync}" | cut -d: -f1)"
+wal_capture_line="$(grep -n '^switched_segment=' "${wal_sync}" | cut -d: -f1)"
+wal_switch_line="$(grep -Fn 'select pg_switch_wal()' "${wal_sync}" | cut -d: -f1)"
+[[ -n "${wal_marker_line}" && -n "${wal_capture_line}" && -n "${wal_switch_line}" \
+  && "${wal_marker_line}" -lt "${wal_capture_line}" && "${wal_capture_line}" -lt "${wal_switch_line}" ]] \
+  || fail "sincronização WAL não garante a ordem marcador não transacional, captura e switch"
+grep -Fq 'pg_basebackup -h db -U nikufra_wal' "${basebackup_production}" \
+  || fail "base backup deixou de usar a role de replicação dedicada"
+pitr_target_line="$(grep -Fn 'target_lsn=' "${pitr_drill}" | head -1 | cut -d: -f1)"
+pitr_sync_line="$(grep -Fn '"${SCRIPT_DIR}/wal-offsite-sync.sh"' "${pitr_drill}" | cut -d: -f1)"
+[[ -n "${pitr_target_line}" && -n "${pitr_sync_line}" && "${pitr_target_line}" -lt "${pitr_sync_line}" ]] \
+  || fail "drill PITR não fecha e envia WAL depois de capturar o LSN alvo"
 vault_rebuild_line="$(grep -Fn "delete from vault.secrets" "${deploy}" | head -1 | cut -d: -f1)"
 preflight_line="$(grep -Fn '"${SCRIPT_DIR}/predeploy-safety.sh"' "${deploy}" | head -1 | cut -d: -f1)"
 [[ -n "${vault_rebuild_line}" && -n "${preflight_line}" \

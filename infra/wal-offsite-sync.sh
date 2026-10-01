@@ -39,11 +39,22 @@ trap cleanup EXIT
 [[ "$("${COMPOSE[@]}" ps --status running --services wal-archive)" == "wal-archive" ]] || { echo "wal-archive não está ativo." >&2; exit 1; }
 
 # Fecha um segmento em cada execução. Com cron a cada 10 minutos, o RPO
-# offsite máximo fica abaixo dos 15 minutos acordados.
-switched_segment="$("${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc \
+# offsite máximo fica abaixo dos 15 minutos acordados. A imagem Supabase
+# reserva pg_switch_wal() para supabase_admin; não alargue a role de replicação.
+WAL_ADMIN_PSQL=("${COMPOSE[@]}" exec -T db sh -ceu '
+  export PGPASSWORD="${POSTGRES_PASSWORD:?}"
+  exec psql -X -w -v ON_ERROR_STOP=1 -h /var/run/postgresql -U supabase_admin -d postgres "$@"
+' --)
+# pg_switch_wal() is a no-op when no WAL was generated since the previous
+# switch. A nontransactional logical message guarantees a record to close.
+wal_level="$("${WAL_ADMIN_PSQL[@]}" -Atc 'show wal_level')"
+[[ "${wal_level}" == logical ]] || { echo "wal_level inesperado: ${wal_level}; esperado logical." >&2; exit 1; }
+"${WAL_ADMIN_PSQL[@]}" -Atc \
+  "select pg_logical_emit_message(false,'nikufra_wal_sync_v1','')" >/dev/null
+switched_segment="$("${WAL_ADMIN_PSQL[@]}" -Atc \
   "select pg_walfile_name(pg_current_wal_lsn())")"
 [[ "${switched_segment}" =~ ^0[0-9A-F]{23}$ ]] || { echo "Nome de segmento WAL inválido: ${switched_segment}" >&2; exit 1; }
-"${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc "select pg_switch_wal()" >/dev/null
+"${WAL_ADMIN_PSQL[@]}" -Atc "select pg_switch_wal()" >/dev/null
 archived=false
 for _ in $(seq 1 60); do
   if [[ -s "${WAL_DIR}/${switched_segment}" ]]; then archived=true; break; fi
