@@ -2,7 +2,18 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { initialActivities, initialDrafts, initialLeads, initialOpportunities, loadLocalRealData, owners as initialOwners, stageProbability } from "../data/seed";
 import { pruneCommercialRecords } from "../lib/crm-records";
 import { supabase } from "../lib/supabase";
-import type { Activity, CommercialDeletionResult, Draft, FollowUpSuggestion, Lead, Opportunity, Owner, Stage, Vertical } from "../types";
+import type { Activity, CommercialDeletionResult, Draft, FollowUpSuggestion, Lead, Opportunity, OutreachLegalBasis, Owner, Stage, Vertical } from "../types";
+
+interface OutreachComplianceInput {
+  legalBasis?: OutreachLegalBasis;
+  consentAt?: string;
+  consentSource?: string;
+  legalBasisEvidence?: string;
+  legitimateInterestPurpose?: string;
+  liaReference?: string;
+  legitimateInterestExpiresAt?: string;
+  optout?: boolean;
+}
 
 interface CRMState {
   leads: Lead[];
@@ -21,6 +32,7 @@ interface CRMState {
   updateOpportunity: (id: string, changes: Partial<Opportunity>) => void;
   updateCompanyName: (companyId: string, name: string) => Promise<void>;
   updateLead: (id: string, field: keyof Lead, value: string) => void;
+  updateLeadOutreachCompliance: (id: string, input: OutreachComplianceInput) => Promise<void>;
   deleteCommercialRecords: (input: { contactIds?: string[]; companyIds?: string[]; opportunityIds?: string[] }) => Promise<CommercialDeletionResult>;
   dismissFollowUpSuggestion: (contactId: string) => Promise<void>;
   addDrafts: (drafts: Draft[]) => void;
@@ -35,6 +47,11 @@ const verticalFromDb: Record<string, Vertical> = {
 const verticalToDb: Record<Vertical, string> = { "Metalomecânica": "metalomecanica", "Automóvel": "automovel", "Alumínio": "aluminio", "Cortiça": "cortica", "Compósitos": "compositos", "Eletrónica": "eletronica", "Outro": "outro" };
 const opportunityTypeFromDb: Record<string, Opportunity["tipo"]> = { consultoria: "Consultoria", licenca_pp1: "Licença PP1", piloto: "Piloto", misto: "Misto" };
 const opportunityTypeToDb: Record<Opportunity["tipo"], string> = { Consultoria: "consultoria", "Licença PP1": "licenca_pp1", Piloto: "piloto", Misto: "misto" };
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isDatabaseUserId(value: string | undefined | null): value is string {
+  return Boolean(value && UUID_PATTERN.test(value));
+}
 
 function readStored<T>(key: string, fallback: T): T {
   try {
@@ -51,8 +68,8 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   const [activities, setActivities] = useState<Activity[]>(initialActivities);
   const [followUpSuggestions, setFollowUpSuggestions] = useState<FollowUpSuggestion[]>([]);
   const [drafts, setDrafts] = useState<Draft[]>(initialDrafts);
-  const [team, setTeam] = useState<Owner[]>(initialOwners);
-  const [currentUserId, setCurrentUserId] = useState(initialOwners[0].id);
+  const [team, setTeam] = useState<Owner[]>(() => supabase ? [] : initialOwners);
+  const [currentUserId, setCurrentUserId] = useState(() => supabase ? "" : initialOwners[0].id);
   const [emailSelection, setEmailSelection] = useState<string[]>([]);
 
   useEffect(() => {
@@ -73,10 +90,10 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       const activeUserId = authData.user?.id;
       if (active && activeUserId) setCurrentUserId(activeUserId);
       const [profilesResult, opportunitiesResult, activitiesResult, contactsResult, historyResult, suggestionsResult, proposalPricesResult] = await Promise.all([
-        supabase!.from("profiles").select("id,nome,email,role,cor").eq("ativo", true).order("nome"),
+        supabase!.from("profiles").select("id,nome,email,role,cor,outreach_role").eq("ativo", true).order("nome"),
         supabase!.from("oportunidades").select("id,titulo,estado,tipo,valor_estimado,valor_recorrente_anual,probabilidade,owner_id,data_primeiro_contacto,data_reuniao,data_proposta,data_piloto,data_fecho,data_prevista_fecho,ciclo_acordo_meses,avaliacao,notas,created_at,updated_at,empresa_id,contacto_principal_id,empresas(id,nome,vertical,cidade,pais,origem)").eq("arquivado", false).order("updated_at", { ascending: false }),
         supabase!.from("atividades").select("id,oportunidade_id,contacto_id,user_id,tipo,descricao,data,direcao,reuniao_inferida,thread_id,assunto,snippet,empresas(nome),contactos(nome,email)").order("data", { ascending: false }).limit(500),
-        supabase!.from("contactos").select("id,empresa_id,nome,cargo,email,telefone,optout,estado,data_reuniao,empresas(id,nome,vertical,cidade,pais,origem)").order("updated_at", { ascending: false }),
+        supabase!.from("contactos").select("id,empresa_id,nome,cargo,email,telefone,optout,outreach_legal_basis,outreach_consent_at,outreach_consent_source,outreach_legal_basis_evidence,outreach_legal_basis_recorded_at,outreach_legal_basis_recorded_by,outreach_legitimate_interest_purpose,outreach_lia_reference,outreach_legitimate_interest_expires_at,estado,data_reuniao,empresas(id,nome,vertical,cidade,pais,origem)").order("updated_at", { ascending: false }),
         supabase!.from("estado_historico").select("oportunidade_id,changed_at").order("changed_at", { ascending: false }),
         supabase!.from("follow_up_suggestions").select("contact_id,empresa_id,opportunity_id,owner_id,user_id,empresa,contacto_nome,contacto_email,contacto_cargo,estado,ultima_interacao_em,total_interacoes,total_mensagens,emails_enviados,emails_recebidos,reunioes,ultimo_assunto,ultimo_resumo").eq("user_id", activeUserId ?? "00000000-0000-0000-0000-000000000000"),
         // Kept separate so an app preview can still load against the previous schema before migration.
@@ -84,7 +101,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       ]);
       if (!active) return;
       if (profilesResult.data?.length) {
-        setTeam(profilesResult.data.map((profile) => ({ id: profile.id, nome: profile.nome, email: profile.email, iniciais: profile.nome.split(" ").map((part: string) => part[0]).slice(0, 2).join(""), cor: profile.cor, role: profile.role })));
+        setTeam(profilesResult.data.map((profile) => ({ id: profile.id, nome: profile.nome, email: profile.email, iniciais: profile.nome.split(" ").map((part: string) => part[0]).slice(0, 2).join(""), cor: profile.cor, role: profile.role, outreachRole: profile.outreach_role })));
       }
       if (opportunitiesResult.error) console.error("Falha ao carregar oportunidades", opportunitiesResult.error.message);
       if (opportunitiesResult.data) {
@@ -100,7 +117,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
         const serverLeads: Lead[] = (contactsResult.data ?? []).map((contact) => {
           const company = Array.isArray(contact.empresas) ? contact.empresas[0] : contact.empresas;
           const opportunity = opportunitiesResult.data.find((item) => item.empresa_id === contact.empresa_id);
-          return { id: contact.id, empresaId: contact.empresa_id, nome: contact.nome, cargo: contact.cargo ?? "", empresa: company?.nome ?? "Empresa", email: contact.email ?? "", telefone: contact.telefone ?? "", vertical: verticalFromDb[company?.vertical ?? "outro"], cidade: company?.cidade ?? "", pais: company?.pais ?? "PT", origem: company?.origem ?? "", estado: opportunity?.estado ?? contact.estado ?? "nao_contactado", ownerId: opportunity?.owner_id ?? profilesResult.data?.[0]?.id ?? initialOwners[0].id, optout: contact.optout, dataReuniao: contact.data_reuniao ?? undefined } satisfies Lead;
+          return { id: contact.id, empresaId: contact.empresa_id, nome: contact.nome, cargo: contact.cargo ?? "", empresa: company?.nome ?? "Empresa", email: contact.email ?? "", telefone: contact.telefone ?? "", vertical: verticalFromDb[company?.vertical ?? "outro"], cidade: company?.cidade ?? "", pais: company?.pais ?? "PT", origem: company?.origem ?? "", estado: opportunity?.estado ?? contact.estado ?? "nao_contactado", ownerId: opportunity?.owner_id ?? activeUserId ?? profilesResult.data?.[0]?.id ?? "", optout: contact.optout, outreachLegalBasis: contact.outreach_legal_basis ?? undefined, outreachConsentAt: contact.outreach_consent_at ?? undefined, outreachConsentSource: contact.outreach_consent_source ?? undefined, outreachLegalBasisEvidence: contact.outreach_legal_basis_evidence ?? undefined, outreachLegalBasisRecordedAt: contact.outreach_legal_basis_recorded_at ?? undefined, outreachLegalBasisRecordedBy: contact.outreach_legal_basis_recorded_by ?? undefined, outreachLegitimateInterestPurpose: contact.outreach_legitimate_interest_purpose ?? undefined, outreachLiaReference: contact.outreach_lia_reference ?? undefined, outreachLegitimateInterestExpiresAt: contact.outreach_legitimate_interest_expires_at ?? undefined, dataReuniao: contact.data_reuniao ?? undefined } satisfies Lead;
         });
         setOpportunities(serverOpportunities);
         setLeads(serverLeads);
@@ -169,25 +186,34 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   }, [opportunities, persist]);
 
   const addOpportunity = useCallback((opportunity: Opportunity, lead: Lead) => {
+    const databaseOwnerId = isDatabaseUserId(opportunity.ownerId)
+      ? opportunity.ownerId
+      : isDatabaseUserId(currentUserId) ? currentUserId : null;
+    if (supabase && !databaseOwnerId) {
+      console.error("A oportunidade não foi criada: ainda não existe um responsável CRM válido.");
+      return;
+    }
+    const safeOpportunity = databaseOwnerId ? { ...opportunity, ownerId: databaseOwnerId } : opportunity;
+    const safeLead = databaseOwnerId ? { ...lead, ownerId: databaseOwnerId } : lead;
     setOpportunities((current) => {
-      const next = [opportunity, ...current];
+      const next = [safeOpportunity, ...current];
       persist("nikufra:v2:opportunities", next);
       return next;
     });
     setLeads((current) => {
-      const next = [lead, ...current];
+      const next = [safeLead, ...current];
       persist("nikufra:v2:leads", next);
       return next;
     });
     if (supabase) void (async () => {
-      const { data: company, error: companyError } = await supabase.from("empresas").insert({ nome: lead.empresa, vertical: verticalToDb[lead.vertical], pais: lead.pais || "PT", cidade: lead.cidade || null, origem: "inbound" }).select("id").single();
+      const { data: company, error: companyError } = await supabase.from("empresas").insert({ nome: safeLead.empresa, vertical: verticalToDb[safeLead.vertical], pais: safeLead.pais || "PT", cidade: safeLead.cidade || null, origem: "inbound" }).select("id").single();
       if (companyError || !company) { console.error("Falha ao criar empresa", companyError?.message); return; }
-      const { error: contactError } = await supabase.from("contactos").insert({ id: lead.id, empresa_id: company.id, nome: lead.nome, cargo: lead.cargo || null, email: lead.email || null, telefone: lead.telefone || null, principal: true, estado: lead.estado, data_reuniao: lead.dataReuniao || null });
+      const { error: contactError } = await supabase.from("contactos").insert({ id: safeLead.id, empresa_id: company.id, nome: safeLead.nome, cargo: safeLead.cargo || null, email: safeLead.email || null, telefone: safeLead.telefone || null, principal: true, estado: safeLead.estado, data_reuniao: safeLead.dataReuniao || null });
       if (contactError) { console.error("Falha ao criar contacto", contactError.message); return; }
-      const { error: opportunityError } = await supabase.from("oportunidades").insert({ id: opportunity.id, empresa_id: company.id, contacto_principal_id: lead.id, owner_id: opportunity.ownerId, titulo: opportunity.titulo, estado: opportunity.estado, tipo: opportunityTypeToDb[opportunity.tipo], valor_estimado: opportunity.valor, probabilidade: opportunity.probabilidade, data_primeiro_contacto: opportunity.dataPrimeiroContacto || null, data_prevista_fecho: opportunity.dataFechoPrevista || null });
+      const { error: opportunityError } = await supabase.from("oportunidades").insert({ id: safeOpportunity.id, empresa_id: company.id, contacto_principal_id: safeLead.id, owner_id: databaseOwnerId, titulo: safeOpportunity.titulo, estado: safeOpportunity.estado, tipo: opportunityTypeToDb[safeOpportunity.tipo], valor_estimado: safeOpportunity.valor, probabilidade: safeOpportunity.probabilidade, data_primeiro_contacto: safeOpportunity.dataPrimeiroContacto || null, data_prevista_fecho: safeOpportunity.dataFechoPrevista || null });
       if (opportunityError) console.error("Falha ao criar oportunidade", opportunityError.message);
     })();
-  }, [persist]);
+  }, [currentUserId, persist]);
 
   const updateOpportunity = useCallback((id: string, changes: Partial<Opportunity>) => {
     setOpportunities((current) => {
@@ -201,7 +227,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     if (changes.valor !== undefined) payload.valor_estimado = changes.valor;
     if (changes.recorrenteAnual !== undefined) payload.valor_recorrente_anual = changes.recorrenteAnual || null;
     if (changes.valorProposta !== undefined) payload.valor_proposta = changes.valorProposta;
-    if (changes.ownerId !== undefined) payload.owner_id = changes.ownerId;
+    if (changes.ownerId !== undefined && isDatabaseUserId(changes.ownerId)) payload.owner_id = changes.ownerId;
     if (changes.dataPrimeiroContacto !== undefined) payload.data_primeiro_contacto = changes.dataPrimeiroContacto || null;
     if (changes.dataReuniao !== undefined) payload.data_reuniao = changes.dataReuniao || null;
     if (changes.dataProposta !== undefined) payload.data_proposta = changes.dataProposta || null;
@@ -286,6 +312,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     if (field === "vertical") {
       if (supabase && companyId) void supabase.from("empresas").update({ vertical: verticalToDb[value as Vertical] }).eq("id", companyId).then(({ error }) => { if (error) console.error("Falha ao editar vertical", error.message); });
     }
+    if (field === "ownerId" && supabase && !isDatabaseUserId(value)) return;
     if (field === "estado" || field === "ownerId") {
       if (supabase && field === "estado") {
         const query = supabase.from("contactos").update({ estado: value });
@@ -306,6 +333,56 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       }
     }
   }, [leads, opportunities, persist]);
+
+  const updateLeadOutreachCompliance = useCallback(async (id: string, input: OutreachComplianceInput) => {
+    const legalBasis = input.legalBasis || undefined;
+    const consentAt = legalBasis === "consent" ? input.consentAt?.trim() : undefined;
+    const consentSource = legalBasis === "consent" ? input.consentSource?.trim() : undefined;
+    const legalBasisEvidence = legalBasis === "contract" ? input.legalBasisEvidence?.trim() : undefined;
+    const legitimateInterestPurpose = legalBasis === "legitimate_interest" ? input.legitimateInterestPurpose?.trim() : undefined;
+    const liaReference = legalBasis === "legitimate_interest" ? input.liaReference?.trim() : undefined;
+    const legitimateInterestExpiresAt = legalBasis === "legitimate_interest" ? input.legitimateInterestExpiresAt?.trim() : undefined;
+    if (legalBasis === "consent" && (!consentAt || !consentSource)) {
+      throw new Error("Consentimento exige data e origem documental.");
+    }
+    if (legalBasis === "contract" && !legalBasisEvidence) {
+      throw new Error("Execução de contrato exige uma referência documental.");
+    }
+    if (legalBasis === "legitimate_interest" && (!legitimateInterestPurpose || !liaReference || !legitimateInterestExpiresAt)) {
+      throw new Error("Interesse legítimo exige finalidade, referência LIA e validade.");
+    }
+    if (supabase) {
+      const payload: Record<string, unknown> = {
+        outreach_legal_basis: legalBasis ?? null,
+        outreach_consent_at: consentAt || null,
+        outreach_consent_source: consentSource || null,
+        outreach_legal_basis_evidence: legalBasisEvidence || null,
+        outreach_legitimate_interest_purpose: legitimateInterestPurpose || null,
+        outreach_lia_reference: liaReference || null,
+        outreach_legitimate_interest_expires_at: legitimateInterestExpiresAt || null,
+      };
+      if (input.optout) payload.optout = true;
+      const { error } = await supabase.from("contactos").update(payload).eq("id", id);
+      if (error) throw new Error(error.message);
+    }
+    setLeads((current) => {
+      const next = current.map((lead) => lead.id === id ? {
+        ...lead,
+        outreachLegalBasis: legalBasis,
+        outreachConsentAt: consentAt,
+        outreachConsentSource: consentSource,
+        outreachLegalBasisEvidence: legalBasisEvidence,
+        outreachLegalBasisRecordedAt: legalBasis ? new Date().toISOString() : undefined,
+        outreachLegalBasisRecordedBy: legalBasis ? currentUserId : undefined,
+        outreachLegitimateInterestPurpose: legitimateInterestPurpose,
+        outreachLiaReference: liaReference,
+        outreachLegitimateInterestExpiresAt: legitimateInterestExpiresAt,
+        optout: input.optout ? true : lead.optout,
+      } : lead);
+      persist("nikufra:v2:leads", next);
+      return next;
+    });
+  }, [currentUserId, persist]);
 
   const deleteCommercialRecords = useCallback(async (input: { contactIds?: string[]; companyIds?: string[]; opportunityIds?: string[] }) => {
     const contactIds = [...new Set(input.contactIds ?? [])];
@@ -381,6 +458,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     updateOpportunity,
     updateCompanyName,
     updateLead,
+    updateLeadOutreachCompliance,
     deleteCommercialRecords,
     dismissFollowUpSuggestion,
     addDrafts: (items: Draft[]) => setDrafts((current) => [...items, ...current]),
@@ -391,7 +469,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
         if (opportunity?.empresaId) void supabase.from("atividades").insert({ oportunidade_id: item.oportunidadeId || null, empresa_id: opportunity.empresaId, user_id: item.userId, tipo: item.tipo === "email" ? "email_enviado" : item.tipo === "proposta" ? "proposta_enviada" : item.tipo, descricao: item.descricao, data: item.data }).then(({ error }) => { if (error) console.error("Falha ao criar atividade", error.message); });
       }
     },
-  }), [activities, addOpportunity, currentUserId, deleteCommercialRecords, dismissFollowUpSuggestion, drafts, emailSelection, followUpSuggestions, importBatch, leads, moveOpportunity, opportunities, team, updateCompanyName, updateLead, updateOpportunity]);
+  }), [activities, addOpportunity, currentUserId, deleteCommercialRecords, dismissFollowUpSuggestion, drafts, emailSelection, followUpSuggestions, importBatch, leads, moveOpportunity, opportunities, team, updateCompanyName, updateLead, updateLeadOutreachCompliance, updateOpportunity]);
 
   return <CRMContext.Provider value={value}>{children}</CRMContext.Provider>;
 }

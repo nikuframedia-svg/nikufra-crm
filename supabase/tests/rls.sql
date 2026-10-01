@@ -2,10 +2,10 @@ begin;
 create extension if not exists pgtap;
 select plan(19);
 
-select policies_are('public', 'empresas', array['empresas_read','empresas_insert','empresas_update']);
-select policies_are('public', 'contactos', array['contactos_read','contactos_insert','contactos_update']);
-select policies_are('public', 'oportunidades', array['oportunidades_read','oportunidades_insert','oportunidades_update']);
-select policies_are('public', 'atividades', array['atividades_read','atividades_insert','atividades_update']);
+select policies_are('public', 'empresas', array['empresas_read','empresas_insert','empresas_update','empresas_outreach_service_read']);
+select policies_are('public', 'contactos', array['contactos_read','contactos_insert','contactos_update','contactos_outreach_service_read']);
+select policies_are('public', 'oportunidades', array['oportunidades_read','oportunidades_insert','oportunidades_update','oportunidades_outreach_service_read']);
+select policies_are('public', 'atividades', array['atividades_read','atividades_insert','atividades_update','atividades_outreach_service_read']);
 select policies_are('public', 'faturacao', array['faturacao_read','faturacao_admin_write']);
 select policies_are('public', 'objetivos', array['objetivos_read','objetivos_admin_write']);
 select policies_are('public', 'estado_historico', array['estado_historico_read']);

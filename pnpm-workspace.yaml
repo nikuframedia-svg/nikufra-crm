@@ -1,8 +1,13 @@
 packages:
   - "."
+  - "services/*"
 
 allowBuilds:
   esbuild: true
+
+minimumReleaseAgeExclude:
+  - mailparser@3.9.32
+  - nodemailer@10.0.13
 
 onlyBuiltDependencies:
   - esbuild

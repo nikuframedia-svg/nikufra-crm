@@ -10,6 +10,7 @@ export type Stage =
   | "adiado";
 
 export type Vertical = "Metalomecânica" | "Automóvel" | "Alumínio" | "Cortiça" | "Compósitos" | "Eletrónica" | "Outro";
+export type OutreachLegalBasis = "consent" | "legitimate_interest" | "contract" | "not_applicable";
 
 export interface Owner {
   id: string;
@@ -18,6 +19,7 @@ export interface Owner {
   iniciais: string;
   cor: string;
   role: "admin" | "member";
+  outreachRole?: "viewer" | "sales_rep" | "campaign_manager";
 }
 
 export interface Lead {
@@ -35,6 +37,15 @@ export interface Lead {
   estado: Stage;
   ownerId: string;
   optout?: boolean;
+  outreachLegalBasis?: OutreachLegalBasis;
+  outreachConsentAt?: string;
+  outreachConsentSource?: string;
+  outreachLegalBasisEvidence?: string;
+  outreachLegalBasisRecordedAt?: string;
+  outreachLegalBasisRecordedBy?: string;
+  outreachLegitimateInterestPurpose?: string;
+  outreachLiaReference?: string;
+  outreachLegitimateInterestExpiresAt?: string;
   dataReuniao?: string;
 }
 

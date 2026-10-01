@@ -15,22 +15,86 @@ As credenciais Google são a única configuração partilhada entre local e serv
 - Docker Engine + Compose, `openssl`, `rclone`, `mailutils`, `ufw` e `fail2ban`.
 - Uma conta Gmail de administrador já autorizada na app, para enviar os emails de autenticação pelo Gmail API. SMTP pode ficar configurado como fallback enquanto o hook está desligado.
 
+### Chave SSH restrita do CI
+
+O workflow de produção usa um único forced command. Antes de o ativar, instalar
+`release-publish.sh` no checkout persistente e associar **a chave pública de
+deploy**, nunca a privada, ao utilizador de serviço:
+
+```bash
+install -m 755 infra/release-publish.sh /home/luis/services/nikufra-crm/infra/release-publish.sh
+install -d -m 700 ~/.ssh
+printf '%s\n' 'restrict,command="/home/luis/services/nikufra-crm/infra/release-publish.sh" ssh-ed25519 <DEPLOY_PUBLIC_KEY>' >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+```
+
+`restrict` desliga PTY, forwarding, agent e `~/.ssh/rc`. O forced command só
+aceita `publish-backend`, `verify-backend`, `publish-web` e
+`rollback-release`, sempre com um release ID exato no formato do GitHub
+Actions. O rollback só aceita diretórios canónicos criados por este publisher,
+com capability e manifests backend/web válidos; não aceita paths, argumentos
+extra nem releases antigas sem essa prova. Testar, antes de permitir pushes
+para `main`, que um comando arbitrário é recusado e que a configuração
+persistente existe:
+
+```bash
+ssh -i <DEPLOY_PRIVATE_KEY> <DEPLOY_USER>@<DEPLOY_HOST> id  # tem de ser recusado
+ssh -i <DEPLOY_PRIVATE_KEY> <DEPLOY_USER>@<DEPLOY_HOST> \
+  'rollback-release ../current'                             # tem de ser recusado
+test "$(stat -c '%a' /home/luis/services/nikufra-crm/infra/.env)" = 600
+```
+
+O CI envia e valida primeiro o backend. `deploy-production.sh` pára API e
+worker, força `disabled:false`, aplica migrations com checksum e conclui o
+sentinel read-only em dark mode. Só depois o forced command aceita a publicação
+web para o mesmo release ID. `infra/.env`, chaves e `backups/` nunca fazem parte
+do bundle recebido. Cada publicação conserva dentro da release o bundle web e
+os checksums do backend/web para permitir rollback verificável.
+
+Antes da primeira release gerida, ainda não existe um predecessor aceite por
+`rollback-release`. O publisher executa por isso, uma única vez,
+`capture-pre-unification-recovery.sh`: guarda em
+`backups/pre-unification/` o source, web root, Caddyfile e IDs das imagens da
+versão anterior, com checksums e instruções de recuperação. O deploy é recusado
+se este recovery não puder ser criado e relido. Após a primeira release
+backend+web completa, os rollbacks seguintes usam exclusivamente os artefactos
+imutáveis do publisher.
+
+### Rollback de release
+
+No GitHub Actions, executar manualmente o workflow **Publicar backend e
+aplicação web** e preencher `rollback_release_id` com o identificador completo
+da release anterior (`<git-sha>-<run-id>-<attempt>`). O job usa a mesma chave
+restrita e só envia:
+
+```text
+rollback-release <release-id>
+```
+
+O forced command atualiza a release alvo com os segredos correntes, mas força
+`OUTREACH_SEND_ENABLED=false` e `OUTREACH_SHADOW_MODE=true`; o código e o bundle web permanecem imutáveis e
+verificados pelos manifests. Antes da troca, confirma que todas as migrations
+da release alvo já existem no ledger com os checksums publicados, pára API e
+worker e força a base a `disabled:false`. Depois arranca a API/worker anteriores,
+confirma que o ledger inteiro não mudou, executa sentinel/readiness em dark,
+troca o apontador `current` e só então republica o bundle web anterior. O
+checksum e o marcador de release confirmam a publicação web exata, e um segundo
+sentinel/readiness é obrigatório antes de declarar sucesso.
+
+O rollback **não** elimina nem reverte migrations. Releases sem a capability de
+rollback ou sem o bundle web preservado são recusadas; nesse caso usar um novo
+deploy corretivo. Se a publicação web falhar, o publisher restaura o document
+root anterior e o backend fica dark, sem reativar outbound.
+
 ## Instalação
 
-1. Copiar `infra/` e `supabase/` para o servidor, mantendo a mesma relação entre pastas.
-2. Executar `./generate-env.sh`, preencher SMTP de fallback, rclone e Google, e confirmar `stat -c '%a' .env` = `600`. No projeto Google Cloud, ativar Gmail API, People API e Google Calendar API e registar o callback `https://crm.nikufra.ai/functions/v1/gmail-oauth-callback`.
-3. Validar configuração: `docker compose --env-file .env config --quiet`.
-4. Arrancar: `docker compose --env-file .env up -d --wait`.
-5. Aplicar migrations por ordem, depois do Auth estar saudável:
+1. Copiar o repositório para o servidor sem substituir `infra/.env`, backups ou chaves.
+2. Executar `./generate-env.sh` apenas numa instalação nova; preencher SMTP de fallback, rclone e Google e confirmar `stat -c '%a' .env` = `600`. No projeto Google Cloud, ativar Gmail API, People API e Google Calendar API e registar `https://crm.nikufra.ai/functions/v1/gmail-oauth-callback` e `https://crm.nikufra.ai/api/outreach/v1/oauth/callback/google`.
+3. Configurar um remote offsite no rclone e definir `RCLONE_REMOTE`; a chave indicada por `BACKUP_ENCRYPTION_KEY_FILE` fica num cofre separado do remote.
+4. Executar `./deploy-production.sh`. O script valida Compose, exige disco abaixo de 80% e outbound desligado, cria e testa um backup offsite antes das migrations, aplica apenas migrations pendentes e, se ainda não existir prova PITR válida recente, cria um base backup físico offsite e executa o drill PITR antes de aceitar readiness. Depois publica API/worker em dark mode e instala de forma transacional a rota `/api/outreach/*` no Caddy externo. O Caddyfile anterior é preservado e restaurado automaticamente se a validação, reload ou probe público falhar.
+5. Confirmar `./production-healthcheck.sh`, `./outreach-readiness.sh --dark`, `https://crm.nikufra.ai/auth/v1/health` e `https://crm.nikufra.ai/api/outreach/v1/healthz`. Este último tem de devolver JSON do `outreach-api`, nunca `index.html`.
 
-   ```bash
-   for migration in ../supabase/migrations/*.sql; do
-     docker compose --env-file .env exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d postgres < "$migration"
-   done
-   ```
-
-6. Não carregar seeds: `supabase/seed.sql` está intencionalmente vazio. A base real é importada na aplicação por um administrador e a importação elimina duplicados.
-7. Confirmar `https://crm.nikufra.ai/auth/v1/health` e entrar no Studio com o basic auth definido no `.env`.
+Não carregar seeds: `supabase/seed.sql` está intencionalmente vazio. O perfil de produção não publica Postgres, Studio ou qualquer ferramenta administrativa.
 
 Para ativar o sync Gmail de 15 em 15 minutos, guardar os dois valores no Vault após aplicar as migrations:
 
@@ -67,25 +131,38 @@ Em `/etc/ssh/sshd_config`: `PasswordAuthentication no`, `PermitRootLogin no`, `P
 
 ## Backups e restauro
 
-Configurar o remote rclone para B2/R2 e testar `rclone lsd`. Cron diário:
+`configure-backups.sh` cria a chave fora da árvore de backups e
+`install-backup-schedule.sh` instala a agenda gerida: WAL offsite a cada 10
+minutos, dump lógico diário, base backup físico semanal e ensaio de restauro
+integral mensal. Todos os artefactos que deixam o host são cifrados com AES-256
+e acompanhados por checksum; um ficheiro apenas no servidor não conta como
+backup.
 
-```cron
-0 3 * * * /opt/nikufra-crm/infra/backup.sh >> /var/log/nikufra-crm-backup.log 2>&1
-```
-
-O script cria um dump custom-format, comprime, valida com `gzip -t`, copia para armazenamento externo e aplica retenção de 30 diários + 12 mensais. Um dump no disco do servidor não conta como backup.
-
-Restauro mensal obrigatório numa base descartável:
+Comandos operacionais:
 
 ```bash
-gunzip -c nikufra-crm-AAAA-MM-DDTHHMMSSZ.dump.gz > /tmp/nikufra-restore.dump
-createdb nikufra_restore_test
-pg_restore --exit-on-error --clean --if-exists -d nikufra_restore_test /tmp/nikufra-restore.dump
-psql -d nikufra_restore_test -c "select count(*) from public.estado_historico;"
-dropdb nikufra_restore_test
+./backup-production.sh
+./basebackup-production.sh
+./wal-offsite-sync.sh
+./restore-drill.sh
+./pitr-restore-drill.sh
 ```
 
-Registar data, duração, contagens e resultado do teste. Não promover uma atualização de imagens sem dump verificado e plano de rollback.
+O deploy não avança sem conseguir descarregar, autenticar e restaurar o backup
+offsite mais recente num PostgreSQL descartável, sem rede, onde as roles são
+recriadas a partir do artefacto `globals` antes do dump com ACLs. A chave de cifra nunca deve ser
+guardada no mesmo remote dos arquivos. O runbook completo de PITR, rollout e
+rollback está em `../docs/outreach-operations.md`.
+
+Mesmo em dark mode, readiness exige um base backup físico e checksum offsite
+com menos de oito dias, um relatório PITR válido nos últimos 35 dias e WAL
+local/offsite autenticado dentro do RPO de 15 minutos. Assim, o primeiro deploy
+não fica dependente da primeira execução semanal/mensal do cron.
+
+O slot físico `nikufra_offsite` é limitado por
+`POSTGRES_MAX_SLOT_WAL_KEEP_SIZE` e observado tanto no healthcheck de produção
+como no readiness de Outreach. Um slot perdido exige um novo base backup e um
+novo drill PITR; recriar o slot, por si só, não recupera a continuidade WAL.
 
 ## Convites e magic links
 

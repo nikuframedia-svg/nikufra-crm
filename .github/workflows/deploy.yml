@@ -1,19 +1,25 @@
-name: Publicar aplicação web
+name: Publicar backend e aplicação web
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      rollback_release_id:
+        description: "Release anterior: <git-sha>-<run-id>-<attempt>; vazio publica o SHA atual"
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: nikufra-crm-web-production
+  group: nikufra-crm-production
   cancel-in-progress: false
 
 jobs:
   deploy:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.rollback_release_id == '' }}
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -42,10 +48,42 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm security:audit
-          pnpm test
-          find infra/volumes/functions -mindepth 2 -name index.ts -print0 | xargs -0 deno check --no-lock --import-map=infra/volumes/functions/deno.jsonc
+          pnpm test:all
+          pnpm build:all
+          pnpm exec playwright install --with-deps chrome
+          pnpm test:e2e:outreach
+          (cd infra/volumes/functions && sha256sum --check vendor.sha256)
+          find infra/volumes/functions -mindepth 2 -name index.ts -print0 | xargs -0 deno check --frozen=true --config=infra/volumes/functions/deno.typecheck.jsonc
+          runtime_cache="$(mktemp -d)"
+          DENO_DIR="$runtime_cache" HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 \
+            deno eval --no-check --no-lock --config=infra/volumes/functions/deno.jsonc \
+            'import { createClient } from "@supabase/supabase-js"; import { Webhook } from "standardwebhooks"; if (typeof createClient !== "function" || typeof Webhook !== "function") throw new Error("bundles locais inválidos");'
           bash -n infra/*.sh
+          bash tests/infra/configure-caddy-outreach.test.sh
+          bash tests/infra/outreach-safety-gates.test.sh
           docker compose --env-file infra/.env.example -f infra/docker-compose.yml -f infra/docker-compose.production.yml config --quiet
+      - name: Validar migrations, RLS, roles e invariantes no SHA da release
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          actual_sha="$(git rev-parse HEAD^{commit})"
+          test "${actual_sha}" = "${EXPECTED_SHA}" || {
+            echo "Checkout ${actual_sha} não corresponde ao SHA da release ${EXPECTED_SHA}." >&2
+            exit 1
+          }
+          git diff --exit-code -- \
+            infra/apply-migrations.sh infra/test-database.sh \
+            infra/docker-compose.yml infra/docker-compose.local.yml \
+            supabase/migrations supabase/tests
+          ./infra/test-database.sh --bootstrap
+      - name: Eliminar base e stack descartáveis
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          docker compose --env-file infra/.env.example \
+            -f infra/docker-compose.yml -f infra/docker-compose.local.yml \
+            down --volumes --remove-orphans
       - name: Compilar aplicação web
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
@@ -62,13 +100,41 @@ jobs:
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
-      - name: Publicar atomicamente
+      - name: Publicar backend em dark mode
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          RELEASE_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -Eeuo pipefail
-          tar -C dist -czf - . | ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 "$DEPLOY_USER@$DEPLOY_HOST" publish-web
+          git archive --format=tar HEAD .dockerignore infra services/outreach supabase/migrations \
+            | gzip -n \
+            | ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 "$DEPLOY_USER@$DEPLOY_HOST" "publish-backend $RELEASE_ID"
+      - name: Validar backend/schema de produção (read-only)
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          RELEASE_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -Eeuo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 "$DEPLOY_USER@$DEPLOY_HOST" "verify-backend $RELEASE_ID" </dev/null
+      - name: Confirmar rota pública Outreach antes do frontend
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --retry 10 --retry-delay 2 \
+            https://crm.nikufra.ai/api/outreach/v1/healthz \
+            | grep -q '"service":"outreach-api"'
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            https://crm.nikufra.ai/api/outreach/v1/overview)" = 401
+      - name: Publicar aplicação web atomicamente
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          RELEASE_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -Eeuo pipefail
+          tar -C dist -czf - . \
+            | ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 "$DEPLOY_USER@$DEPLOY_HOST" "publish-web $RELEASE_ID"
       - name: Verificar produção
         env:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
@@ -76,3 +142,58 @@ jobs:
           set -Eeuo pipefail
           curl --fail --silent --show-error --retry 5 --retry-delay 2 https://crm.nikufra.ai/ | grep -q '<div id="root"></div>'
           curl --fail --silent --show-error --retry 5 --retry-delay 2 -H "apikey: $VITE_SUPABASE_ANON_KEY" https://crm.nikufra.ai/auth/v1/health >/dev/null
+          curl --fail --silent --show-error --retry 5 --retry-delay 2 https://crm.nikufra.ai/api/outreach/v1/healthz | grep -q '"service":"outreach-api"'
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' https://crm.nikufra.ai/api/outreach/v1/overview)" = 401
+
+  rollback:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.rollback_release_id != '' }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Validar pedido de rollback
+        env:
+          ROLLBACK_RELEASE_ID: ${{ inputs.rollback_release_id }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          set -Eeuo pipefail
+          [[ "${ROLLBACK_RELEASE_ID}" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$ ]] || {
+            echo "Release ID de rollback inválido." >&2
+            exit 2
+          }
+          required=(DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS VITE_SUPABASE_ANON_KEY)
+          for key in "${required[@]}"; do
+            test -n "${!key:-}" || { echo "Configuração em falta: $key" >&2; exit 1; }
+          done
+      - name: Preparar SSH restrito
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          install -d -m 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Reativar backend e web anteriores em dark mode
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          ROLLBACK_RELEASE_ID: ${{ inputs.rollback_release_id }}
+        run: |
+          set -Eeuo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 \
+            "$DEPLOY_USER@$DEPLOY_HOST" "rollback-release $ROLLBACK_RELEASE_ID" </dev/null
+      - name: Verificar produção após rollback
+        env:
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --retry 5 --retry-delay 2 https://crm.nikufra.ai/ | grep -q '<div id="root"></div>'
+          curl --fail --silent --show-error --retry 5 --retry-delay 2 -H "apikey: $VITE_SUPABASE_ANON_KEY" https://crm.nikufra.ai/auth/v1/health >/dev/null
+          curl --fail --silent --show-error --retry 5 --retry-delay 2 https://crm.nikufra.ai/api/outreach/v1/healthz | grep -q '"service":"outreach-api"'
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' https://crm.nikufra.ai/api/outreach/v1/overview)" = 401

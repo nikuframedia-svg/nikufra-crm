@@ -25,6 +25,7 @@ export function LeadsPage() {
   const [deleteError, setDeleteError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const canDelete = team.find((owner) => owner.id === currentUserId)?.role === "admin";
+  const assignableTeam = useMemo(() => dataMode === "supabase" ? team.filter((owner) => /^[0-9a-f-]{36}$/i.test(owner.id)) : team, [dataMode, team]);
 
   const columns = useMemo(() => [
     helper.display({ id: "select", header: () => <input type="checkbox" aria-label="Selecionar todos" checked={selected.size === leads.length && leads.length > 0} onChange={(event) => setSelected(event.target.checked ? new Set(leads.map((lead) => lead.id)) : new Set())} />, cell: ({ row }) => <input type="checkbox" aria-label={`Selecionar ${row.original.nome}`} checked={selected.has(row.original.id)} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(row.original.id); else next.delete(row.original.id); return next; })} /> }),
@@ -34,8 +35,8 @@ export function LeadsPage() {
     helper.accessor("telefone", { header: "Telefone", cell: ({ row, getValue }) => <input className="inline-edit mono" value={getValue()} onChange={(event) => updateLead(row.original.id, "telefone", event.target.value)} /> }),
     helper.accessor("vertical", { header: "Vertical", cell: ({ row, getValue }) => <select className="inline-select" value={getValue()} onChange={(event) => updateLead(row.original.id, "vertical", event.target.value)}><option>Outro</option><option>Metalomecânica</option><option>Automóvel</option><option>Alumínio</option><option>Cortiça</option><option>Compósitos</option><option>Eletrónica</option></select> }),
     helper.accessor("estado", { header: "Estado", cell: ({ row, getValue }) => <select className="inline-select inline-select--stage" value={getValue()} onChange={(event) => updateLead(row.original.id, "estado", event.target.value)}>{[...pipelineBoardOrder, "adiado" as const].map((stage) => <option key={stage} value={stage} disabled={stage === "perdido"}>{stageLabels[stage]}</option>)}</select> }),
-    helper.accessor("ownerId", { header: "Responsável", cell: ({ row, getValue }) => <div className="owner-cell"><Avatar ownerId={getValue()} size="sm" /><select className="inline-select" value={getValue()} onChange={(event) => updateLead(row.original.id, "ownerId", event.target.value)}>{team.map((owner) => <option key={owner.id} value={owner.id}>{owner.nome}</option>)}</select></div> }),
-  ], [leads, selected, team, updateLead]);
+    helper.accessor("ownerId", { header: "Responsável", cell: ({ row, getValue }) => <div className="owner-cell"><Avatar ownerId={getValue()} size="sm" /><select className="inline-select" value={getValue()} onChange={(event) => updateLead(row.original.id, "ownerId", event.target.value)}>{assignableTeam.map((owner) => <option key={owner.id} value={owner.id}>{owner.nome}</option>)}</select></div> }),
+  ], [assignableTeam, leads, selected, updateLead]);
 
   const table = useReactTable({ data: leads, columns, state: { globalFilter: query, sorting, pagination }, onGlobalFilterChange: setQuery, onSortingChange: setSorting, onPaginationChange: setPagination, getCoreRowModel: getCoreRowModel(), getFilteredRowModel: getFilteredRowModel(), getSortedRowModel: getSortedRowModel(), getPaginationRowModel: getPaginationRowModel() });
 
@@ -61,6 +62,7 @@ export function LeadsPage() {
 
   async function handleImport() {
     if (!importData) return;
+    if (!assignableTeam.length) { setImportError("A equipa ainda está a carregar. Tenta novamente dentro de alguns segundos."); return; }
     const seenEmails = new Set<string>();
     const existingCompanyByName = new Map(opportunities.map((item) => [normalizedCompanyKey(item.empresa), item]));
     const opportunityByCompany = new Map<string, Opportunity>();
@@ -75,7 +77,8 @@ export function LeadsPage() {
       const key = normalizedCompanyKey(empresa) || crypto.randomUUID();
       const estado = stageFromText(record.estado ?? "") ?? "nao_contactado";
       const ownerName = (record.responsavel ?? "").toLowerCase();
-      const ownerId = team.find((owner) => owner.nome.toLowerCase() === ownerName || owner.email.toLowerCase() === ownerName)?.id ?? team[0].id;
+      const ownerId = assignableTeam.find((owner) => owner.nome.toLowerCase() === ownerName || owner.email.toLowerCase() === ownerName)?.id
+        ?? (assignableTeam.some((owner) => owner.id === currentUserId) ? currentUserId : assignableTeam[0].id);
       let opportunity = opportunityByCompany.get(key);
       const companyId = opportunity?.empresaId ?? existingCompanyByName.get(key)?.empresaId ?? crypto.randomUUID();
       const leadId = crypto.randomUUID();

@@ -1,5 +1,17 @@
 begin;
 
+-- Keep the deletion test self-contained on a pristine database. The normal
+-- onboarding trigger promotes the first @nikufra.ai profile to administrator;
+-- the whole fixture is rolled back at the end of this file.
+insert into auth.users(id, email, raw_user_meta_data, created_at, updated_at)
+values (
+  'ee000000-0000-4000-8000-000000000001',
+  'commercial-records-test@nikufra.ai',
+  '{"nome":"Commercial records test"}'::jsonb,
+  now(), now()
+)
+on conflict (id) do nothing;
+
 do $$
 declare
   actor_id uuid;
@@ -44,11 +56,14 @@ begin
     or exists (select 1 from public.faturacao where empresa_id = company_id) then
     raise exception 'A eliminação deixou dados comerciais órfãos';
   end if;
-  if not exists (
-    select 1 from public.contact_import_suppressions
-    where email = 'delete-test@nikufra.ai'
-  ) then
+  if not public.is_contact_import_suppressed('delete-test@nikufra.ai', null) then
     raise exception 'O contacto eliminado não ficou protegido contra reimportação';
+  end if;
+  if exists (
+    select 1 from public.contact_import_suppressions
+    where email is not null or google_resource_name is not null
+  ) then
+    raise exception 'O tombstone de importação conservou PII em claro';
   end if;
 end;
 $$;

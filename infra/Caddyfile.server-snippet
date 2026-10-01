@@ -15,6 +15,13 @@ crm.nikufra.ai {
 		reverse_proxy 127.0.0.1:8800
 	}
 
+	# BEGIN NIKUFRA CRM OUTREACH MANAGED
+	@outreach path /api/outreach/*
+	handle @outreach {
+		reverse_proxy 127.0.0.1:8787
+	}
+	# END NIKUFRA CRM OUTREACH MANAGED
+
 	@assets path /assets/*
 	handle @assets {
 		root * /srv/ocr-portal/crm-app

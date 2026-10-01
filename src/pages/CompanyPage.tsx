@@ -1,11 +1,11 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { Link, useParams } from "@tanstack/react-router";
-import { ArrowLeft, Building2, CalendarDays, Check, CircleDollarSign, Mail, Phone, Save, UserRound } from "lucide-react";
+import { ArrowLeft, Building2, CalendarDays, Check, CircleDollarSign, Mail, Phone, Save, ShieldCheck, ShieldOff, UserRound } from "lucide-react";
 import { stageLabels } from "../data/seed";
 import { formatCurrency, formatDecimal } from "../lib/format";
 import { useRevenueData } from "../hooks/use-revenue-data";
 import { useCRM } from "../state/crm-context";
-import type { Opportunity } from "../types";
+import type { Lead, Opportunity, OutreachLegalBasis } from "../types";
 import { Avatar, Button, Card, EmptyState, PageHeader, StageChip } from "../components/ui";
 
 function daysBetween(start?: string, end?: string) {
@@ -14,9 +14,75 @@ function daysBetween(start?: string, end?: string) {
   return Number.isFinite(days) && days >= 0 ? days : null;
 }
 
+function dateTimeLocalValue(value?: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const shifted = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return shifted.toISOString().slice(0, 16);
+}
+
+interface OutreachComplianceInput {
+  legalBasis?: OutreachLegalBasis;
+  consentAt?: string;
+  consentSource?: string;
+  legalBasisEvidence?: string;
+  legitimateInterestPurpose?: string;
+  liaReference?: string;
+  legitimateInterestExpiresAt?: string;
+  optout?: boolean;
+}
+
+function ContactOutreachEditor({ contact, canManage, onSave }: { contact: Lead; canManage: boolean; onSave: (id: string, input: OutreachComplianceInput) => Promise<void> }) {
+  const [basis, setBasis] = useState<OutreachLegalBasis | "">(contact.outreachLegalBasis ?? "");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const consentLocal = String(form.get("consentAt") ?? "").trim();
+    const expiryLocal = String(form.get("legitimateInterestExpiresAt") ?? "").trim();
+    setSaving(true); setSaved(false); setError("");
+    try {
+      await onSave(contact.id, {
+        legalBasis: basis || undefined,
+        consentAt: basis === "consent" && consentLocal ? new Date(consentLocal).toISOString() : undefined,
+        consentSource: basis === "consent" ? String(form.get("consentSource") ?? "").trim() : undefined,
+        legalBasisEvidence: basis === "contract" ? String(form.get("legalBasisEvidence") ?? "").trim() : undefined,
+        legitimateInterestPurpose: basis === "legitimate_interest" ? String(form.get("legitimateInterestPurpose") ?? "").trim() : undefined,
+        liaReference: basis === "legitimate_interest" ? String(form.get("liaReference") ?? "").trim() : undefined,
+        legitimateInterestExpiresAt: basis === "legitimate_interest" && expiryLocal ? new Date(expiryLocal).toISOString() : undefined,
+        optout: contact.optout || form.get("optout") === "on",
+      });
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 1_800);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Não foi possível atualizar a elegibilidade.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return <form className="contact-compliance" onSubmit={(event) => void submit(event)}>
+    <div className="contact-compliance__heading"><span><ShieldCheck size={14} />Elegibilidade Outreach</span>{saved ? <small className="positive" role="status">Guardado</small> : null}</div>
+    <label>Base legal<select name="legalBasis" value={basis} disabled={!canManage} onChange={(event) => setBasis(event.target.value as OutreachLegalBasis | "")}><option value="">Sem base registada — bloqueado</option><option value="legitimate_interest">Interesse legítimo documentado</option><option value="consent">Consentimento</option><option value="contract">Execução de contrato</option><option value="not_applicable">Não aplicável — bloqueado</option></select></label>
+    {basis === "consent" ? <div className="contact-compliance__consent"><label>Data do consentimento<input name="consentAt" type="datetime-local" required disabled={!canManage} defaultValue={dateTimeLocalValue(contact.outreachConsentAt)} /></label><label>Origem / prova<input name="consentSource" required disabled={!canManage} maxLength={500} defaultValue={contact.outreachConsentSource ?? ""} placeholder="Ex.: formulário do evento, 12/09/2026" /></label></div> : null}
+    {basis === "contract" ? <label>Referência documental<input name="legalBasisEvidence" required disabled={!canManage} maxLength={500} defaultValue={contact.outreachLegalBasisEvidence ?? ""} placeholder="Ex.: contrato CRM-2026-041, cláusula 3" /></label> : null}
+    {basis === "legitimate_interest" ? <div className="contact-compliance__consent"><label>Finalidade<input name="legitimateInterestPurpose" required disabled={!canManage} maxLength={500} defaultValue={contact.outreachLegitimateInterestPurpose ?? ""} placeholder="Ex.: prospeção B2B para otimização industrial" /></label><label>Referência da LIA<input name="liaReference" required disabled={!canManage} maxLength={500} defaultValue={contact.outreachLiaReference ?? ""} placeholder="Ex.: LIA-2026-07" /></label><label>Válida até<input name="legitimateInterestExpiresAt" type="datetime-local" required disabled={!canManage} defaultValue={dateTimeLocalValue(contact.outreachLegitimateInterestExpiresAt)} /></label></div> : null}
+    {contact.optout ? <p className="contact-compliance__blocked"><ShieldOff size={14} />Suprimido globalmente. A remoção tem de ser feita por um administrador em Deliverability.</p> : <label className="contact-compliance__optout"><input name="optout" type="checkbox" disabled={!canManage} />Bloquear futuras comunicações para este contacto</label>}
+    {!canManage ? <p className="contact-compliance__help">Só administradores e campaign managers podem alterar estes dados de conformidade.</p> : null}
+    {contact.outreachLegalBasisRecordedAt ? <p className="contact-compliance__help">Última validação: {new Intl.DateTimeFormat("pt-PT", { dateStyle: "medium", timeStyle: "short" }).format(new Date(contact.outreachLegalBasisRecordedAt))}</p> : null}
+    <p className="contact-compliance__help">Sem uma base legal válida, o contacto permanece inelegível. O worker confirma tudo novamente antes de enviar.</p>
+    {error ? <p className="contact-compliance__error" role="alert">{error}</p> : null}
+    <Button type="submit" variant="secondary" disabled={saving || !canManage}><Save size={14} />{saving ? "A guardar…" : "Guardar elegibilidade"}</Button>
+  </form>;
+}
+
 export function CompanyPage() {
   const { companyId } = useParams({ from: "/empresas/$companyId" });
-  const { leads, opportunities, activities, team, updateCompanyName, updateLead, updateOpportunity } = useCRM();
+  const { leads, opportunities, activities, team, currentUserId, updateCompanyName, updateLead, updateLeadOutreachCompliance, updateOpportunity } = useCRM();
   const { entries: revenueEntries } = useRevenueData();
   const companyOpportunities = useMemo(() => opportunities.filter((item) => item.empresaId === companyId || item.id === companyId), [companyId, opportunities]);
   const opportunity = companyOpportunities[0];
@@ -31,6 +97,8 @@ export function CompanyPage() {
   if (!opportunity) return <div className="page"><PageHeader eyebrow="Empresa" title="Empresa não encontrada" description="A ficha pode ter sido arquivada ou eliminada." actions={<Link to="/pipeline"><Button variant="secondary"><ArrowLeft size={16} />Voltar ao pipeline</Button></Link>} /></div>;
 
   const owner = team.find((item) => item.id === opportunity.ownerId);
+  const currentUser = team.find((item) => item.id === currentUserId);
+  const canManageOutreachCompliance = currentUser?.role === "admin" || currentUser?.outreachRole === "campaign_manager";
   const meetingDays = daysBetween(opportunity.dataPrimeiroContacto, opportunity.dataReuniao);
   const invoiced = billing.filter((entry) => entry.tipo === "Faturado").reduce((sum, entry) => sum + entry.valor, 0);
   const contracted = billing.filter((entry) => entry.tipo === "Contratualizado").reduce((sum, entry) => sum + entry.valor, 0);
@@ -106,7 +174,7 @@ export function CompanyPage() {
         <div className="company-side-stack">
           <Card>
             <div className="panel-header"><div><p className="eyebrow">Pessoas</p><h2>Contactos</h2></div><Avatar ownerId={opportunity.ownerId} size="sm" /></div>
-            <div className="company-contact-list">{contacts.map((contact) => <div key={contact.id}><span className="company-monogram">{contact.nome.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><span><input value={contact.nome} aria-label="Nome" onChange={(event) => updateLead(contact.id, "nome", event.target.value)} /><small><Mail size={12} />{contact.email || "Sem email"}</small><small><Phone size={12} />{contact.telefone || "Sem telefone"}</small></span></div>)}</div>
+            <div className="company-contact-list">{contacts.map((contact) => <div id={`contact-${contact.id}`} className="company-contact-record" key={contact.id}><div className="company-contact-record__identity"><span className="company-monogram">{contact.nome.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><span><input value={contact.nome} aria-label="Nome" onChange={(event) => updateLead(contact.id, "nome", event.target.value)} /><small><Mail size={12} />{contact.email || "Sem email"}</small><small><Phone size={12} />{contact.telefone || "Sem telefone"}</small></span></div><ContactOutreachEditor contact={contact} canManage={canManageOutreachCompliance} onSave={updateLeadOutreachCompliance} /></div>)}</div>
           </Card>
           <Card>
             <div className="panel-header"><div><p className="eyebrow">Timeline real</p><h2>Atividade</h2></div><span className="counter">{companyActivities.length}</span></div>

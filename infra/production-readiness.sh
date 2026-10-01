@@ -18,6 +18,7 @@ fail() { printf 'FAIL %s\n' "$1"; failures=$((failures + 1)); }
 db_value() { "${COMPOSE[@]}" exec -T db psql -U postgres -d postgres -Atc "$1"; }
 
 if "${SCRIPT_DIR}/production-healthcheck.sh" >/dev/null; then pass "serviços internos"; else fail "serviços internos"; fi
+if "${SCRIPT_DIR}/outreach-readiness.sh" --dark >/dev/null; then pass "Outreach dark deploy fail-closed"; else fail "Outreach dark deploy incompleto"; fi
 
 expected_ip="${CRM_PUBLIC_IP:-188.40.230.28}"
 resolved_ips="$(getent ahostsv4 "${CRM_DOMAIN}" 2>/dev/null | awk '{print $1}' | sort -u || true)"

@@ -1,0 +1,209 @@
+# Nikufra Outreach — operação e rollout
+
+O Outreach é um módulo do Nikufra CRM. Não tem login, utilizadores, contactos,
+tema, domínio ou base de dados próprios. O CRM é a fonte canónica de perfis,
+empresas e contactos; os registos `outreach_*` guardam apenas a operação de
+campanhas e referenciam essas entidades.
+
+## Topologia
+
+- Frontend: `https://crm.nikufra.ai/outreach/*`, dentro do shell e sessão CRM.
+- API: `/api/outreach/v1`, publicada pelo Caddy e autenticada com o JWT CRM.
+- Worker: serviço privado, sem porta pública.
+- PostgreSQL: instância privada do CRM; o serviço usa a role limitada
+  `outreach_service`.
+- Público sem sessão: apenas callbacks OAuth, webhooks assinados e unsubscribe
+  com token autenticado. Os handlers continuam sujeitos a state, HMAC e replay
+  protection.
+- Gmail pessoal do CRM e mailboxes Outreach usam credenciais e fluxos separados.
+  A deduplicação comum é `(mailbox, provider_message_id, contacto)`.
+
+## Permissões
+
+| Perfil | Capacidades |
+|---|---|
+| `viewer` | Ver campanhas, audiências e métricas |
+| `sales_rep` | O anterior e tratar respostas que lhe estão atribuídas |
+| `campaign_manager` | O anterior e criar/editar/lançar/pausar campanhas |
+| Administrador CRM | Controlo total, mailboxes, roles, suppressions e aprovação `live` |
+
+O módulo começa com `OUTREACH_ADMIN_ONLY=true`. Todos os utilizadores ativos
+existentes recebem `viewer`; isto não lhes dá acesso enquanto o gate de dark
+deploy estiver ativo.
+
+## Gates de envio
+
+O envio exige simultaneamente:
+
+1. `OUTREACH_SEND_ENABLED=true` no processo;
+2. estado da base `canary` ou `live` com `send_enabled=true`;
+3. campanha `running`, dentro do período, dia e janela configurados;
+4. mailbox Google ativa, com envio ligado, quota disponível e DNS recente a
+   passar SPF, DKIM, DMARC e MX;
+5. contacto ainda existente, email igual ao snapshot, base legal válida e
+   verificação de email não expirada;
+6. ausência de suppression por email, domínio ou empresa;
+7. ausência de resposta anterior, incluindo `stop-company-on-reply`;
+8. destinatário na allowlist quando o modo é `canary`;
+9. lease válido e ledger idempotente antes do dispatch.
+
+Qualquer falha bloqueia o envio. Complaint, hard bounce, unsubscribe e eliminação
+RGPD cancelam jobs futuros. A eliminação retém apenas HMAC de bloqueio e métricas
+agregadas.
+
+## Preparação de produção
+
+Executar no host, a partir de `infra/`, antes da primeira migration:
+
+```bash
+./configure-outreach.sh
+./configure-backups.sh
+./backup-production.sh
+./restore-drill.sh
+df -h /
+```
+
+O disco tem de estar abaixo de 80%. A chave indicada por
+`BACKUP_ENCRYPTION_KEY_FILE` deve ser copiada para um cofre separado; nunca para
+o mesmo remote dos arquivos. `RCLONE_REMOTE` tem de apontar para storage offsite.
+
+Depois do deploy:
+
+```bash
+./deploy-production.sh
+./outreach-readiness.sh --dark
+./outreach-control.sh status
+```
+
+O deploy instala esta agenda do utilizador do serviço:
+
+- WAL cifrado offsite a cada 10 minutos;
+- dump lógico cifrado diário;
+- base backup físico cifrado semanal;
+- restauro lógico integral mensal, com ACL/RLS e duração;
+- ensaio PITR físico mensal, que arranca um PostgreSQL isolado, reproduz WAL e
+  prova RPO máximo de 15 minutos e RTO máximo de 4 horas.
+
+O slot físico permanente `nikufra_offsite` tem retenção máxima configurada por
+`POSTGRES_MAX_SLOT_WAL_KEEP_SIZE` (4 GiB por omissão). Os healthchecks falham se
+o receiver deixar de estar ativo, se `wal_status` sair de `reserved/extended`,
+se restarem menos de `WAL_SLOT_MIN_SAFE_BYTES` antes do limite ou se o volume da
+base atingir 80%. Consultar o estado sem modificar a base:
+
+```bash
+docker compose --env-file .env -f docker-compose.yml \
+  -f docker-compose.production.yml exec -T db psql -U postgres -d postgres -x -c \
+  "select slot_name,active,wal_status,restart_lsn,safe_wal_size from pg_replication_slots where slot_name='nikufra_offsite'"
+```
+
+Se `wal_status=lost` (ou se os segmentos pedidos já não existirem), a cadeia do
+base backup anterior deixou de ser contínua. Parar `wal-archive`, preservar os
+artefactos e logs do incidente, eliminar o slot perdido apenas depois de
+confirmar que não há receiver ativo, e voltar a arrancar `wal-archive` para criar
+um slot novo. Em seguida é obrigatório gerar e carregar um **novo** base backup,
+forçar `wal-offsite-sync.sh` e concluir `pitr-restore-drill.sh` com sucesso antes
+de voltar a declarar o RPO protegido. Recriar só o slot não torna o base backup
+antigo recuperável. Em pressão crítica de disco, manter outbound desligado e
+tratar a remoção do slot como uma decisão de incidente que exige este reseed
+completo.
+
+## Migração legada
+
+O arquivo preservado e respetivos checksums estão descritos em
+`docs/outreach-migration-inventory.md`. A importação é sempre executada primeiro
+em dry-run e depois em apply sobre o mesmo snapshot. A idempotência é garantida
+pelo checksum do snapshot e pelos identificadores legados:
+
+```bash
+docker compose --env-file .env -f docker-compose.yml \
+  -f docker-compose.production.yml run --rm \
+  -v /caminho/absoluto/imports:/imports:ro outreach-api \
+  node dist/migrate.js --input /imports/snapshot.json --dry-run
+
+# Só depois de validar contagens, hashes e ambiguidades:
+docker compose --env-file .env -f docker-compose.yml \
+  -f docker-compose.production.yml run --rm \
+  -v /caminho/absoluto/imports:/imports:ro outreach-api \
+  node dist/migrate.js --input /imports/snapshot.json --apply
+```
+
+O migrador não aceita credenciais, OAuth states, webhooks, unsubscribe tokens ou
+chaves antigas. Campanhas antigas ativas entram pausadas, jobs ambíguos entram em
+reconciliação e DNS/verificações são apenas histórico.
+
+## Canary
+
+Reautorizar Mia e Marta em produção, mantendo `send_enabled=false`. Maria só é
+ligada depois de retirar Super Admin ou documentar formalmente a exceção e manter
+2FA/passkey. Repetir DNS e verificação real.
+
+Quando todos os testes do canary estiverem preparados:
+
+```bash
+./outreach-control.sh canary --approve-canary <profile-uuid-admin>
+```
+
+A allowlist inicial contém apenas `joao@nikufra.ai` e
+`joaomilhazes71@gmail.com`. A rampa é 1, 3, 5 e 10 mensagens/dia por mailbox,
+com pelo menos 48 horas sem incidentes entre níveis; ordem Mia, Marta e Maria.
+Cada mailbox tem de produzir pelo menos um envio confirmado (job `sent` com a
+mensagem correspondente do provider) em cada nível. Para `live`, todas as
+mailboxes com envio ligado têm de estar em 10 há pelo menos 48 horas, ter DNS
+SPF/DKIM/DMARC verificado nas últimas 24 horas e conservar no audit log a
+sequência 1→3→5→10 do canary atual. Um canary sem tráfego nunca é prova de
+readiness. Open/click tracking permanece desligado.
+
+A promoção final requer UUID de um administrador CRM ativo:
+
+```bash
+./outreach-control.sh live --approve-live <profile-uuid>
+```
+
+## Kill switch e rollback
+
+```bash
+./outreach-control.sh disable
+```
+
+Isto corta outbound nas duas camadas e recria API/worker. Inbound, unsubscribe e
+reconciliação continuam ativos. Antes de parar o worker, pausar campanhas e
+leases; reconciliar Gmail Sent antes de qualquer retry. O frontend/API pode
+voltar à imagem anterior, mas migrations aditivas não são revertidas. Um restauro
+completo da base é reservado a desastre para não apagar alterações CRM válidas.
+
+Para voltar a uma release completa, executar manualmente o workflow de produção
+com `rollback_release_id=<git-sha>-<run-id>-<attempt>`. Só releases que já
+publicaram backend e web com capability/manifests de rollback são elegíveis. A
+operação pára API e worker, força `OUTREACH_SEND_ENABLED=false` e
+`disabled:false`, prova que as migrations alvo já estão no ledger, reativa a
+imagem API/worker e o bundle web exatos e corre o sentinel imediatamente antes
+e depois do web.
+O fingerprint do ledger tem de permanecer igual: rollback de aplicação nunca é
+rollback de schema. A promoção posterior para canary/live continua a exigir o
+fluxo e aprovações normais.
+
+## Rotação de chaves
+
+Adicionar a nova versão a `OUTREACH_ENCRYPTION_KEYS`, definir
+`OUTREACH_ENCRYPTION_CURRENT_VERSION`, recriar API/worker e executar o comando de
+recifra. Só retirar a chave anterior depois de a auditoria confirmar zero
+segredos nessa versão.
+
+```bash
+docker compose --env-file .env -f docker-compose.yml \
+  -f docker-compose.production.yml run --rm outreach-api \
+  node dist/rotate-keys.js --apply
+
+# Depois da recifra, executar novamente em modo de verificação (sem --apply).
+# Só é seguro retirar a chave antiga quando este comando devolver
+# retirementReady=true, pending=0 e safeToRetireAfter=null.
+docker compose --env-file .env -f docker-compose.yml \
+  -f docker-compose.production.yml run --rm outreach-api \
+  node dist/rotate-keys.js
+```
+
+Se `safeToRetireAfter` tiver uma data, os OAuth states antigos foram
+invalidados mas ainda estão dentro da janela de expiração. Manter a chave
+anterior até essa data, repetir o comando com `--apply` para purgar os states
+expirados e voltar a executar a verificação. Nunca retirar uma chave apenas
+porque a primeira execução terminou sem erro.

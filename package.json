@@ -9,11 +9,18 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:e2e:auth": "./infra/test-local-auth-flow.sh",
-    "release:verify": "pnpm security:audit && pnpm test && pnpm build",
+    "test:e2e:outreach": "playwright test tests/e2e/outreach.spec.ts",
+    "test:database": "./infra/test-database.sh --bootstrap",
+    "release:verify": "pnpm security:audit && pnpm test:all && pnpm build:all && pnpm test:e2e:outreach",
     "security:audit": "pnpm audit",
     "local:configure": "./infra/configure-local.sh",
     "local:up": "./infra/local-up.sh",
-    "local:down": "./infra/local-down.sh"
+    "local:down": "./infra/local-down.sh",
+    "outreach:test": "pnpm --dir services/outreach test",
+    "outreach:typecheck": "pnpm --dir services/outreach typecheck",
+    "outreach:build": "pnpm --dir services/outreach build",
+    "test:all": "pnpm test && pnpm outreach:test",
+    "build:all": "pnpm build && pnpm outreach:build"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.1.0",
@@ -30,6 +37,8 @@
     "recharts": "^2.12.7"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.63.0",
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "^16.0.1",
     "@types/react": "^18.3.5",

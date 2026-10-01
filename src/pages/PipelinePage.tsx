@@ -46,7 +46,7 @@ function PipelineColumn({ stage, items, canDelete, onDelete, onKeyboardMove }: {
 }
 
 export function PipelinePage() {
-  const { opportunities, leads, moveOpportunity, addOpportunity, deleteCommercialRecords, team, currentUserId } = useCRM();
+  const { opportunities, leads, moveOpportunity, addOpportunity, deleteCommercialRecords, team, currentUserId, dataMode } = useCRM();
   const [ownerFilter, setOwnerFilter] = useState("all");
   const [verticalFilter, setVerticalFilter] = useState("all");
   const [companySearch, setCompanySearch] = useState("");
@@ -58,6 +58,7 @@ export function PipelinePage() {
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [moveError, setMoveError] = useState("");
+  const [createError, setCreateError] = useState("");
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 7 } }),
   );
@@ -75,6 +76,7 @@ export function PipelinePage() {
   const terminalCount = itemsByStage.get("adiado")?.length ?? 0;
   const activeItem = opportunities.find((item) => item.id === activeId);
   const canDelete = team.find((owner) => owner.id === currentUserId)?.role === "admin";
+  const assignableTeam = useMemo(() => dataMode === "supabase" ? team.filter((owner) => /^[0-9a-f-]{36}$/i.test(owner.id)) : team, [dataMode, team]);
   const deleteContactCount = deletePending ? leads.filter((lead) => lead.empresaId === deletePending.empresaId || lead.id === deletePending.leadId).length : 0;
 
   useEffect(() => {
@@ -146,12 +148,17 @@ export function PipelinePage() {
     const id = crypto.randomUUID();
     const leadId = crypto.randomUUID();
     const estado = String(formData.get("estado")) as Stage;
-    const ownerId = String(formData.get("ownerId"));
+    const ownerId = String(formData.get("ownerId") || currentUserId);
+    if (!assignableTeam.some((owner) => owner.id === ownerId)) {
+      setCreateError("A equipa ainda está a carregar. Tenta novamente dentro de alguns segundos.");
+      return;
+    }
     const empresa = String(formData.get("empresa"));
     const contact = String(formData.get("contacto"));
     const lead: Lead = { id: leadId, nome: contact, cargo: String(formData.get("cargo")), empresa, email: String(formData.get("email")), telefone: String(formData.get("telefone")), vertical: String(formData.get("vertical")) as Vertical, cidade: "", pais: "PT", origem: "Registo manual", estado, ownerId };
     const opportunity: Opportunity = { id, leadId, empresa, titulo: String(formData.get("titulo")), estado, tipo: String(formData.get("tipo")) as Opportunity["tipo"], valor: Number(formData.get("valor")), probabilidade: stageProbability[estado], ownerId, diasNoEstado: 0, dataPrimeiroContacto: estado === "nao_contactado" ? "" : new Date().toISOString().slice(0, 10), dataFechoPrevista: String(formData.get("fecho")) };
     addOpportunity(opportunity, lead);
+    setCreateError("");
     setNewOpen(false);
   }
 
@@ -173,7 +180,7 @@ export function PipelinePage() {
 
   return (
     <div className="page page--pipeline">
-      <PageHeader eyebrow="Pipeline comercial" title="Oportunidades" description="Move cada oportunidade para a etapa seguinte. Todas as mudanças ficam registadas no histórico." actions={<Button onClick={() => setNewOpen(true)}><Plus size={16} />Nova oportunidade <kbd>N</kbd></Button>} />
+      <PageHeader eyebrow="Pipeline comercial" title="Oportunidades" description="Move cada oportunidade para a etapa seguinte. Todas as mudanças ficam registadas no histórico." actions={<Button disabled={!assignableTeam.length} onClick={() => { setCreateError(""); setNewOpen(true); }}><Plus size={16} />Nova oportunidade <kbd>N</kbd></Button>} />
       {moveError && !lostPending ? <div className="auth-error" role="alert">{moveError}</div> : null}
       <div className="toolbar"><div className="toolbar__group"><label className="pipeline-search"><Search size={14} aria-hidden="true" /><input type="search" value={companySearch} onChange={(event) => setCompanySearch(event.target.value)} placeholder="Pesquisar empresa…" aria-label="Pesquisar empresa no pipeline" />{companySearch ? <button type="button" onClick={() => setCompanySearch("")} aria-label="Limpar pesquisa"><X size={13} /></button> : null}</label><label className="select-button">Responsável<select value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)}><option value="all">Toda a equipa</option>{team.map((owner) => <option key={owner.id} value={owner.id}>{owner.nome}</option>)}</select><ChevronDown size={14} /></label><label className="select-button">Vertical<select value={verticalFilter} onChange={(event) => setVerticalFilter(event.target.value)}><option value="all">Todas</option>{verticals.map((vertical) => <option key={vertical}>{vertical}</option>)}</select><ChevronDown size={14} /></label><span className="pipeline-drag-help"><MousePointer2 size={14} />Agarra em qualquer zona livre do cartão</span></div><div className="toolbar__summary"><span>Pipeline ponderado</span><strong className="mono">{formatCurrency(weightedPipeline)}</strong></div></div>
       <nav className="pipeline-stage-nav" aria-label="Ir diretamente para uma etapa">
@@ -192,8 +199,9 @@ export function PipelinePage() {
           <div className="form-grid form-grid--3"><label>Contacto principal<input name="contacto" required /></label><label>Cargo<input name="cargo" /></label><label>Vertical<select name="vertical"><option>Outro</option><option>Metalomecânica</option><option>Automóvel</option><option>Alumínio</option><option>Cortiça</option><option>Compósitos</option><option>Eletrónica</option></select></label></div>
           <div className="form-grid"><label>Email<input name="email" type="email" required /></label><label>Telefone<input name="telefone" /></label></div>
           <div className="form-grid form-grid--3"><label>Valor estimado<input name="valor" type="number" min="0" required /></label><label>Tipo<select name="tipo"><option>Consultoria</option><option>Licença PP1</option><option>Piloto</option><option>Misto</option></select></label><label>Estado inicial<select name="estado">{stageOrder.map((stage) => <option value={stage} key={stage}>{stageLabels[stage]}</option>)}</select></label></div>
-          <div className="form-grid"><label>Responsável<select name="ownerId">{team.map((owner) => <option value={owner.id} key={owner.id}>{owner.nome}</option>)}</select></label><label>Fecho previsto<input name="fecho" type="date" required /></label></div>
-          <div className="modal__actions"><Button variant="secondary" type="button" onClick={() => setNewOpen(false)}>Cancelar</Button><Button type="submit">Criar oportunidade</Button></div>
+          <div className="form-grid"><label>Responsável<select name="ownerId" defaultValue={assignableTeam.some((owner) => owner.id === currentUserId) ? currentUserId : assignableTeam[0]?.id}>{assignableTeam.map((owner) => <option value={owner.id} key={owner.id}>{owner.nome}</option>)}</select></label><label>Fecho previsto<input name="fecho" type="date" required /></label></div>
+          {createError ? <div className="auth-error" role="alert">{createError}</div> : null}
+          <div className="modal__actions"><Button variant="secondary" type="button" onClick={() => setNewOpen(false)}>Cancelar</Button><Button type="submit" disabled={!assignableTeam.length}>Criar oportunidade</Button></div>
         </form>
       </Modal>
 

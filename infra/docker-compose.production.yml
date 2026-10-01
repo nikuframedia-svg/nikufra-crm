@@ -1,7 +1,54 @@
 services:
+  db:
+    # A permanent physical slot must never be allowed to retain WAL without a
+    # ceiling. If the offsite receiver is unavailable long enough to exhaust
+    # this budget, PostgreSQL marks the slot lost instead of filling the disk;
+    # the documented recovery path then creates a new base backup.
+    command:
+      - postgres
+      - -D
+      - /etc/postgresql
+      - -c
+      - max_slot_wal_keep_size=${POSTGRES_MAX_SLOT_WAL_KEEP_SIZE:-4096MB}
+
   kong:
     ports:
       - "127.0.0.1:${CRM_API_PORT:-8800}:8000"
     volumes:
       - ./volumes/api/kong.production.yml:/home/kong/kong.template.yml:ro
 
+  outreach-api:
+    ports:
+      - "127.0.0.1:${OUTREACH_API_PORT:-8787}:8787"
+
+  wal-archive:
+    image: supabase/postgres:15.8.1.085
+    restart: unless-stopped
+    user: "${BACKUP_CONTAINER_UID:-1000}:${BACKUP_CONTAINER_GID:-1000}"
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      PGPASSWORD: ${WAL_ARCHIVE_PASSWORD:-}
+      HOME: /tmp
+    entrypoint: ["bash", "-ceu"]
+    command:
+      - |
+        until pg_isready -h db -U nikufra_wal -d postgres; do sleep 2; done
+        psql -h db -U nikufra_wal -d postgres -v ON_ERROR_STOP=1 -Atc \
+          "select pg_create_physical_replication_slot('nikufra_offsite') where not exists (select 1 from pg_replication_slots where slot_name='nikufra_offsite')"
+        exec pg_receivewal --dbname="postgresql://nikufra_wal@db:5432/postgres" \
+          --directory=/wal --slot=nikufra_offsite --synchronous --verbose
+    volumes:
+      - ../backups/wal:/wal
+      - ../backups/base:/base
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -x pg_receivewal >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks: [backend]

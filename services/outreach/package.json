@@ -1,0 +1,42 @@
+{
+  "name": "@nikufra/outreach-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.14.0 <23"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "dev:api": "tsx watch src/api.ts",
+    "dev:worker": "tsx watch src/worker.ts",
+    "start:api": "node dist/api.js",
+    "start:worker": "node dist/worker.js",
+    "migrate:legacy": "node dist/migrate.js",
+    "rotate:keys": "node dist/rotate-keys.js"
+  },
+  "dependencies": {
+    "imapflow": "2.1.2",
+    "mailparser": "3.9.32",
+    "nodemailer": "10.0.13",
+    "pg": "8.16.3",
+    "zod": "4.1.8"
+  },
+  "devDependencies": {
+    "@types/mailparser": "3.9.0",
+    "@types/node": "22.13.10",
+    "@types/nodemailer": "8.0.2",
+    "@types/pg": "8.15.5",
+    "tsx": "4.20.5",
+    "typescript": "5.5.4",
+    "vitest": "4.1.11"
+  },
+  "pnpm": {
+    "overrides": {
+      "linkify-it": "5.0.2",
+      "nodemailer": "10.0.13"
+    }
+  }
+}

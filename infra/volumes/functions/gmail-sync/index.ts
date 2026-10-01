@@ -105,13 +105,16 @@ async function ensureContact(admin: ReturnType<typeof adminClient>, seed: Contac
   const email = clean(seed.email, 320).toLowerCase() || null;
   const resourceName = clean(seed.googleResourceName, 500) || null;
   const resolvedName = contactDisplayName(seed.name, email);
-  if (email) {
-    const { data: suppressed } = await admin.from("contact_import_suppressions").select("id").eq("email", email).maybeSingle();
-    if (suppressed) return null;
-  }
-  if (resourceName) {
-    const { data: suppressed } = await admin.from("contact_import_suppressions").select("id").eq("google_resource_name", resourceName).maybeSingle();
-    if (suppressed) return null;
+  if (email || resourceName) {
+    // RGPD tombstones retain only keyed digests. The service-role-only RPC
+    // performs the comparison inside Postgres so neither the key nor digest is
+    // exposed to this Edge Function. Fail closed if the check cannot run.
+    const { data: suppressed, error: suppressionError } = await admin.rpc(
+      "is_contact_import_suppressed",
+      { p_email: email, p_google_resource_name: resourceName },
+    );
+    if (suppressionError) throw suppressionError;
+    if (suppressed === true) return null;
   }
   let contact = null;
   if (email) ({ data: contact } = await admin.from("contactos").select("id,empresa_id,email,nome,estado,data_reuniao,google_resource_name").eq("email", email).maybeSingle());
@@ -300,11 +303,28 @@ Deno.serve(async (request) => {
         const subject = headerValue(headers, "Subject") || "Email sem assunto";
         const inferredMeeting = meetingSignal(subject, String(message.snippet ?? ""));
 
+        // Elect a single owner for message-level effects when the same Google
+        // mailbox is connected to both the CRM importer and Outreach. We still
+        // upsert each CRM contact association below: the shared claim only
+        // prevents global effects (metrics, stop-on-reply, suggestions, etc.)
+        // from being applied twice.
+        const { error: claimError } = await admin.rpc("claim_google_provider_message", {
+          p_mailbox_email: ownEmail,
+          p_provider_message_id: message.id,
+        });
+        if (claimError) throw new Error(`Falha ao deduplicar mensagem Google: ${claimError.message}`);
+
+        // The claim elects the owner of message-wide side effects, but never
+        // hides the per-contact CRM projection. Outreach may have claimed the
+        // provider message first; each contact still needs its idempotent
+        // timeline activity below. The composite unique key makes retries and
+        // dual ingestion safe without dropping that association.
+
         for (const externalEmail of externalEmails) {
           const ensured = await ensureContact(admin, { userId: tokenRow.user_id, name: contactName(headerValue(headers, sent ? "To" : "From"), externalEmail), email: externalEmail, contacted: true, firstContact: date.slice(0, 10), source: "Gmail" });
           if (!ensured) continue;
           if (ensured.created) batchContactsCreated += 1;
-          const { error: activityError } = await admin.from("atividades").upsert({ oportunidade_id: ensured.opportunity.id, empresa_id: ensured.contact.empresa_id, contacto_id: ensured.contact.id, user_id: tokenRow.user_id, tipo: sent ? "email_enviado" : "email_recebido", direcao: sent ? "enviado" : "recebido", data: date, descricao: subject.slice(0, 500), message_id: message.id, thread_id: message.threadId, assunto: subject.slice(0, 500), snippet: String(message.snippet ?? "").slice(0, 240), reuniao_inferida: inferredMeeting }, { onConflict: "message_id,contacto_id", ignoreDuplicates: true });
+          const { error: activityError } = await admin.from("atividades").upsert({ oportunidade_id: ensured.opportunity.id, empresa_id: ensured.contact.empresa_id, contacto_id: ensured.contact.id, user_id: tokenRow.user_id, tipo: sent ? "email_enviado" : "email_recebido", direcao: sent ? "enviado" : "recebido", data: date, descricao: subject.slice(0, 500), message_id: message.id, source_mailbox_email: ownEmail, thread_id: message.threadId, assunto: subject.slice(0, 500), snippet: String(message.snippet ?? "").slice(0, 240), reuniao_inferida: inferredMeeting }, { onConflict: "source_mailbox_email,message_id,contacto_id", ignoreDuplicates: true });
           if (!activityError) batchSynced += 1;
         }
       }
