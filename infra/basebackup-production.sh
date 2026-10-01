@@ -12,6 +12,8 @@ plain_name="base-${stamp}"
 plain_dir="${BASE_DIR}/${plain_name}"
 encrypted="${BASE_DIR}/${plain_name}.tar.gpg"
 partial="${encrypted}.partial"
+pgsodium_encrypted="${BASE_DIR}/${plain_name}.pgsodium-root.key.gpg"
+pgsodium_partial="${pgsodium_encrypted}.partial"
 
 [[ -f "${ENV_FILE}" ]] || { echo "Falta ${ENV_FILE}." >&2; exit 1; }
 set -a
@@ -34,7 +36,7 @@ flock -n 9 || { echo "Já existe um base backup em execução." >&2; exit 1; }
 
 cleanup() {
   rm -rf -- "${plain_dir}"
-  rm -f -- "${partial}"
+  rm -f -- "${partial}" "${pgsodium_partial}"
 }
 trap cleanup EXIT
 
@@ -52,8 +54,37 @@ chmod 600 "${encrypted}.sha256"
 gpg --batch --quiet --pinentry-mode loopback --passphrase-file "${BACKUP_ENCRYPTION_KEY_FILE}" \
   --decrypt "${encrypted}" | tar -tf - >/dev/null
 
+# A physical backup also excludes the external pgsodium key required by its
+# Vault ciphertext. Encrypt a same-stamp companion without writing plaintext.
+pgsodium_expected_hash="$(
+  "${COMPOSE[@]}" exec -T -u 105:106 db sh -ceu '
+    key="$(cat /etc/postgresql-custom/pgsodium_root.key)"
+    [ "${#key}" -eq 64 ]
+    case "${key}" in *[!0-9a-f]*) exit 1 ;; esac
+    sha256sum /etc/postgresql-custom/pgsodium_root.key
+  ' | awk '{print $1}'
+)"
+"${COMPOSE[@]}" exec -T -u 105:106 db cat /etc/postgresql-custom/pgsodium_root.key \
+  | gpg --batch --yes --pinentry-mode loopback --passphrase-file "${BACKUP_ENCRYPTION_KEY_FILE}" \
+      --symmetric --cipher-algo AES256 --compress-algo none --output "${pgsodium_partial}"
+chmod 600 "${pgsodium_partial}"
+mv -- "${pgsodium_partial}" "${pgsodium_encrypted}"
+(cd "${BASE_DIR}" && sha256sum "$(basename "${pgsodium_encrypted}")" > "$(basename "${pgsodium_encrypted}").sha256")
+chmod 600 "${pgsodium_encrypted}.sha256"
+pgsodium_plain_hash="$(
+  gpg --batch --quiet --pinentry-mode loopback --passphrase-file "${BACKUP_ENCRYPTION_KEY_FILE}" \
+    --decrypt "${pgsodium_encrypted}" | sha256sum | awk '{print $1}'
+)"
+[[ "${pgsodium_plain_hash}" == "${pgsodium_expected_hash}" ]] || {
+  echo "O companion pgsodium do base backup não reproduz a chave ativa." >&2
+  exit 1
+}
+
 "${RCLONE_BIN}" copyto "${encrypted}" "${RCLONE_REMOTE}/base/$(basename "${encrypted}")"
 "${RCLONE_BIN}" copyto "${encrypted}.sha256" "${RCLONE_REMOTE}/base/$(basename "${encrypted}.sha256")"
+"${RCLONE_BIN}" copyto "${pgsodium_encrypted}" "${RCLONE_REMOTE}/base/$(basename "${pgsodium_encrypted}")"
+"${RCLONE_BIN}" copyto "${pgsodium_encrypted}.sha256" "${RCLONE_REMOTE}/base/$(basename "${pgsodium_encrypted}.sha256")"
 "${RCLONE_BIN}" delete "${RCLONE_REMOTE}/base/" --min-age 36d
 find "${BASE_DIR}" -maxdepth 1 -type f -name 'base-*.tar.gpg*' -mtime +8 -delete
-echo "Base backup físico verificado, cifrado e enviado offsite: ${encrypted}"
+find "${BASE_DIR}" -maxdepth 1 -type f -name 'base-*.pgsodium-root.key.gpg*' -mtime +8 -delete
+echo "Base backup físico e companion pgsodium verificados, cifrados e enviados offsite: ${encrypted}"

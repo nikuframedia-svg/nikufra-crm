@@ -616,6 +616,7 @@ required = {
     "infra/configure-caddy-outreach.sh",
     "infra/configure-outreach-db.sh",
     "infra/configure-outreach.sh",
+    "infra/configure-pgsodium.sh",
     "infra/configure-wal-archive.sh",
     "infra/deploy-production.sh",
     "infra/install-backup-schedule.sh",

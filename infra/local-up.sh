@@ -56,6 +56,7 @@ fi
 
 "${SCRIPT_DIR}/configure-local.sh"
 "${SCRIPT_DIR}/configure-outreach.sh"
+NIKUFRA_DOCKER_BIN="${DOCKER_BIN}" "${SCRIPT_DIR}/configure-pgsodium.sh"
 
 COMPOSE=("${DOCKER_BIN}" compose --env-file "${SCRIPT_DIR}/.env" -f "${SCRIPT_DIR}/docker-compose.yml" -f "${SCRIPT_DIR}/docker-compose.local.yml")
 # Studio and Postgres Meta are administrative development tools, not required

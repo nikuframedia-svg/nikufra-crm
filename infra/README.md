@@ -89,19 +89,18 @@ root anterior e o backend fica dark, sem reativar outbound.
 ## Instalação
 
 1. Copiar o repositório para o servidor sem substituir `infra/.env`, backups ou chaves.
-2. Executar `./generate-env.sh` apenas numa instalação nova; preencher SMTP de fallback, rclone e Google e confirmar `stat -c '%a' .env` = `600`. No projeto Google Cloud, ativar Gmail API, People API e Google Calendar API e registar `https://crm.nikufra.ai/functions/v1/gmail-oauth-callback` e `https://crm.nikufra.ai/api/outreach/v1/oauth/callback/google`.
+2. Executar `./generate-env.sh` apenas numa instalação nova; preencher SMTP de fallback, rclone e Google, executar `./configure-pgsodium.sh` e confirmar `stat -c '%a' .env` = `600`. No projeto Google Cloud, ativar Gmail API, People API e Google Calendar API e registar `https://crm.nikufra.ai/functions/v1/gmail-oauth-callback` e `https://crm.nikufra.ai/api/outreach/v1/oauth/callback/google`.
 3. Configurar um remote offsite no rclone e definir `RCLONE_REMOTE`; a chave indicada por `BACKUP_ENCRYPTION_KEY_FILE` fica num cofre separado do remote.
 4. Executar `./deploy-production.sh`. O script valida Compose, exige disco abaixo de 80% e outbound desligado, cria e testa um backup offsite antes das migrations, aplica apenas migrations pendentes e, se ainda não existir prova PITR válida recente, cria um base backup físico offsite e executa o drill PITR antes de aceitar readiness. Depois publica API/worker em dark mode e instala de forma transacional a rota `/api/outreach/*` no Caddy externo. O Caddyfile anterior é preservado e restaurado automaticamente se a validação, reload ou probe público falhar.
 5. Confirmar `./production-healthcheck.sh`, `./outreach-readiness.sh --dark`, `https://crm.nikufra.ai/auth/v1/health` e `https://crm.nikufra.ai/api/outreach/v1/healthz`. Este último tem de devolver JSON do `outreach-api`, nunca `index.html`.
 
 Não carregar seeds: `supabase/seed.sql` está intencionalmente vazio. O perfil de produção não publica Postgres, Studio ou qualquer ferramenta administrativa.
 
-Para ativar o sync Gmail de 15 em 15 minutos, guardar os dois valores no Vault após aplicar as migrations:
-
-```sql
-select vault.create_secret('https://crm.nikufra.ai/functions/v1/gmail-sync', 'gmail_sync_url');
-select vault.create_secret('<SERVICE_ROLE_KEY>', 'gmail_sync_service_key');
-```
+O deploy mantém transacionalmente no Vault os dois valores usados pelo sync
+Gmail de 15 em 15 minutos. A root key pgsodium que os desencripta vive fora do
+overlay do container em `PGSODIUM_ROOT_KEY_FILE`; o Compose monta apenas esse
+ficheiro em read-only. Não o apagar, substituir ou rodar sem um procedimento de
+recifra e um novo base backup comprovado.
 
 O refresh token de cada pessoa é cifrado com AES-GCM antes de chegar à tabela. A mesma autorização usa `gmail.readonly`, `gmail.compose`, `contacts.readonly`, `contacts.other.readonly` e `calendar.events.readonly`. O sync guarda apenas headers, assunto, um excerto curto, IDs e associação CRM — nunca o corpo completo. Gmail, Contacts/“Outros contactos” e o calendário principal mantêm tokens incrementais separados, para retomarem sem recomeçar. Eventos confirmados criam atividades de reunião e avançam no máximo para “Reunião marcada”; nunca são assumidos como realizados.
 
@@ -134,9 +133,10 @@ Em `/etc/ssh/sshd_config`: `PasswordAuthentication no`, `PermitRootLogin no`, `P
 `configure-backups.sh` cria a chave fora da árvore de backups e
 `install-backup-schedule.sh` instala a agenda gerida: WAL offsite a cada 10
 minutos, dump lógico diário, base backup físico semanal e ensaio de restauro
-integral mensal. Todos os artefactos que deixam o host são cifrados com AES-256
-e acompanhados por checksum; um ficheiro apenas no servidor não conta como
-backup.
+integral mensal. Cada dump e base backup leva um companion pgsodium cifrado,
+necessário para recuperar o ciphertext Vault. Todos os artefactos que deixam o
+host são cifrados com AES-256 e acompanhados por checksum; um ficheiro apenas
+no servidor não conta como backup.
 
 Comandos operacionais:
 
@@ -150,9 +150,11 @@ Comandos operacionais:
 
 O deploy não avança sem conseguir descarregar, autenticar e restaurar o backup
 offsite mais recente num PostgreSQL descartável, sem rede, onde as roles são
-recriadas a partir do artefacto `globals` antes do dump com ACLs. A chave de cifra nunca deve ser
-guardada no mesmo remote dos arquivos. O runbook completo de PITR, rollout e
-rollback está em `../docs/outreach-operations.md`.
+recriadas a partir do artefacto `globals` antes do dump com ACLs e o smoke test
+força a desencriptação de todas as linhas Vault com o companion correspondente.
+A chave de cifra do backup nunca deve ser guardada no mesmo remote dos arquivos.
+O runbook completo de PITR, rollout e rollback está em
+`../docs/outreach-operations.md`.
 
 Mesmo em dark mode, readiness exige um base backup físico e checksum offsite
 com menos de oito dias, um relatório PITR válido nos últimos 35 dias e WAL

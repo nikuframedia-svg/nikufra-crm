@@ -81,6 +81,7 @@ remote_name="$("${RCLONE_BIN}" lsf "${RCLONE_REMOTE}/daily/" --files-only --incl
   exit 1
 }
 globals_name="${remote_name%.dump.gpg}.globals.sql.gpg"
+pgsodium_name="${remote_name%.dump.gpg}.pgsodium-root.key.gpg"
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/nikufra-restore.XXXXXX")"
 container_name="nikufra-logical-drill-$(date -u +%Y%m%d%H%M%S)-$$"
@@ -107,17 +108,31 @@ archive="${work_dir}/${remote_name}"
 archive_plain="${work_dir}/${remote_name%.gpg}"
 globals_archive="${work_dir}/${globals_name}"
 globals_plain="${work_dir}/${globals_name%.gpg}"
+pgsodium_archive="${work_dir}/${pgsodium_name}"
+pgsodium_plain="${work_dir}/pgsodium_root.key"
 "${RCLONE_BIN}" copyto "${RCLONE_REMOTE}/daily/${remote_name}" "${archive}"
 "${RCLONE_BIN}" copyto "${RCLONE_REMOTE}/daily/${remote_name}.sha256" "${archive}.sha256"
 "${RCLONE_BIN}" copyto "${RCLONE_REMOTE}/daily/${globals_name}" "${globals_archive}"
 "${RCLONE_BIN}" copyto "${RCLONE_REMOTE}/daily/${globals_name}.sha256" "${globals_archive}.sha256"
+"${RCLONE_BIN}" copyto "${RCLONE_REMOTE}/daily/${pgsodium_name}" "${pgsodium_archive}"
+"${RCLONE_BIN}" copyto "${RCLONE_REMOTE}/daily/${pgsodium_name}.sha256" "${pgsodium_archive}.sha256"
 (cd "${work_dir}" && sha256sum --check "${remote_name}.sha256")
 (cd "${work_dir}" && sha256sum --check "${globals_name}.sha256")
+(cd "${work_dir}" && sha256sum --check "${pgsodium_name}.sha256")
 gpg --batch --quiet --pinentry-mode loopback --passphrase-file "${BACKUP_ENCRYPTION_KEY_FILE}" \
   --output "${globals_plain}" --decrypt "${globals_archive}"
 chmod 600 "${globals_plain}"
 grep -q '^CREATE ROLE authenticated;' "${globals_plain}"
 grep -q '^CREATE ROLE service_role;' "${globals_plain}"
+gpg --batch --quiet --pinentry-mode loopback --passphrase-file "${BACKUP_ENCRYPTION_KEY_FILE}" \
+  --output "${pgsodium_plain}" --decrypt "${pgsodium_archive}"
+chmod 600 "${pgsodium_plain}"
+pgsodium_value="$(< "${pgsodium_plain}")"
+[[ "${#pgsodium_value}" == 64 && "${pgsodium_value}" != *[!0-9a-f]* ]] || {
+  echo "O companion pgsodium do backup lógico é inválido." >&2
+  exit 1
+}
+unset pgsodium_value
 
 # ACL entries must be present in the logical archive; otherwise a successful
 # data restore would silently lose the authorization model.
@@ -141,16 +156,20 @@ grep -Eq ' (ACL|DEFAULT ACL) ' "${archive_list}" || {
 # accidentally borrowing roles from the live production cluster.
 docker volume create "${volume_name}" >/dev/null
 volume_created=true
-docker run --rm --network none -v "${volume_name}:/data" --entrypoint chown \
+docker run --rm --network none --read-only --cap-drop ALL --cap-add CHOWN \
+  --security-opt no-new-privileges:true -v "${volume_name}:/data" --entrypoint chown \
   "${POSTGRES_IMAGE}" 105:106 /data
+docker run --rm --network none --read-only --cap-drop ALL --cap-add CHOWN --cap-add FOWNER \
+  --security-opt no-new-privileges:true -v "${pgsodium_plain}:/key" --entrypoint sh \
+  "${POSTGRES_IMAGE}" -ceu 'chown 105:106 /key; chmod 0400 /key'
 docker run -d --name "${container_name}" --network none --user 105:106 \
   --read-only --cap-drop ALL --security-opt no-new-privileges:true \
   --tmpfs /tmp:size=64m,noexec,nosuid,nodev \
-  --tmpfs /run/pgsodium:rw,exec,size=64k,mode=0700,uid=105,gid=106,nosuid,nodev \
   --tmpfs /var/run/postgresql:size=8m,noexec,nosuid,nodev \
+  -v "${pgsodium_plain}:/etc/postgresql-custom/pgsodium_root.key:ro" \
   -v "${volume_name}:/var/lib/postgresql/data" --entrypoint bash \
   "${POSTGRES_IMAGE}" -ceu \
-  "umask 077; head -c 32 /dev/urandom | od -A n -t x1 | tr -d ' \\n' > /run/pgsodium/root.key; printf '%s\\n' '#!/bin/sh' 'exec cat /run/pgsodium/root.key' > /run/pgsodium/getkey.sh; chmod 0400 /run/pgsodium/root.key; chmod 0500 /run/pgsodium/getkey.sh /run/pgsodium; initdb -D /var/lib/postgresql/data --auth-local=trust --auth-host=reject >/tmp/initdb.log && exec postgres -D /var/lib/postgresql/data -c config_file=/etc/postgresql/postgresql.conf -c hba_file=/var/lib/postgresql/data/pg_hba.conf -c ident_file=/var/lib/postgresql/data/pg_ident.conf -c listen_addresses='' -c unix_socket_directories=/tmp -c cron.database_name=${test_db} -c pgsodium.getkey_script=/run/pgsodium/getkey.sh -c vault.getkey_script=/run/pgsodium/getkey.sh" >/dev/null
+  "initdb -D /var/lib/postgresql/data --auth-local=trust --auth-host=reject >/tmp/initdb.log && exec postgres -D /var/lib/postgresql/data -c config_file=/etc/postgresql/postgresql.conf -c hba_file=/var/lib/postgresql/data/pg_hba.conf -c ident_file=/var/lib/postgresql/data/pg_ident.conf -c listen_addresses='' -c unix_socket_directories=/tmp -c cron.database_name=${test_db}" >/dev/null
 container_started=true
 
 ready=false
@@ -298,6 +317,18 @@ if [[ "${graphql_acl_expected}" == true ]]; then
     | grep -qx t
 fi
 
+# `count(*)` alone can be satisfied without evaluating the decrypted column.
+# Count that expression and its non-empty length so this proof necessarily
+# invokes pgsodium with the companion key restored above.
+vault_smoke="$(psql_test -Atc "select
+  count(*) = count(decrypted_secret)
+  and coalesce(bool_and(octet_length(decrypted_secret) > 0), true)
+  from vault.decrypted_secrets")"
+[[ "${vault_smoke}" == t ]] || {
+  echo "Falha no drill: Vault não desencripta integralmente com o companion pgsodium." >&2
+  exit 1
+}
+
 # Core CRM proof always runs, including service role and a negative RLS/ACL
 # assertion. This also makes a pre-migration backup drill valid on the first
 # Outreach deployment.
@@ -407,7 +438,7 @@ elapsed="$(( $(date +%s) - started_at ))"
 mkdir -p "${REPORT_DIR}"
 chmod 700 "${REPORT_DIR}"
 report="${REPORT_DIR}/$(date -u +%Y-%m-%dT%H%M%SZ).txt"
-printf 'backup=%s\nglobals=%s\nrestored_at=%s\nelapsed_seconds=%s\ncluster=isolated\nglobals_replayed=true\npg_graphql_wrapper_repaired=%s\noutreach_schema=%s\nacl_smoke=%s\ncounts=%s\nresult=ok\n' \
-  "${remote_name}" "${globals_name}" "$(date -u +%FT%TZ)" "${elapsed}" "${graphql_wrapper_repaired}" "${outreach_schema}" "${acl_smoke}" "${counts}" > "${report}"
+printf 'backup=%s\nglobals=%s\npgsodium_key=%s\nrestored_at=%s\nelapsed_seconds=%s\ncluster=isolated\nglobals_replayed=true\nvault_smoke=true\npg_graphql_wrapper_repaired=%s\noutreach_schema=%s\nacl_smoke=%s\ncounts=%s\nresult=ok\n' \
+  "${remote_name}" "${globals_name}" "${pgsodium_name}" "$(date -u +%FT%TZ)" "${elapsed}" "${graphql_wrapper_repaired}" "${outreach_schema}" "${acl_smoke}" "${counts}" > "${report}"
 chmod 600 "${report}"
 echo "Restauro integral comprovado em ${elapsed}s: ${counts}. Relatório: ${report}"

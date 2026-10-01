@@ -42,10 +42,13 @@ encrypted_partial=""
 globals_partial="${DAILY_DIR}/.nikufra-${stamp}.globals.partial"
 globals="${DAILY_DIR}/nikufra-${stamp}.globals.sql"
 globals_encrypted_partial=""
+pgsodium_encrypted="${DAILY_DIR}/nikufra-${stamp}.pgsodium-root.key.gpg"
+pgsodium_encrypted_partial="${pgsodium_encrypted}.partial"
 cleanup() {
   rm -f -- "${partial}" "${globals_partial}"
   [[ -z "${encrypted_partial}" ]] || rm -f -- "${encrypted_partial}"
   [[ -z "${globals_encrypted_partial}" ]] || rm -f -- "${globals_encrypted_partial}"
+  rm -f -- "${pgsodium_encrypted_partial}"
 }
 trap cleanup EXIT
 
@@ -108,11 +111,40 @@ globals_expected_hash="$(awk '{print $1}' "${globals}.sha256")"
   echo "A cifra de roles/globals não reproduz o backup original." >&2
   exit 1
 }
+
+# pg_dump contains Vault ciphertext but not the external pgsodium root key.
+# Stream that 64-byte key straight from the private DB container into its own
+# encrypted companion; never materialize plaintext in the backup tree.
+pgsodium_expected_hash="$(
+  "${COMPOSE[@]}" exec -T -u 105:106 db sh -ceu '
+    key="$(cat /etc/postgresql-custom/pgsodium_root.key)"
+    [ "${#key}" -eq 64 ]
+    case "${key}" in *[!0-9a-f]*) exit 1 ;; esac
+    sha256sum /etc/postgresql-custom/pgsodium_root.key
+  ' | awk '{print $1}'
+)"
+"${COMPOSE[@]}" exec -T -u 105:106 db cat /etc/postgresql-custom/pgsodium_root.key \
+  | gpg --batch --yes --pinentry-mode loopback --passphrase-file "${BACKUP_ENCRYPTION_KEY_FILE}" \
+      --symmetric --cipher-algo AES256 --compress-algo none --output "${pgsodium_encrypted_partial}"
+chmod 600 "${pgsodium_encrypted_partial}"
+mv -- "${pgsodium_encrypted_partial}" "${pgsodium_encrypted}"
+(cd "${DAILY_DIR}" && sha256sum "$(basename "${pgsodium_encrypted}")" > "$(basename "${pgsodium_encrypted}").sha256")
+chmod 600 "${pgsodium_encrypted}.sha256"
+pgsodium_plain_hash="$(
+  gpg --batch --quiet --pinentry-mode loopback --passphrase-file "${BACKUP_ENCRYPTION_KEY_FILE}" \
+    --decrypt "${pgsodium_encrypted}" | sha256sum | awk '{print $1}'
+)"
+[[ "${pgsodium_plain_hash}" == "${pgsodium_expected_hash}" ]] || {
+  echo "O companion pgsodium cifrado não reproduz a chave ativa." >&2
+  exit 1
+}
 grep -q '^CREATE ROLE ' "${globals}"
 "${RCLONE_BIN}" copyto "${encrypted}" "${RCLONE_REMOTE}/daily/$(basename "${encrypted}")"
 "${RCLONE_BIN}" copyto "${encrypted}.sha256" "${RCLONE_REMOTE}/daily/$(basename "${encrypted}.sha256")"
 "${RCLONE_BIN}" copyto "${globals_encrypted}" "${RCLONE_REMOTE}/daily/$(basename "${globals_encrypted}")"
 "${RCLONE_BIN}" copyto "${globals_encrypted}.sha256" "${RCLONE_REMOTE}/daily/$(basename "${globals_encrypted}.sha256")"
+"${RCLONE_BIN}" copyto "${pgsodium_encrypted}" "${RCLONE_REMOTE}/daily/$(basename "${pgsodium_encrypted}")"
+"${RCLONE_BIN}" copyto "${pgsodium_encrypted}.sha256" "${RCLONE_REMOTE}/daily/$(basename "${pgsodium_encrypted}.sha256")"
 
 if [[ "$(date -u +%d)" == "01" || "${FORCE_MONTHLY}" == "true" ]]; then
   monthly="${MONTHLY_DIR}/nikufra-${month}.dump"
@@ -131,6 +163,12 @@ if [[ "$(date -u +%d)" == "01" || "${FORCE_MONTHLY}" == "true" ]]; then
   chmod 600 "${monthly_globals_encrypted}" "${monthly_globals_encrypted}.sha256"
   "${RCLONE_BIN}" copyto "${monthly_globals_encrypted}" "${RCLONE_REMOTE}/monthly/$(basename "${monthly_globals_encrypted}")"
   "${RCLONE_BIN}" copyto "${monthly_globals_encrypted}.sha256" "${RCLONE_REMOTE}/monthly/$(basename "${monthly_globals_encrypted}.sha256")"
+  monthly_pgsodium_encrypted="${MONTHLY_DIR}/nikufra-${month}.pgsodium-root.key.gpg"
+  cp --preserve=mode,timestamps "${pgsodium_encrypted}" "${monthly_pgsodium_encrypted}"
+  (cd "${MONTHLY_DIR}" && sha256sum "$(basename "${monthly_pgsodium_encrypted}")" > "$(basename "${monthly_pgsodium_encrypted}").sha256")
+  chmod 600 "${monthly_pgsodium_encrypted}" "${monthly_pgsodium_encrypted}.sha256"
+  "${RCLONE_BIN}" copyto "${monthly_pgsodium_encrypted}" "${RCLONE_REMOTE}/monthly/$(basename "${monthly_pgsodium_encrypted}")"
+  "${RCLONE_BIN}" copyto "${monthly_pgsodium_encrypted}.sha256" "${RCLONE_REMOTE}/monthly/$(basename "${monthly_pgsodium_encrypted}.sha256")"
 fi
 
 find "${DAILY_DIR}" -maxdepth 1 -type f -name 'nikufra-*' -mtime +31 -delete
@@ -139,4 +177,4 @@ find "${MONTHLY_DIR}" -maxdepth 1 -type f -name 'nikufra-*' -mtime +400 -delete
 "${RCLONE_BIN}" delete "${RCLONE_REMOTE}/monthly/" --min-age 401d
 
 size="$(du -h "${daily}" | awk '{ print $1 }')"
-echo "Backup ${daily} + roles/ACL verificado; cópia AES-256 autenticada enviada offsite (${size})"
+echo "Backup ${daily} + roles/ACL + companion pgsodium verificado; cópia AES-256 autenticada enviada offsite (${size})"
