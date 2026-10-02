@@ -622,7 +622,11 @@ export async function recordEmailVerificationEvidence(actor: Actor, raw: unknown
   const referenceSha256 = createHash("sha256").update(input.reference).digest("hex");
   return transaction(async (client) => {
     const contact = await client.query<{ id: string; email: string | null }>(
-      `select id,email::text from public.contactos where id=$1 for share`,
+      // outreach_service has SELECT, but intentionally no UPDATE privilege on
+      // CRM contacts. FOR SHARE requires that extra privilege in PostgreSQL.
+      // The evidence is tied to the selected email; final eligibility checks
+      // the current contact email again before dispatch.
+      `select id,email::text from public.contactos where id=$1`,
       [input.contactId],
     );
     const row = contact.rows[0];

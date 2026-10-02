@@ -37,6 +37,7 @@ describe("admin mailbox verification evidence", () => {
     })).resolves.toMatchObject({ status: "valid", source: "mailbox_challenge", email: "lead@example.com" });
 
     expect(mocks.query).toHaveBeenCalledTimes(3);
+    expect(String(mocks.query.mock.calls[0]?.[0])).not.toMatch(/\bfor share\b/i);
     expect(String(mocks.query.mock.calls[1]?.[0])).toContain("evidence_reference,verified_by");
     expect(mocks.query.mock.calls[1]?.[1]?.[4]).toBe("challenge:ticket-12345");
     expect(String(mocks.query.mock.calls[2]?.[0])).toContain("public.outreach_audit_log");

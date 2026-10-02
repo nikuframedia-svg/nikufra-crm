@@ -65,8 +65,10 @@ case "${action}" in
     [[ "${2:-}" == "--approve-canary" && "${3:-}" =~ ^[0-9a-fA-F-]{36}$ ]] || exit 2
     "${SCRIPT_DIR}/outreach-readiness.sh" --for-canary
     "${COMPOSE[@]}" exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d postgres \
-      --set=approver="${3}" -c \
-      "select mode, send_enabled, canary_started_at from private.outreach_transition_system('canary', :'approver'::uuid, false, 'canary manual aprovado')"
+      --set=approver="${3}" <<'SQL'
+select mode, send_enabled, canary_started_at
+from private.outreach_transition_system('canary', :'approver'::uuid, false, 'canary manual aprovado');
+SQL
     set_env OUTREACH_SEND_ENABLED true
     set_env OUTREACH_SHADOW_MODE false
     "${COMPOSE[@]}" up -d --force-recreate outreach-api outreach-worker
@@ -76,8 +78,10 @@ case "${action}" in
     echo "A promoção live exige aprovação administrativa explícita: $0 live --approve-live <profile-uuid>" >&2
     [[ "${2:-}" == "--approve-live" && "${3:-}" =~ ^[0-9a-fA-F-]{36}$ ]] || exit 2
     "${SCRIPT_DIR}/outreach-readiness.sh" --for-live
-    "${COMPOSE[@]}" exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d postgres --set=approver="${3}" -c \
-      "select mode, send_enabled, approved_at from private.outreach_transition_system('live', :'approver'::uuid, true, 'ativação live aprovada')"
+    "${COMPOSE[@]}" exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d postgres --set=approver="${3}" <<'SQL'
+select mode, send_enabled, approved_at
+from private.outreach_transition_system('live', :'approver'::uuid, true, 'ativação live aprovada');
+SQL
     [[ "$(db_mode)" == "live:true" ]] || { echo "A promoção foi recusada: o perfil não é um administrador CRM ativo." >&2; exit 1; }
     set_env OUTREACH_SEND_ENABLED true
     set_env OUTREACH_SHADOW_MODE false
