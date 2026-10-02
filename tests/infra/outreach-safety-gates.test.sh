@@ -598,6 +598,72 @@ cmp -s "${web_payload}" "${web_partial_retry}" \
   || fail "retry web não preservou o payload"
 unset -f receive_web_bundle cleanup_web timeout dd stat
 
+# Vite writes the resolved public API URL into a deterministic HTML marker.
+# The restricted publisher must accept exactly the canonical production value
+# and reject missing, duplicated, loopback, or otherwise non-production values
+# before it can replace the active document root.
+web_publisher="${ROOT}/infra/web-publish.sh"
+web_publish_root="${WORK}/web-publish-root"
+web_fixture_root="${WORK}/web-build-fixtures"
+mkdir -p "${web_publish_root}/crm-app" "${web_fixture_root}"
+printf 'stable-production-web\n' > "${web_publish_root}/crm-app/proof.txt"
+
+make_web_bundle() {
+  local name="$1" markers="$2" fixture="${web_fixture_root}/$1" archive="${web_fixture_root}/$1.tar.gz"
+  mkdir -p "${fixture}"
+  printf '<!doctype html><html><head>%s</head><body><div id="root"></div></body></html>\n' \
+    "${markers}" > "${fixture}/index.html"
+  COPYFILE_DISABLE=1 tar -C "${fixture}" -czf "${archive}" .
+  printf '%s\n' "${archive}"
+}
+
+run_web_publisher() {
+  local archive="$1" validate_only="$2"
+  SSH_ORIGINAL_COMMAND=publish-web \
+  NIKUFRA_WEB_PUBLISH_ROOT="${web_publish_root}" \
+  NIKUFRA_WEB_ARCHIVE_SOURCE="${archive}" \
+  NIKUFRA_WEB_VALIDATE_ONLY="${validate_only}" \
+    "${web_publisher}"
+}
+
+canonical_marker='<meta name="nikufra-supabase-url" content="https://crm.nikufra.ai">'
+valid_web_bundle="$(make_web_bundle valid "${canonical_marker}")"
+run_web_publisher "${valid_web_bundle}" true >/dev/null \
+  || fail "publisher recusou VITE_SUPABASE_URL canónica"
+grep -qx 'stable-production-web' "${web_publish_root}/crm-app/proof.txt" \
+  || fail "validação web alterou a aplicação ativa"
+
+loopback_localhost_bundle="$(make_web_bundle loopback-localhost '<meta name="nikufra-supabase-url" content="http://localhost:8000">')"
+loopback_ipv4_bundle="$(make_web_bundle loopback-ipv4 '<meta name="nikufra-supabase-url" content="http://127.0.0.1:8000">')"
+private_ipv4_bundle="$(make_web_bundle private-ipv4 '<meta name="nikufra-supabase-url" content="http://192.168.1.20:8000">')"
+missing_marker_bundle="$(make_web_bundle missing '')"
+duplicate_marker_bundle="$(make_web_bundle duplicate "${canonical_marker}${canonical_marker}")"
+for rejected_web_bundle in \
+  "${loopback_localhost_bundle}" \
+  "${loopback_ipv4_bundle}" \
+  "${private_ipv4_bundle}" \
+  "${missing_marker_bundle}" \
+  "${duplicate_marker_bundle}"; do
+  if run_web_publisher "${rejected_web_bundle}" false >/dev/null 2>&1; then
+    fail "publisher aceitou marcador VITE_SUPABASE_URL inseguro: ${rejected_web_bundle}"
+  fi
+  grep -qx 'stable-production-web' "${web_publish_root}/crm-app/proof.txt" \
+    || fail "bundle web recusado alterou a aplicação ativa"
+done
+
+grep -Fq 'name="nikufra-supabase-url" content="%VITE_SUPABASE_URL%"' "${ROOT}/index.html" \
+  || fail "index.html não expõe a VITE_SUPABASE_URL resolvida para validação"
+deploy_workflow="${ROOT}/.github/workflows/deploy.yml"
+[[ "$(grep -Fc 'VITE_SUPABASE_URL: https://crm.nikufra.ai' "${deploy_workflow}")" == 2 ]] \
+  || fail "workflow não fixa a URL pública canónica na validação e no build"
+if grep -Fq '${{ secrets.VITE_SUPABASE_URL }}' "${deploy_workflow}"; then
+  fail "workflow ainda permite que um secret mutável escolha a URL pública"
+fi
+grep -Fq 'test "${VITE_SUPABASE_URL}" = "https://crm.nikufra.ai"' "${deploy_workflow}" \
+  || fail "workflow não valida a URL pública antes do build"
+grep -Fq 'name="nikufra-supabase-url" content="https://crm.nikufra.ai"' "${deploy_workflow}" \
+  || fail "workflow não confirma o marcador do bundle compilado"
+
 rollback_block="$(awk '/^  rollback-release\)/{copy=1} copy{print} copy && /^    ;;$/{exit}' "${publisher}")"
 web_validate_line="$(grep -Fn 'validate_stored_web "${release_dir}" "${release_id}"' <<< "${rollback_block}" | cut -d: -f1)"
 restore_line="$(grep -Fn 'restore_outreach_image "${release_dir}"' <<< "${rollback_block}" | cut -d: -f1)"
