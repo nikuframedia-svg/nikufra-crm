@@ -64,7 +64,10 @@ Executar no host, a partir de `infra/`, antes da primeira migration:
 df -h /
 ```
 
-O disco tem de estar abaixo de 80%. A chave indicada por
+Por defeito, o disco tem de estar abaixo de 80% e manter pelo menos 20 GiB
+livres. Uma exceção explícita em `NIKUFRA_DISK_USAGE_MAX_PERCENT` pode elevar
+o teto até 90% (90% já bloqueia); `NIKUFRA_DISK_MIN_FREE_BYTES` só pode elevar,
+nunca reduzir, a reserva absoluta. A chave indicada por
 `BACKUP_ENCRYPTION_KEY_FILE` deve ser copiada para um cofre separado; nunca para
 o mesmo remote dos arquivos. `RCLONE_REMOTE` tem de apontar para storage offsite.
 `configure-pgsodium.sh` adota a chave do DB já em execução na primeira
@@ -95,7 +98,8 @@ O slot físico permanente `nikufra_offsite` tem retenção máxima configurada p
 `POSTGRES_MAX_SLOT_WAL_KEEP_SIZE` (4 GiB por omissão). Os healthchecks falham se
 o receiver deixar de estar ativo, se `wal_status` sair de `reserved/extended`,
 se restarem menos de `WAL_SLOT_MIN_SAFE_BYTES` antes do limite ou se o volume da
-base atingir 80%. Consultar o estado sem modificar a base:
+base atingir o teto configurado ou ficar com menos de 20 GiB livres. Consultar
+o estado sem modificar a base:
 
 ```bash
 docker compose --env-file .env -f docker-compose.yml \

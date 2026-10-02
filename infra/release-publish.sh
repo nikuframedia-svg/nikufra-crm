@@ -610,6 +610,7 @@ required = {
     "infra/configure-pgsodium.sh",
     "infra/configure-wal-archive.sh",
     "infra/deploy-production.sh",
+    "infra/disk-safety.sh",
     "infra/install-backup-schedule.sh",
     "infra/outreach-readiness.sh",
     "infra/pitr-restore-drill.sh",

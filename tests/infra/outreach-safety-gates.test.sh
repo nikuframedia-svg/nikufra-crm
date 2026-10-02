@@ -7,6 +7,46 @@ cleanup() { rm -rf -- "${WORK}"; }
 trap cleanup EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
+# All production entry points share one fail-closed disk policy. The default
+# remains 80%; an explicit exception can reach 90%, never exceed it, and can
+# never weaken the absolute 20 GiB free-space floor.
+# shellcheck disable=SC1091
+source "${ROOT}/infra/disk-safety.sh"
+unset NIKUFRA_DISK_USAGE_MAX_PERCENT NIKUFRA_DISK_MIN_FREE_BYTES
+[[ "$(nikufra_disk_max_percent)" == 80 ]] || fail "limite de disco default deixou de ser 80%"
+for accepted_limit in 80 90; do
+  NIKUFRA_DISK_USAGE_MAX_PERCENT="${accepted_limit}"
+  [[ "$(nikufra_disk_max_percent)" == "${accepted_limit}" ]] || fail "limite válido ${accepted_limit}% foi recusado"
+done
+for rejected_limit in 0 91 100 -1 80.0 foo 080; do
+  NIKUFRA_DISK_USAGE_MAX_PERCENT="${rejected_limit}"
+  if nikufra_disk_max_percent >/dev/null 2>&1; then fail "limite inválido ${rejected_limit} foi aceite"; fi
+done
+unset NIKUFRA_DISK_USAGE_MAX_PERCENT
+[[ "$(nikufra_disk_min_free_kib)" == 20971520 ]] || fail "reserva default deixou de ser 20 GiB"
+NIKUFRA_DISK_MIN_FREE_BYTES=21474836479
+if nikufra_disk_min_free_kib >/dev/null 2>&1; then fail "reserva inferior a 20 GiB foi aceite"; fi
+NIKUFRA_DISK_MIN_FREE_BYTES=21474836480
+[[ "$(nikufra_disk_min_free_kib)" == 20971520 ]] || fail "reserva exata de 20 GiB foi recusada"
+unset NIKUFRA_DISK_MIN_FREE_BYTES
+nikufra_disk_is_safe 79 20971520 80 20971520 || fail "79% com 20 GiB devia passar no limite 80"
+if nikufra_disk_is_safe 80 999999999 80 20971520; then fail "utilização igual ao teto foi aceite"; fi
+nikufra_disk_is_safe 89 20971520 90 20971520 || fail "89% com 20 GiB devia passar no limite 90"
+if nikufra_disk_is_safe 90 999999999 90 20971520; then fail "90% foi aceite no teto exclusivo de 90"; fi
+if nikufra_disk_is_safe 89 20971519 90 20971520; then fail "menos de 20 GiB livres foi aceite"; fi
+for malformed_probe in 'x 20971520' '79 x' '' ; do
+  read -r malformed_used malformed_free <<< "${malformed_probe}"
+  if nikufra_disk_is_safe "${malformed_used:-}" "${malformed_free:-}" 90 20971520; then
+    fail "métrica de disco malformada foi aceite (${malformed_probe:-vazia})"
+  fi
+done
+
+for disk_gate in infra/predeploy-safety.sh infra/outreach-readiness.sh infra/production-healthcheck.sh; do
+  grep -Fq 'source "${SCRIPT_DIR}/disk-safety.sh"' "${ROOT}/${disk_gate}" || fail "${disk_gate} não usa a política comum de disco"
+  grep -Fq 'nikufra_disk_is_safe' "${ROOT}/${disk_gate}" || fail "${disk_gate} não aplica ambos os limites de disco"
+  grep -Fq 'df -Pk' "${ROOT}/${disk_gate}" || fail "${disk_gate} não mede capacidade e espaço livre em KiB"
+done
+
 # Exercise the publisher's actual function against a live/duplicated input.
 # The immutable release env must contain one authoritative value for each gate.
 eval "$(awk '/^install_dark_env\(\) \{/{copy=1} copy{print} copy && /^}$/{exit}' "${ROOT}/infra/release-publish.sh")"
@@ -645,6 +685,7 @@ required_runtime=(
   infra/configure-pgsodium.sh
   infra/configure-wal-archive.sh
   infra/deploy-production.sh
+  infra/disk-safety.sh
   infra/install-backup-schedule.sh
   infra/outreach-readiness.sh
   infra/pitr-restore-drill.sh
