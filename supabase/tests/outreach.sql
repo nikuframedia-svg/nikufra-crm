@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap;
-select plan(180);
+select plan(183);
 
 -- Self-contained principals. The first @nikufra.ai account becomes the local
 -- test admin; invitations exercise the same onboarding path as production.
@@ -241,6 +241,18 @@ select ok(case when exists(select 1 from pg_roles where rolname = 'outreach_serv
   has_table_privilege('outreach_service','public.profiles','select')
   and has_table_privilege('outreach_service','public.contactos','select')
 else true end, 'service role lê apenas as fontes CRM necessárias');
+select ok(case when exists(select 1 from pg_roles where rolname = 'outreach_service') then
+  has_function_privilege('outreach_service','private.outreach_lock_active_admin(uuid)','execute')
+  and not has_table_privilege('outreach_service','public.profiles','update')
+else true end, 'callback OAuth bloqueia o administrador sem permissão ampla de escrita no perfil');
+select ok(
+  private.outreach_lock_active_admin('a0000000-0000-4000-8000-000000000001'),
+  'callback OAuth reconhece o administrador ativo'
+);
+select ok(
+  not private.outreach_lock_active_admin('a0000000-0000-4000-8000-000000000002'),
+  'callback OAuth rejeita um perfil não administrador'
+);
 select ok(case when exists(select 1 from pg_roles where rolname = 'outreach_service') then
   not has_table_privilege('outreach_service','public.contactos','insert')
   and not has_table_privilege('outreach_service','public.contactos','update')

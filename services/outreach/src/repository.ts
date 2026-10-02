@@ -612,6 +612,8 @@ export async function consumeOAuthState(state: string, provider: Exclude<Provide
 
 export async function markMailboxConnected(mailboxId: string, identity: { email: string; name: string }, credential: OAuthCredential, actorId: string, oauthStateHash: Buffer) {
   await transaction(async (client) => {
+    const admin = await client.query<{ authorized: boolean }>(`select private.outreach_lock_active_admin($1) as authorized`, [actorId]);
+    if (!admin.rows[0]?.authorized) throw new HttpError(403, "oauth_callback_not_authorized", "A autorização deixou de pertencer a um administrador ativo ou a mailbox já não pode ser ligada.");
     const permitted = await client.query(`
       select m.id
       from public.outreach_mailboxes m
@@ -622,7 +624,7 @@ export async function markMailboxConnected(mailboxId: string, identity: { email:
       where m.id=$1 and m.provider='google' and m.status='pending'
         and oauth_state.used_at is not null and oauth_state.expires_at>now()
         and profile.ativo and profile.role='admin'
-      for update of m,profile,oauth_state`, [mailboxId, actorId, oauthStateHash]);
+      for update of m,oauth_state`, [mailboxId, actorId, oauthStateHash]);
     if (!permitted.rows[0]) throw new HttpError(403, "oauth_callback_not_authorized", "A autorização deixou de pertencer a um administrador ativo ou a mailbox já não pode ser ligada.");
     await storeInitialCredential(mailboxId, credential, client);
     await client.query(`update public.outreach_mailboxes set email=$2,display_name=coalesce(nullif(display_name,''),$3),provider_account_id=$2,status='active',last_error=null where id=$1`, [mailboxId, identity.email, identity.name]);
@@ -666,6 +668,8 @@ export async function assertMailboxReconciliationClear(client: PoolClient, mailb
 export async function prepareMailboxReauthorization(mailboxId: string, actorId: string, oauthStateHash: Buffer) {
   await transaction(async (client) => {
     await client.query(`select pg_advisory_xact_lock(20260930,1)`);
+    const admin = await client.query<{ authorized: boolean }>(`select private.outreach_lock_active_admin($1) as authorized`, [actorId]);
+    if (!admin.rows[0]?.authorized) throw new HttpError(403, "oauth_callback_not_authorized", "A autorização deixou de pertencer a um administrador ativo ou a mailbox já não pode ser ligada.");
     const permitted = await client.query(`
       select m.id from public.outreach_mailboxes m
       join public.profiles profile on profile.id=$2
@@ -676,7 +680,7 @@ export async function prepareMailboxReauthorization(mailboxId: string, actorId: 
         and m.status in ('pending','active','error','disconnected')
         and oauth_state.used_at is not null and oauth_state.expires_at>now()
         and profile.ativo and profile.role='admin'
-      for update of m,profile,oauth_state`, [mailboxId, actorId, oauthStateHash]);
+      for update of m,oauth_state`, [mailboxId, actorId, oauthStateHash]);
     if (!permitted.rows[0]) throw new HttpError(403, "oauth_callback_not_authorized", "A autorização deixou de pertencer a um administrador ativo ou a mailbox já não pode ser ligada.");
     // Keep the old grant available until every possibly accepted provider
     // call is resolved. The exclusive send permit makes this check stable

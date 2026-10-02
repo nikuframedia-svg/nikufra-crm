@@ -17,6 +17,7 @@ describe("mailbox OAuth reauthorization", () => {
   it("quarantines only leases with a dispatch ledger and requeues pre-dispatch leases", async () => {
     mocks.query
       .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ authorized: true }] })
       .mockResolvedValueOnce({ rows: [{ id: "00000000-0000-4000-8000-000000000010" }] })
       .mockResolvedValue({ rows: [], rowCount: 1 });
 
@@ -28,6 +29,8 @@ describe("mailbox OAuth reauthorization", () => {
 
     const statements = mocks.query.mock.calls.map(([sql]) => String(sql));
     expect(statements[0]).toContain("pg_advisory_xact_lock(20260930,1)");
+    expect(statements[1]).toContain("private.outreach_lock_active_admin");
+    expect(statements[2]).toContain("for update of m,oauth_state");
     const withLedger = statements.find((sql) => sql.includes("status='reconciliation_required'"));
     const withoutLedger = statements.find((sql) =>
       sql.includes("mailbox_reauthorization_before_dispatch") && sql.includes("status='pending'"),
@@ -44,6 +47,7 @@ describe("mailbox OAuth reauthorization", () => {
   it("preserves the old authorization while a provider delivery is nonterminal", async () => {
     mocks.query
       .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ authorized: true }] })
       .mockResolvedValueOnce({ rows: [{ id: "00000000-0000-4000-8000-000000000010" }] })
       .mockResolvedValueOnce({ rows: [{ job_id: "00000000-0000-4000-8000-000000000020" }] });
 
