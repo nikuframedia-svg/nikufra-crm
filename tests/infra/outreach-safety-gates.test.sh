@@ -7,6 +7,46 @@ cleanup() { rm -rf -- "${WORK}"; }
 trap cleanup EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
+# All production entry points share one fail-closed disk policy. The default
+# remains 80%; an explicit exception can reach 90%, never exceed it, and can
+# never weaken the absolute 20 GiB free-space floor.
+# shellcheck disable=SC1091
+source "${ROOT}/infra/disk-safety.sh"
+unset NIKUFRA_DISK_USAGE_MAX_PERCENT NIKUFRA_DISK_MIN_FREE_BYTES
+[[ "$(nikufra_disk_max_percent)" == 80 ]] || fail "limite de disco default deixou de ser 80%"
+for accepted_limit in 80 90; do
+  NIKUFRA_DISK_USAGE_MAX_PERCENT="${accepted_limit}"
+  [[ "$(nikufra_disk_max_percent)" == "${accepted_limit}" ]] || fail "limite válido ${accepted_limit}% foi recusado"
+done
+for rejected_limit in 0 91 100 -1 80.0 foo 080; do
+  NIKUFRA_DISK_USAGE_MAX_PERCENT="${rejected_limit}"
+  if nikufra_disk_max_percent >/dev/null 2>&1; then fail "limite inválido ${rejected_limit} foi aceite"; fi
+done
+unset NIKUFRA_DISK_USAGE_MAX_PERCENT
+[[ "$(nikufra_disk_min_free_kib)" == 20971520 ]] || fail "reserva default deixou de ser 20 GiB"
+NIKUFRA_DISK_MIN_FREE_BYTES=21474836479
+if nikufra_disk_min_free_kib >/dev/null 2>&1; then fail "reserva inferior a 20 GiB foi aceite"; fi
+NIKUFRA_DISK_MIN_FREE_BYTES=21474836480
+[[ "$(nikufra_disk_min_free_kib)" == 20971520 ]] || fail "reserva exata de 20 GiB foi recusada"
+unset NIKUFRA_DISK_MIN_FREE_BYTES
+nikufra_disk_is_safe 79 20971520 80 20971520 || fail "79% com 20 GiB devia passar no limite 80"
+if nikufra_disk_is_safe 80 999999999 80 20971520; then fail "utilização igual ao teto foi aceite"; fi
+nikufra_disk_is_safe 89 20971520 90 20971520 || fail "89% com 20 GiB devia passar no limite 90"
+if nikufra_disk_is_safe 90 999999999 90 20971520; then fail "90% foi aceite no teto exclusivo de 90"; fi
+if nikufra_disk_is_safe 89 20971519 90 20971520; then fail "menos de 20 GiB livres foi aceite"; fi
+for malformed_probe in 'x 20971520' '79 x' '' ; do
+  read -r malformed_used malformed_free <<< "${malformed_probe}"
+  if nikufra_disk_is_safe "${malformed_used:-}" "${malformed_free:-}" 90 20971520; then
+    fail "métrica de disco malformada foi aceite (${malformed_probe:-vazia})"
+  fi
+done
+
+for disk_gate in infra/predeploy-safety.sh infra/outreach-readiness.sh infra/production-healthcheck.sh; do
+  grep -Fq 'source "${SCRIPT_DIR}/disk-safety.sh"' "${ROOT}/${disk_gate}" || fail "${disk_gate} não usa a política comum de disco"
+  grep -Fq 'nikufra_disk_is_safe' "${ROOT}/${disk_gate}" || fail "${disk_gate} não aplica ambos os limites de disco"
+  grep -Fq 'df -Pk' "${ROOT}/${disk_gate}" || fail "${disk_gate} não mede capacidade e espaço livre em KiB"
+done
+
 # Exercise the publisher's actual function against a live/duplicated input.
 # The immutable release env must contain one authoritative value for each gate.
 eval "$(awk '/^install_dark_env\(\) \{/{copy=1} copy{print} copy && /^}$/{exit}' "${ROOT}/infra/release-publish.sh")"
@@ -419,6 +459,138 @@ grep -Fq 'outreach_schema=%s' "${restore_drill}" \
 # normal deploy branch that builds, migrates, backs up, or probes the Internet.
 publisher="${ROOT}/infra/release-publish.sh"
 sentinel="${ROOT}/infra/release-sentinel.sh"
+
+# The SSH forced command is the sole owner of the web tar stream. Docker
+# Compose exec attaches stdin even with -T, so the bounded receiver and archive
+# validation must finish before any backend/sentinel preflight is allowed to
+# run. Immutable artefacts are committed only after those preflights pass.
+publish_web_block="$(awk '/^  publish-web\)/{copy=1} copy{print} copy && /^    ;;$/{exit}' "${publisher}")"
+web_fd_copy_line="$(grep -Fn 'exec 3<&0' <<< "${publish_web_block}" | cut -d: -f1)"
+web_stdin_close_line="$(grep -Fn 'exec </dev/null' <<< "${publish_web_block}" | cut -d: -f1)"
+web_trap_line="$(grep -Fn 'trap cleanup_web EXIT' <<< "${publish_web_block}" | cut -d: -f1)"
+web_receive_line="$(grep -Fn 'receive_web_bundle "${web_partial}"' <<< "${publish_web_block}" | cut -d: -f1)"
+web_fd_close_line="$(grep -Fn 'exec 3<&-' <<< "${publish_web_block}" | cut -d: -f1)"
+web_validate_line="$(grep -Fn 'NIKUFRA_WEB_VALIDATE_ONLY=true' <<< "${publish_web_block}" | cut -d: -f1)"
+web_current_line="$(grep -Fn 'assert_current_release' <<< "${publish_web_block}" | cut -d: -f1)"
+web_sentinel_line="$(grep -Fn 'release-sentinel.sh"' <<< "${publish_web_block}" | head -1 | cut -d: -f1)"
+web_recheck_line="$(grep -Fn '[[ ! -e "${release_dir}/${WEB_BUNDLE}" && ! -e "${release_dir}/${WEB_CHECKSUM}" ]]' <<< "${publish_web_block}" | tail -1 | cut -d: -f1)"
+web_commit_line="$(grep -Fn 'mv -- "${web_partial}" "${release_dir}/${WEB_BUNDLE}"' <<< "${publish_web_block}" | cut -d: -f1)"
+[[ -n "${web_fd_copy_line}" && -n "${web_stdin_close_line}" \
+  && -n "${web_trap_line}" && -n "${web_receive_line}" && -n "${web_fd_close_line}" \
+  && -n "${web_validate_line}" && -n "${web_current_line}" \
+  && -n "${web_sentinel_line}" && -n "${web_recheck_line}" && -n "${web_commit_line}" \
+  && "${web_fd_copy_line}" -lt "${web_stdin_close_line}" \
+  && "${web_stdin_close_line}" -lt "${web_trap_line}" \
+  && "${web_trap_line}" -lt "${web_receive_line}" \
+  && "${web_receive_line}" -lt "${web_fd_close_line}" \
+  && "${web_fd_close_line}" -lt "${web_validate_line}" \
+  && "${web_receive_line}" -lt "${web_validate_line}" \
+  && "${web_validate_line}" -lt "${web_current_line}" \
+  && "${web_current_line}" -lt "${web_sentinel_line}" \
+  && "${web_sentinel_line}" -lt "${web_recheck_line}" \
+  && "${web_recheck_line}" -lt "${web_commit_line}" \
+  && "${web_sentinel_line}" -lt "${web_commit_line}" ]] \
+  || fail "publish-web não recebe/valida/fecha stdin antes dos preflights e do commit"
+grep -Fq 'WEB_STAGING_DIR="${RELEASE_ROOT}/.web-staging"' "${publisher}" \
+  || fail "publisher não isola partials web fora da árvore imutável"
+grep -Fq 'chmod 700 -- "${WEB_STAGING_DIR}"' <<< "${publish_web_block}" \
+  || fail "staging web não é privado"
+grep -Fq 'stat -c '\''%d'\'' "${WEB_STAGING_DIR}")" == "$(stat -c '\''%d'\'' "${release_dir}"' <<< "${publish_web_block}" \
+  || fail "publisher não prova que staging e release partilham o filesystem"
+grep -Fq 'web_partial="$(mktemp "${WEB_STAGING_DIR}/' <<< "${publish_web_block}" \
+  || fail "bundle parcial ainda é criado dentro da release"
+grep -Fq 'web_checksum_partial="$(mktemp "${WEB_STAGING_DIR}/' <<< "${publish_web_block}" \
+  || fail "checksum parcial ainda é criado dentro da release"
+
+# Exercise the real bounded receiver and cleanup trap with portable test
+# doubles for GNU timeout/dd. A failed preflight must remove both partials so
+# the same immutable release can accept a clean retry.
+receiver_definition="$(awk '/^receive_web_bundle\(\) \{/{copy=1} copy{print} copy && /^}$/{exit}' "${publisher}")"
+cleanup_web_definition="$(awk '/^    cleanup_web\(\) \{/{copy=1} copy{print} copy && /^    }$/{exit}' "${publisher}")"
+[[ -n "${receiver_definition}" && -n "${cleanup_web_definition}" ]] \
+  || fail "não foi possível extrair o receiver/cleanup web"
+eval "${receiver_definition}"
+eval "${cleanup_web_definition}"
+grep -Fq 'count=257 iflag=fullblock' <<< "${receiver_definition}" \
+  || fail "receiver não lê o byte/bloco sentinela acima de 256 MiB"
+grep -Fq 'status=none <&3' <<< "${receiver_definition}" \
+  || fail "receiver não lê exclusivamente do descritor preservado"
+grep -Fq 'size <= 256 * 1024 * 1024' <<< "${receiver_definition}" \
+  || fail "receiver não rejeita explicitamente bundles acima de 256 MiB"
+timeout() {
+  shift
+  "$@"
+}
+dd() {
+  local argument destination=""
+  for argument in "$@"; do
+    case "${argument}" in
+      of=*) destination="${argument#of=}" ;;
+    esac
+  done
+  [[ -n "${destination}" ]] || return 2
+  command cat > "${destination}"
+}
+receiver_oversize_path=""
+stat() {
+  if [[ "${1:-}" == -c && "${2:-}" == '%s' ]]; then
+    if [[ "$3" == "${receiver_oversize_path}" ]]; then
+      printf '%s\n' 268435457
+    else
+      python3 - "$3" <<'PY'
+import os
+import sys
+print(os.path.getsize(sys.argv[1]))
+PY
+    fi
+  else
+    command stat "$@"
+  fi
+}
+web_payload="${WORK}/web-payload.tar.gz"
+web_partial_retry="${WORK}/.web-bundle.retry.partial"
+web_checksum_retry="${WORK}/.web-bundle.sha256.partial"
+printf 'web-bundle-stdin-regression\n' > "${web_payload}"
+exec 3< "${web_payload}"
+receive_web_bundle "${web_partial_retry}" \
+  || fail "receiver recusou payload web não vazio"
+exec 3<&-
+cmp -s "${web_payload}" "${web_partial_retry}" \
+  || fail "receiver alterou ou perdeu bytes do payload web"
+exec 3</dev/null
+if receive_web_bundle "${WORK}/empty-web.partial" 2>/dev/null; then
+  fail "receiver aceitou payload web vazio"
+fi
+exec 3<&-
+receiver_oversize_path="${WORK}/oversized-web.partial"
+exec 3< "${web_payload}"
+if receive_web_bundle "${receiver_oversize_path}" 2>/dev/null; then
+  fail "receiver aceitou payload web acima de 256 MiB"
+fi
+exec 3<&-
+receiver_oversize_path=""
+: > "${web_checksum_retry}"
+if (
+  web_partial="${web_partial_retry}"
+  web_checksum_partial="${web_checksum_retry}"
+  trap cleanup_web EXIT
+  exit 23
+); then
+  fail "harness de retry não simulou falha de preflight"
+else
+  retry_status=$?
+  [[ "${retry_status}" == 23 ]] || fail "cleanup alterou o status da falha de preflight"
+fi
+[[ ! -e "${web_partial_retry}" && ! -e "${web_checksum_retry}" ]] \
+  || fail "falha de preflight deixou partials que bloqueiam retry"
+exec 3< "${web_payload}"
+receive_web_bundle "${web_partial_retry}" \
+  || fail "receiver recusou retry limpo da mesma release"
+exec 3<&-
+cmp -s "${web_payload}" "${web_partial_retry}" \
+  || fail "retry web não preservou o payload"
+unset -f receive_web_bundle cleanup_web timeout dd stat
+
 rollback_block="$(awk '/^  rollback-release\)/{copy=1} copy{print} copy && /^    ;;$/{exit}' "${publisher}")"
 web_validate_line="$(grep -Fn 'validate_stored_web "${release_dir}" "${release_id}"' <<< "${rollback_block}" | cut -d: -f1)"
 restore_line="$(grep -Fn 'restore_outreach_image "${release_dir}"' <<< "${rollback_block}" | cut -d: -f1)"
@@ -513,6 +685,7 @@ required_runtime=(
   infra/configure-pgsodium.sh
   infra/configure-wal-archive.sh
   infra/deploy-production.sh
+  infra/disk-safety.sh
   infra/install-backup-schedule.sh
   infra/outreach-readiness.sh
   infra/pitr-restore-drill.sh

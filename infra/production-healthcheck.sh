@@ -9,8 +9,13 @@ set -a
 # shellcheck disable=SC1090
 source "${ENV_FILE}"
 set +a
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/disk-safety.sh"
 
 CRM_API_PORT="${CRM_API_PORT:-8800}"
+disk_max_percent="$(nikufra_disk_max_percent)"
+disk_min_free_kib="$(nikufra_disk_min_free_kib)"
+disk_min_free_gib="$(nikufra_disk_free_gib "${disk_min_free_kib}")"
 
 status=0
 for service in db auth rest realtime kong functions outreach-api outreach-worker wal-archive; do
@@ -61,11 +66,12 @@ else
   status=1
 fi
 
-db_disk_used="$("${COMPOSE[@]}" exec -T db df -P /var/lib/postgresql/data 2>/dev/null | awk 'NR==2 {gsub("%", "", $5); print $5}' || true)"
-if [[ "${db_disk_used}" =~ ^[0-9]+$ ]] && (( db_disk_used < 80 )); then
-  echo "OK   volume PostgreSQL abaixo de 80% (${db_disk_used}%)"
+read -r db_disk_available_kib db_disk_used < <("${COMPOSE[@]}" exec -T db df -Pk /var/lib/postgresql/data 2>/dev/null | awk 'NR==2 {gsub("%", "", $5); print $4, $5}' || true)
+db_disk_free_gib="$(nikufra_disk_free_gib "${db_disk_available_kib:-}")"
+if nikufra_disk_is_safe "${db_disk_used:-}" "${db_disk_available_kib:-}" "${disk_max_percent}" "${disk_min_free_kib}"; then
+  echo "OK   volume PostgreSQL seguro (${db_disk_used}% usado, ${db_disk_free_gib} GiB livres; limite <${disk_max_percent}% e mínimo ${disk_min_free_gib} GiB)"
 else
-  echo "FAIL volume PostgreSQL sem margem segura (${db_disk_used:-desconhecido}%)"
+  echo "FAIL volume PostgreSQL sem margem segura (${db_disk_used:-desconhecido}% usado, ${db_disk_free_gib} GiB livres; exige <${disk_max_percent}% e >=${disk_min_free_gib} GiB)"
   status=1
 fi
 

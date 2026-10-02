@@ -28,6 +28,8 @@ upsert_default() {
 }
 
 upsert_default OUTREACH_API_PORT 8787
+upsert_default NIKUFRA_DISK_USAGE_MAX_PERCENT 80
+upsert_default NIKUFRA_DISK_MIN_FREE_BYTES 21474836480
 upsert_secret OUTREACH_DATABASE_PASSWORD "$(openssl rand -hex 48)"
 upsert_default OUTREACH_ENCRYPTION_CURRENT_VERSION 1
 upsert_secret OUTREACH_ENCRYPTION_KEY_V1 "$(openssl rand -base64 32 | tr -d '\n')"

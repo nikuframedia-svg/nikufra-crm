@@ -13,6 +13,8 @@ set -a
 # shellcheck disable=SC1090
 source "${ENV_FILE}"
 set +a
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/disk-safety.sh"
 RCLONE_BIN="${RCLONE_BIN:-$(command -v rclone || true)}"
 [[ -n "${RCLONE_BIN}" ]] || RCLONE_BIN="${HOME}/.local/bin/rclone"
 
@@ -144,8 +146,16 @@ actual_allowlist="$(db_value "select lower(email::text) from private.outreach_ca
   && pass "allowlist canary coincide exatamente com a configuração" \
   || fail "allowlist canary diverge da configuração (não é permitido manter destinatários extra)"
 
-disk_used="$(df -P / | awk 'NR==2 {gsub("%", "", $5); print $5}')"
-if (( disk_used < 80 )); then pass "disco abaixo de 80% (${disk_used}%)"; else fail "disco está em ${disk_used}%"; fi
+disk_max_percent="$(nikufra_disk_max_percent)"
+disk_min_free_kib="$(nikufra_disk_min_free_kib)"
+disk_min_free_gib="$(nikufra_disk_free_gib "${disk_min_free_kib}")"
+read -r disk_available_kib disk_used < <(df -Pk / | awk 'NR==2 {gsub("%", "", $5); print $4, $5}')
+disk_free_gib="$(nikufra_disk_free_gib "${disk_available_kib:-}")"
+if nikufra_disk_is_safe "${disk_used:-}" "${disk_available_kib:-}" "${disk_max_percent}" "${disk_min_free_kib}"; then
+  pass "disco seguro (${disk_used}% usado, ${disk_free_gib} GiB livres; limite <${disk_max_percent}% e mínimo ${disk_min_free_gib} GiB)"
+else
+  fail "disco inseguro (${disk_used:-desconhecido}% usado, ${disk_free_gib} GiB livres; exige <${disk_max_percent}% e >=${disk_min_free_gib} GiB)"
+fi
 
 # A permanent physical slot protects PITR continuity, but it must be bounded
 # and observed: an abandoned unlimited slot can retain WAL until PostgreSQL
@@ -165,11 +175,12 @@ if [[ "${slot_active:-}" == t \
 else
   fail "slot WAL inseguro (active=${slot_active:-missing}, status=${slot_status:-missing}, retained=${slot_lag:-missing}B, safe=${slot_safe:-missing}B, limit=${slot_limit:-missing})"
 fi
-db_disk_used="$("${COMPOSE[@]}" exec -T db df -P /var/lib/postgresql/data 2>/dev/null | awk 'NR==2 {gsub("%", "", $5); print $5}' || true)"
-if [[ "${db_disk_used}" =~ ^[0-9]+$ ]] && (( db_disk_used < 80 )); then
-  pass "volume PostgreSQL abaixo de 80% (${db_disk_used}%)"
+read -r db_disk_available_kib db_disk_used < <("${COMPOSE[@]}" exec -T db df -Pk /var/lib/postgresql/data 2>/dev/null | awk 'NR==2 {gsub("%", "", $5); print $4, $5}' || true)
+db_disk_free_gib="$(nikufra_disk_free_gib "${db_disk_available_kib:-}")"
+if nikufra_disk_is_safe "${db_disk_used:-}" "${db_disk_available_kib:-}" "${disk_max_percent}" "${disk_min_free_kib}"; then
+  pass "volume PostgreSQL seguro (${db_disk_used}% usado, ${db_disk_free_gib} GiB livres; limite <${disk_max_percent}% e mínimo ${disk_min_free_gib} GiB)"
 else
-  fail "volume PostgreSQL sem margem segura (${db_disk_used:-desconhecido}%)"
+  fail "volume PostgreSQL sem margem segura (${db_disk_used:-desconhecido}% usado, ${db_disk_free_gib} GiB livres; exige <${disk_max_percent}% e >=${disk_min_free_gib} GiB)"
 fi
 
 if find "${BACKUP_ROOT}/daily" -maxdepth 1 -type f -name 'nikufra-*.dump' -mtime -2 -size +100k -print -quit 2>/dev/null | grep -q .; then pass "backup lógico local recente"; else fail "backup lógico local recente em falta"; fi

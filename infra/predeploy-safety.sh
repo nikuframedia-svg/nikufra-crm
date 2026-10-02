@@ -10,10 +10,16 @@ set -a
 # shellcheck disable=SC1090
 source "${ENV_FILE}"
 set +a
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/disk-safety.sh"
 
-disk_used="$(df -P / | awk 'NR==2 {gsub("%", "", $5); print $5}')"
-if (( disk_used >= 80 )); then
-  echo "O disco está em ${disk_used}%; o deploy exige menos de 80%." >&2
+disk_max_percent="$(nikufra_disk_max_percent)"
+disk_min_free_kib="$(nikufra_disk_min_free_kib)"
+disk_min_free_gib="$(nikufra_disk_free_gib "${disk_min_free_kib}")"
+read -r disk_available_kib disk_used < <(df -Pk / | awk 'NR==2 {gsub("%", "", $5); print $4, $5}')
+disk_free_gib="$(nikufra_disk_free_gib "${disk_available_kib:-}")"
+if ! nikufra_disk_is_safe "${disk_used:-}" "${disk_available_kib:-}" "${disk_max_percent}" "${disk_min_free_kib}"; then
+  echo "Disco inseguro: ${disk_used:-desconhecido}% usado, ${disk_free_gib} GiB livres; exige <${disk_max_percent}% e >=${disk_min_free_gib} GiB livres." >&2
   exit 1
 fi
 
@@ -54,4 +60,4 @@ fi
 "${SCRIPT_DIR}/backup-production.sh"
 "${SCRIPT_DIR}/restore-drill.sh"
 
-echo "Preflight aprovado: disco ${disk_used}%, backup offsite e restauro integral comprovados antes das migrations."
+echo "Preflight aprovado: disco ${disk_used}% usado, ${disk_free_gib} GiB livres (limite <${disk_max_percent}% e mínimo ${disk_min_free_gib} GiB); backup offsite e restauro integral comprovados antes das migrations."

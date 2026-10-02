@@ -34,6 +34,7 @@ ROLLBACK_CAPABILITY="nikufra-dark-rollback-v1"
 BACKEND_MANIFEST=".backend-manifest.sha256"
 WEB_BUNDLE=".web-bundle.tar.gz"
 WEB_CHECKSUM=".web-bundle.sha256"
+WEB_STAGING_DIR="${RELEASE_ROOT}/.web-staging"
 OUTREACH_IMAGE_ARCHIVE=".outreach-image.tar"
 OUTREACH_IMAGE_CHECKSUM=".outreach-image.sha256"
 OUTREACH_IMAGE_ID=".outreach-image.id"
@@ -49,6 +50,22 @@ OUTREACH_IMAGE_VALIDATOR="${SCRIPT_DIR}/verify-outreach-image-archive.py"
 
 sha256_file() {
   sha256sum "$1" | awk '{print $1}'
+}
+
+receive_web_bundle() {
+  local destination="$1" size
+  # Read one full MiB beyond the accepted maximum so oversized streams are
+  # rejected instead of being silently truncated to a potentially valid tar.
+  timeout 120 dd bs=1M count=257 iflag=fullblock of="${destination}" status=none <&3
+  size="$(stat -c '%s' "${destination}")"
+  [[ "${size}" =~ ^[0-9]+$ && "${size}" -gt 0 ]] || {
+    echo "Bundle web vazio." >&2
+    return 1
+  }
+  (( size <= 256 * 1024 * 1024 )) || {
+    echo "Bundle web excede 256 MiB." >&2
+    return 1
+  }
 }
 
 outreach_image_ref_for_tree() {
@@ -593,6 +610,7 @@ required = {
     "infra/configure-pgsodium.sh",
     "infra/configure-wal-archive.sh",
     "infra/deploy-production.sh",
+    "infra/disk-safety.sh",
     "infra/install-backup-schedule.sh",
     "infra/outreach-readiness.sh",
     "infra/pitr-restore-drill.sh",
@@ -805,15 +823,31 @@ PY
     echo "BACKEND_VERIFY_OK ${release_id}"
     ;;
   publish-web)
-    assert_current_release
+    # Preserve the transport on a dedicated descriptor, then make stdin
+    # unavailable to every command except the bounded receiver below.
+    exec 3<&0
+    exec </dev/null
     [[ ! -e "${release_dir}/${WEB_BUNDLE}" && ! -e "${release_dir}/${WEB_CHECKSUM}" ]] || {
       echo "A release ${release_id} já tem um bundle web imutável." >&2
       exit 1
     }
-    COMPOSE_PROJECT_NAME=nikufra-crm NIKUFRA_BACKUP_ROOT="${BACKUP_ROOT}" "${release_dir}/infra/release-sentinel.sh"
+    if [[ -e "${WEB_STAGING_DIR}" ]]; then
+      [[ -d "${WEB_STAGING_DIR}" && ! -L "${WEB_STAGING_DIR}" ]] || {
+        echo "Staging web inseguro." >&2
+        exit 1
+      }
+    else
+      mkdir -m 700 -- "${WEB_STAGING_DIR}"
+    fi
+    chmod 700 -- "${WEB_STAGING_DIR}"
+    [[ "$(stat -c '%a' "${WEB_STAGING_DIR}")" == 700 \
+      && "$(stat -c '%d' "${WEB_STAGING_DIR}")" == "$(stat -c '%d' "${release_dir}")" ]] || {
+      echo "Staging web não é privado ou não partilha o filesystem da release." >&2
+      exit 1
+    }
     command -v timeout >/dev/null || { echo "timeout e obrigatorio." >&2; exit 1; }
-    web_partial="$(mktemp "${release_dir}/.web-bundle.XXXXXX.partial")"
-    web_checksum_partial="${release_dir}/${WEB_CHECKSUM}.partial"
+    web_partial="$(mktemp "${WEB_STAGING_DIR}/.web-bundle.${release_id}.XXXXXX.partial")"
+    web_checksum_partial="$(mktemp "${WEB_STAGING_DIR}/.web-checksum.${release_id}.XXXXXX.partial")"
     cleanup_web() {
       local status=$?
       if [[ -n "${web_partial}" ]]; then rm -f -- "${web_partial}"; fi
@@ -821,8 +855,11 @@ PY
       exit "${status}"
     }
     trap cleanup_web EXIT
-    timeout 120 dd bs=1M count=256 iflag=fullblock of="${web_partial}" status=none
-    [[ -s "${web_partial}" ]] || { echo "Bundle web vazio." >&2; exit 1; }
+    # This forced command owns stdin. Receive it before any Docker-backed
+    # preflight: `docker compose exec -T` still attaches stdin and would drain
+    # the SSH tar stream even though `-T` disables the pseudo-TTY only.
+    receive_web_bundle "${web_partial}"
+    exec 3<&-
     web_hash="$(sha256_file "${web_partial}")"
     SSH_ORIGINAL_COMMAND=publish-web \
     NIKUFRA_WEB_ARCHIVE_SOURCE="${web_partial}" \
@@ -830,6 +867,15 @@ PY
     NIKUFRA_WEB_RELEASE_ID="${release_id}" \
     NIKUFRA_WEB_BUNDLE_SHA256="${web_hash}" \
       "${release_dir}/infra/web-publish.sh"
+
+    # The bundle is now a validated local file and every failure below leaves
+    # only the previous web release active while the EXIT trap removes temps.
+    assert_current_release
+    COMPOSE_PROJECT_NAME=nikufra-crm NIKUFRA_BACKUP_ROOT="${BACKUP_ROOT}" "${release_dir}/infra/release-sentinel.sh"
+    [[ ! -e "${release_dir}/${WEB_BUNDLE}" && ! -e "${release_dir}/${WEB_CHECKSUM}" ]] || {
+      echo "A release ${release_id} ganhou artefactos web durante o preflight." >&2
+      exit 1
+    }
     chmod 400 "${web_partial}"
     mv -- "${web_partial}" "${release_dir}/${WEB_BUNDLE}"
     web_partial=""
