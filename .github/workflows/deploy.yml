@@ -32,7 +32,7 @@ jobs:
         with: { deno-version: v2.x }
       - name: Validar configuração obrigatória
         env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_URL: https://crm.nikufra.ai
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -44,6 +44,10 @@ jobs:
           for key in "${required[@]}"; do
             test -n "${!key:-}" || { echo "Configuração em falta: $key" >&2; exit 1; }
           done
+          test "${VITE_SUPABASE_URL}" = "https://crm.nikufra.ai" || {
+            echo "VITE_SUPABASE_URL de produção inválida: tem de ser https://crm.nikufra.ai" >&2
+            exit 1
+          }
       - name: Instalar e validar
         run: |
           pnpm install --frozen-lockfile
@@ -86,9 +90,12 @@ jobs:
             down --volumes --remove-orphans
       - name: Compilar aplicação web
         env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_URL: https://crm.nikufra.ai
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-        run: pnpm build
+        run: |
+          set -Eeuo pipefail
+          pnpm build
+          grep -Fq 'name="nikufra-supabase-url" content="https://crm.nikufra.ai"' dist/index.html
       - name: Preparar SSH restrito
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}

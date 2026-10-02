@@ -86,6 +86,33 @@ PY
 tar -xzf "${ARCHIVE}" --no-same-owner --no-same-permissions -C "${STAGE}"
 [[ -f "${STAGE}/index.html" ]] || { echo "index.html em falta" >&2; exit 1; }
 grep -q '<div id="root"></div>' "${STAGE}/index.html" || { echo "Entrada React inválida" >&2; exit 1; }
+python3 - "${STAGE}/index.html" <<'PY'
+from html.parser import HTMLParser
+import pathlib
+import sys
+
+expected = "https://crm.nikufra.ai"
+
+class SupabaseUrlMarker(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.urls = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.casefold() != "meta":
+            return
+        values = {key.casefold(): value or "" for key, value in attrs}
+        if values.get("name", "").casefold() == "nikufra-supabase-url":
+            self.urls.append(values.get("content", ""))
+
+marker = SupabaseUrlMarker()
+marker.feed(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+if marker.urls != [expected]:
+    raise SystemExit(
+        "Build web recusado: VITE_SUPABASE_URL tem de ser exatamente "
+        f"{expected}; marcadores encontrados={marker.urls!r}"
+    )
+PY
 find "${STAGE}" -type d -exec chmod 755 {} +
 find "${STAGE}" -type f -exec chmod 644 {} +
 
