@@ -627,7 +627,7 @@ export async function markMailboxConnected(mailboxId: string, identity: { email:
       for update of m,oauth_state`, [mailboxId, actorId, oauthStateHash]);
     if (!permitted.rows[0]) throw new HttpError(403, "oauth_callback_not_authorized", "A autorização deixou de pertencer a um administrador ativo ou a mailbox já não pode ser ligada.");
     await storeInitialCredential(mailboxId, credential, client);
-    await client.query(`update public.outreach_mailboxes set email=$2,display_name=coalesce(nullif(display_name,''),$3),provider_account_id=$2,status='active',last_error=null where id=$1`, [mailboxId, identity.email, identity.name]);
+    await client.query(`update public.outreach_mailboxes set email=$2,display_name=coalesce(nullif(display_name,''),$3),provider_account_id=$4,status='active',last_error=null where id=$1`, [mailboxId, identity.email, identity.name, identity.email]);
     await client.query(`delete from private.outreach_oauth_states where mailbox_id=$1`, [mailboxId]);
     await client.query(`insert into public.outreach_audit_log(actor_id,action,entity_type,entity_id,details) values($1,'mailbox.oauth.connected','mailbox',$2,$3::jsonb)`, [actorId, mailboxId, JSON.stringify({ provider: "google", email: identity.email })]);
   }, "serializable");

@@ -1120,6 +1120,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); outline
 .outreach-confirmation p:first-child { padding: 11px 12px; border: 1px solid var(--line); border-radius: 3px; color: var(--ink); background: var(--surface-soft); overflow-wrap: anywhere; }
 .outreach-confirmation footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .outreach-inline-error { display: flex; align-items: center; gap: 7px; margin: 9px 0; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--red), transparent 68%); border-radius: 4px; color: var(--red); background: color-mix(in srgb, var(--red), transparent 95%); font-size: 12px; }
+.outreach-inline-success { display: flex; align-items: center; gap: 7px; margin: 9px 0; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--accent), transparent 68%); border-radius: 4px; color: var(--ink); background: color-mix(in srgb, var(--accent), transparent 94%); font-size: 12px; }
 .outreach-inline-error button { margin-left: auto; padding: 3px 5px; border: 0; color: currentColor; background: transparent; cursor: pointer; text-decoration: underline; }
 .outreach-back { display: inline-flex; min-height: 44px; align-items: center; gap: 6px; margin: -7px 0 8px; color: var(--muted); font-size: 12px; }
 .outreach-readiness { margin-bottom: 12px; padding: 14px; border: 1px solid color-mix(in srgb, var(--amber), transparent 67%); border-radius: 5px; background: color-mix(in srgb, var(--amber), transparent 96%); }

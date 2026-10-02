@@ -1,4 +1,4 @@
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Check, Gauge, MailPlus, PlugZap, RefreshCw, ShieldCheck } from "lucide-react";
 import { Button } from "../../../components/ui";
 import { OutreachApiError } from "../api";
@@ -6,6 +6,20 @@ import { formatDateTime, formatNumber, MailboxBadge, ModuleDialog, OutreachError
 import { useCreateMailbox, useMailboxAction, useMailboxes, useStartMailboxOAuth } from "../hooks";
 
 export function OutreachMailboxesPage() {
+  const [oauthFeedback] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    const error = params.get("oauth_error");
+    if (error) return { kind: "error" as const, message: error };
+    if (params.get("oauth") === "connected") return { kind: "success" as const, message: "Conta Google ligada. O envio continua desligado até à aprovação da campanha." };
+    return null;
+  });
+  useEffect(() => {
+    if (!oauthFeedback) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("oauth");
+    url.searchParams.delete("oauth_error");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [oauthFeedback]);
   const query = useMailboxes();
   const mailboxAction = useMailboxAction();
   const createMailbox = useCreateMailbox();
@@ -34,6 +48,8 @@ export function OutreachMailboxesPage() {
 
   return <div className="outreach-page">
     <OutreachPageHeader eyebrow="Infraestrutura de envio" title="Mailboxes" description="Contas de campanha separadas da integração Gmail pessoal do CRM. As credenciais ficam apenas no backend cifrado." actions={<Button onClick={() => setOpen(true)}><MailPlus size={15} />Ligar Google</Button>} />
+    {oauthFeedback?.kind === "error" ? <div className="outreach-inline-error" role="alert">A ligação Google não foi concluída: {oauthFeedback.message}</div> : null}
+    {oauthFeedback?.kind === "success" ? <div className="outreach-inline-success" role="status"><Check size={15} />{oauthFeedback.message}</div> : null}
     <section className="outreach-mailbox-strip"><div><PlugZap size={18} /><span><strong>{formatNumber(mailboxes.filter((item) => item.status === "ready").length)} prontas</strong><small>de {formatNumber(mailboxes.length)} mailboxes</small></span></div><div><Gauge size={18} /><span><strong>{formatNumber(capacity)} disponíveis</strong><small>capacidade restante hoje</small></span></div><p><ShieldCheck size={17} />Uma mailbox ligada não envia até `send_enabled`, a campanha e o modo global estarem aprovados.</p></section>
     <section className="outreach-mailbox-grid">{mailboxes.map((mailbox) => <article key={mailbox.id} className="outreach-mailbox-card"><header><span className="outreach-mailbox-avatar">{mailbox.senderName?.slice(0, 1).toUpperCase() || "@"}</span><span><strong>{mailbox.senderName}</strong><small>{mailbox.email}</small></span><MailboxBadge status={mailbox.status} /></header><div className="outreach-health"><span><b>{Math.round(mailbox.healthScore)}%</b><small>saúde</small></span><ProgressBar value={mailbox.healthScore} label={`Saúde de ${mailbox.email}`} /></div><dl><div><dt>Provider</dt><dd>{mailbox.provider === "google" ? "Google" : mailbox.provider}</dd></div><div><dt>Hoje</dt><dd>{formatNumber(mailbox.sentToday)} / {formatNumber(mailbox.dailyLimit)}</dd></div><div><dt>Respostas</dt><dd>{formatNumber(mailbox.repliesToday)}</dd></div><div><dt>Bounce</dt><dd>{(mailbox.bounceRate || 0).toLocaleString("pt-PT", { maximumFractionDigits: 2 })}%</dd></div></dl><div className="outreach-dns"><span className={mailbox.authentication?.spf ? "is-ok" : ""}>{mailbox.authentication?.spf ? <Check size={12} /> : null}SPF</span><span className={mailbox.authentication?.dkim ? "is-ok" : ""}>{mailbox.authentication?.dkim ? <Check size={12} /> : null}DKIM</span><span className={mailbox.authentication?.dmarc ? "is-ok" : ""}>{mailbox.authentication?.dmarc ? <Check size={12} /> : null}DMARC</span></div>{mailbox.lastError ? <p className="outreach-mailbox-error">{mailbox.lastError}</p> : <p className="outreach-mailbox-sync">Última sincronização: {formatDateTime(mailbox.lastSyncAt)}</p>}<footer><Button variant="secondary" disabled={mailboxAction.isPending} onClick={() => mailboxAction.mutate({ id: mailbox.id, action: "test" })}><RefreshCw size={14} />Testar</Button><Button variant="ghost" disabled={mailboxAction.isPending} onClick={() => mailboxAction.mutate({ id: mailbox.id, action: "dns" })}><ShieldCheck size={14} />Rever DNS</Button>{mailbox.provider === "google" ? <Button variant="secondary" disabled={oauth.isPending} onClick={() => oauth.mutate({ mailboxId: mailbox.id, provider: "google", emailHint: mailbox.email })}><PlugZap size={14} />{oauth.isPending && oauth.variables?.mailboxId === mailbox.id ? "A abrir Google…" : mailbox.status === "disconnected" ? "Ligar" : "Reautorizar"}</Button> : null}</footer>{oauth.isError && oauth.variables?.mailboxId === mailbox.id ? <p className="outreach-inline-error" role="alert">{oauth.error instanceof Error ? oauth.error.message : "Não foi possível abrir a autorização Google."}</p> : null}</article>)}</section>
     {!mailboxes.length ? <section className="outreach-empty"><span><MailPlus size={22} /></span><h3>Liga a primeira mailbox</h3><p>No primeiro rollout só Google fica disponível. Microsoft e SMTP/IMAP permanecem desativados até terem testes próprios.</p><Button onClick={() => setOpen(true)}>Ligar Google</Button></section> : null}
