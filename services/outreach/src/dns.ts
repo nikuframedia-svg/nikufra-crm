@@ -41,7 +41,10 @@ export function assessDmarc(records: string[]) {
   const record = matches[0] ?? null;
   const policy = record?.match(/(?:^|;)\s*p\s*=\s*([^;\s]+)/i)?.[1]?.toLowerCase() ?? null;
   const valid = matches.length === 1 && ["none", "quarantine", "reject"].includes(policy ?? "");
-  return { status: !record ? "missing" as const : valid && policy !== "none" ? "pass" as const : "warning" as const, record, policy, validForSending: valid };
+  // p=none is a valid DMARC policy for sender authentication. It monitors
+  // failures without asking receivers to quarantine or reject them. Keep the
+  // enforcement distinction in the details, not in the send-readiness gate.
+  return { status: !record ? "missing" as const : valid ? "pass" as const : "warning" as const, record, policy, validForSending: valid, enforced: policy === "quarantine" || policy === "reject" };
 }
 
 export function assessMx<T extends { exchange: string; priority: number }>(records: T[], provider: "google" = "google") {
@@ -68,7 +71,7 @@ export async function inspectDomain(domainInput: string, selectorInput = "google
     txt(`_mta-sts.${domain}`),
   ]);
   return {
-    checkerVersion: 3,
+    checkerVersion: 4,
     domain,
     selector,
     spf: assessSpf(rootTxt),

@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { assessDkim, assessMx, assessSpf } from "../src/dns.js";
+import { assessDkim, assessDmarc, assessMx, assessSpf } from "../src/dns.js";
+
+describe("DMARC readiness", () => {
+  it("accepts a single monitoring policy while reporting that it is not enforced", () => {
+    expect(assessDmarc(["v=DMARC1; p=none"])).toMatchObject({
+      status: "pass", policy: "none", validForSending: true, enforced: false,
+    });
+  });
+
+  it("rejects missing, duplicated, and invalid policies", () => {
+    expect(assessDmarc([]).status).toBe("missing");
+    expect(assessDmarc(["v=DMARC1; p=none", "v=DMARC1; p=reject"]).status).toBe("warning");
+    expect(assessDmarc(["v=DMARC1; p=invalid"]).status).toBe("warning");
+  });
+});
 
 describe("DKIM readiness", () => {
   it("rejects obsolete keys shorter than 1024 bits", () => {

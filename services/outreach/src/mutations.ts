@@ -343,7 +343,7 @@ async function materializeRecipients(client: import("pg").PoolClient, audienceId
     if (!item.companyId) continue;
     const member = await client.query<{ id: string }>(`select id from public.outreach_audience_members where audience_id=$1 and contact_id=$2`, [audienceId, item.contactId]);
     const snapshot = Object.fromEntries([...usedVariables].map((key) => [key, item.variables[key] ?? null]));
-    await client.query(`insert into public.outreach_recipients(campaign_id,audience_member_id,contact_id,company_id,email_snapshot,variable_snapshot,status,eligibility_reasons) values($1,$2,$3,$4,$5,$6::jsonb,$7,$8) on conflict(campaign_id,contact_id) do update set audience_member_id=excluded.audience_member_id,email_snapshot=excluded.email_snapshot,variable_snapshot=excluded.variable_snapshot,status=excluded.status,eligibility_reasons=excluded.eligibility_reasons`, [campaignId, member.rows[0]?.id ?? null, item.contactId, item.companyId, item.email, JSON.stringify(snapshot), item.eligible ? "eligible" : "ineligible", item.reasons]);
+    await client.query(`insert into public.outreach_recipients(campaign_id,audience_member_id,contact_id,company_id,email_snapshot,variable_snapshot,status,eligibility_reasons) values($1,$2,$3,$4,$5,$6::jsonb,$7,$8) on conflict(campaign_id,contact_id) where contact_id is not null do update set audience_member_id=excluded.audience_member_id,email_snapshot=excluded.email_snapshot,variable_snapshot=excluded.variable_snapshot,status=excluded.status,eligibility_reasons=excluded.eligibility_reasons`, [campaignId, member.rows[0]?.id ?? null, item.contactId, item.companyId, item.email, JSON.stringify(snapshot), item.eligible ? "eligible" : "ineligible", item.reasons]);
   }
 }
 

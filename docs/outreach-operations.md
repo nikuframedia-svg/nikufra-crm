@@ -170,6 +170,59 @@ A promoção final requer UUID de um administrador CRM ativo:
 ./outreach-control.sh live --approve-live <profile-uuid>
 ```
 
+### Primeiro teste e recuperação da reputação
+
+O primeiro teste é um único envio da Mia para `joaomilhazes71@gmail.com`,
+através de uma campanha em rascunho com limite de 1 mensagem/dia. Antes do
+lançamento, confirmar o controlo da caixa de destino e registar a base legal e
+a evidência de verificação do endereço. Rever SPF, DKIM, DMARC e MX no CRM nas
+24 horas anteriores. Um registo DMARC válido com `p=none` satisfaz o requisito
+de autenticação do Gmail; o resultado da verificação deve conservar a política
+e indicar separadamente que não há enforcement. Depois do envio, comparar o
+job `sent` com a mensagem no Gmail Sent e verificar na caixa de destino a
+localização, os cabeçalhos `Authentication-Results` e eventuais erros ou
+respostas. Um único email não mede reputação nem prova entregabilidade futura.
+
+O indicador percentual de “saúde” atualmente mostrado no CRM é um índice de
+configuração (ligação, DNS e hard bounces). **Não representa a reputação que o
+Gmail atribui ao domínio ou ao IP.** Para decisões de expansão ou recuperação,
+consultar também os sinais de entrega e os [Google Postmaster Tools](https://support.google.com/mail/answer/14668346?hl=en).
+Em volume muito baixo, o Postmaster pode não apresentar dados; a ausência de
+um valor não deve ser tratada como reputação boa.
+
+Quando surgirem reclamações, hard bounces, falhas de autenticação, erros de
+rate limit ou deterioração da reputação, seguir esta rotina:
+
+1. **Parar e preservar evidência.** Em canary, uma reclamação ou hard bounce já
+   desliga automaticamente o envio. Para outros sinais, usar `outreach-control.sh
+   disable`; isto pausa campanhas, reconcilia jobs potencialmente enviados e
+   repõe a rampa em 1. Em produção, manter também o limiar automático existente
+   de reclamações (0,1%) e de hard bounces (5% em 30 dias). Com poucos envios,
+   investigar o evento individual antes de interpretar percentagens.
+2. **Diagnosticar.** Verificar logs e códigos de erro, consentimento, qualidade
+   da lista, supressões, conteúdo, SPF/DKIM/DMARC e cabeçalhos reais. Comparar
+   spam rate, reputação do domínio e erros de entrega no Postmaster. Uma falha
+   temporária/rate limit exige pausa e retry com espera exponencial, não uma
+   sequência de tentativas rápidas. Reclamações e endereços inválidos devem
+   sair da audiência, sem reenvio automático.
+3. **Recomeçar com controlo humano.** Depois de corrigida a causa, voltar a
+   `canary` apenas com destinatários reais que esperam a mensagem. Usar a rampa
+   existente 1→3→5→10 mensagens/dia por mailbox; cada avanço requer pelo menos
+   48 horas sem incidente e um envio confirmado no patamar atual. Rever sinais
+   de entrega e Postmaster antes de avançar; se os dados do Postmaster ainda
+   não existirem, não inferir recuperação a partir do silêncio do dashboard.
+   Se ocorrer novo incidente, parar e repetir o diagnóstico desde o início.
+
+Os patamares 1→3→5→10 e a espera de 48 horas são regras internas conservadoras,
+não números prescritos pelo Gmail. O Google recomenda volume crescente e
+constante, envio a pessoas que querem recebê-lo, spam reportado abaixo de
+0,1% e prevenção de 0,3% ou mais; a recuperação da reputação pode levar dias.
+Consultar as [diretrizes do Gmail](https://support.google.com/mail/answer/81126?hl=en),
+o [FAQ de spam rate](https://support.google.com/mail/answer/14229414?hl=en)
+e a [orientação para erros temporários](https://support.google.com/mail/answer/14668346?hl=en).
+Não usar trocas artificiais de mensagens ou redes de seed como substituto de
+destinatários interessados.
+
 ## Kill switch e rollback
 
 ```bash
