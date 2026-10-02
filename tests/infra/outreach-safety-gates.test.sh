@@ -152,6 +152,13 @@ grep -Fq "relkind in ('r','p')" <<< "${rls_probe}" \
 grep -Fq "relname='communication_suppressions'" <<< "${rls_probe}" \
   || fail "probe RLS omite a tabela canónica de suppressions"
 
+# Host and PostgreSQL can use different locale-aware punctuation ordering.
+# The exact canary allowlist comparison must normalize both sides bytewise.
+grep -Fq '| LC_ALL=C sort -u)' "${ROOT}/infra/outreach-readiness.sh" \
+  || fail "allowlist configurada não usa ordenação C determinística"
+grep -Fq 'order by lower(email::text) collate \"C\"' "${ROOT}/infra/outreach-readiness.sh" \
+  || fail "allowlist persistida não usa a mesma collation C"
+
 # PostgreSQL resolves every relation in a CASE expression before evaluating
 # the chosen branch. The first production deploy must therefore prove table
 # existence in a separate statement before it can query the Outreach row.

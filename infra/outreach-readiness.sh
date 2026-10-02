@@ -140,8 +140,10 @@ else
     || fail "live só pode partir de canary:true e shadow=false (send_env=${OUTREACH_SEND_ENABLED:-unset}; shadow_env=${OUTREACH_SHADOW_MODE:-unset}; api_send=${api_send_enabled:-unset}; api_shadow=${api_shadow_mode:-unset}; worker_send=${worker_send_enabled:-unset}; worker_shadow=${worker_shadow_mode:-unset}; db=${state})"
 fi
 
-expected_allowlist="$(printf '%s' "${OUTREACH_CANARY_ALLOWLIST:-}" | tr ',' '\n' | sed '/^[[:space:]]*$/d; s/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]' | sort -u)"
-actual_allowlist="$(db_value "select lower(email::text) from private.outreach_canary_allowlist order by lower(email::text)")"
+expected_allowlist="$(printf '%s' "${OUTREACH_CANARY_ALLOWLIST:-}" | tr ',' '\n' | sed '/^[[:space:]]*$/d; s/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]' | LC_ALL=C sort -u)"
+# Compare both sides using bytewise ordering. PostgreSQL's locale-aware
+# collation may ignore punctuation such as `@`, while GNU sort does not.
+actual_allowlist="$(db_value "select lower(email::text) from private.outreach_canary_allowlist order by lower(email::text) collate \"C\"")"
 [[ -n "${expected_allowlist}" && "${actual_allowlist}" == "${expected_allowlist}" ]] \
   && pass "allowlist canary coincide exatamente com a configuração" \
   || fail "allowlist canary diverge da configuração (não é permitido manter destinatários extra)"
