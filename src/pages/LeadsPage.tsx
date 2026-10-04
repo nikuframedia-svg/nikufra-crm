@@ -7,6 +7,7 @@ import { csvFieldLabels, csvRecord, parseCsv, stageFromText, verticalFromText, t
 import { useCRM } from "../state/crm-context";
 import type { Lead, Opportunity, Stage, Vertical } from "../types";
 import { Avatar, Button, Card, Modal, PageHeader } from "../components/ui";
+import { useVerifyLeads, type LeadVerificationResult } from "../features/outreach/hooks";
 
 const helper = createColumnHelper<Lead>();
 
@@ -20,12 +21,16 @@ export function LeadsPage() {
   const [importData, setImportData] = useState<ParsedCsv | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [importError, setImportError] = useState("");
+  const [verifyOnImport, setVerifyOnImport] = useState(false);
+  const [importVerificationResults, setImportVerificationResults] = useState<LeadVerificationResult[] | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const canDelete = team.find((owner) => owner.id === currentUserId)?.role === "admin";
+  const verifyLeads = useVerifyLeads();
   const assignableTeam = useMemo(() => dataMode === "supabase" ? team.filter((owner) => /^[0-9a-f-]{36}$/i.test(owner.id)) : team, [dataMode, team]);
+  const importEmailCount = useMemo(() => importData ? new Set(importData.rows.map((row) => (csvRecord(importData, row).email ?? "").trim().toLowerCase()).filter(Boolean)).size : 0, [importData]);
 
   const columns = useMemo(() => [
     helper.display({ id: "select", header: () => <input type="checkbox" aria-label="Selecionar todos" checked={selected.size === leads.length && leads.length > 0} onChange={(event) => setSelected(event.target.checked ? new Set(leads.map((lead) => lead.id)) : new Set())} />, cell: ({ row }) => <input type="checkbox" aria-label={`Selecionar ${row.original.nome}`} checked={selected.has(row.original.id)} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(row.original.id); else next.delete(row.original.id); return next; })} /> }),
@@ -53,6 +58,8 @@ export function LeadsPage() {
     if (!parsed.headers.length || !parsed.rows.length) { setImportError("O CSV está vazio ou não tem cabeçalho."); return; }
     setImportData(parsed);
     setImportError("");
+    setVerifyOnImport(false);
+    setImportVerificationResults(null);
   }
 
   function normalizedCompanyKey(value: string) { return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, ""); }
@@ -96,10 +103,25 @@ export function LeadsPage() {
       }
     }
     if (!newLeads.length) { setImportError("Nenhum contacto novo válido. Confirma a coluna de email ou verifica duplicados."); return; }
+    if (verifyOnImport && newLeads.length > 25) { setImportError("A verificação automática está limitada a 25 emails por importação. Divide o CSV em lotes ou verifica depois em Outreach → Audiências."); return; }
     setImportBusy(true); setImportError("");
     const includeNikufraFinancials = newLeads.length >= 400;
-    try { await importBatch(newLeads, newOpportunities, { includeNikufraFinancials }); setImportOpen(false); setImportData(null); }
-    catch (error) { setImportError(error instanceof Error ? error.message : "A importação falhou."); }
+    let imported = false;
+    try {
+      await importBatch(newLeads, newOpportunities, { includeNikufraFinancials });
+      imported = true;
+      if (verifyOnImport) {
+        const existingIds = new Map(leads.filter((lead) => lead.email).map((lead) => [lead.email.toLowerCase(), lead.id]));
+        const ids = newLeads.map((lead) => existingIds.get(lead.email.toLowerCase()) ?? lead.id);
+        setImportVerificationResults((await verifyLeads.mutateAsync(ids)).items);
+        setImportData(null);
+      } else {
+        setImportOpen(false); setImportData(null);
+      }
+    } catch (error) {
+      setImportError(`${imported ? "Contactos importados, mas a verificação falhou: " : "A importação falhou: "}${error instanceof Error ? error.message : "erro desconhecido"}`);
+      if (imported) setImportData(null);
+    }
     finally { setImportBusy(false); }
   }
 
@@ -115,18 +137,20 @@ export function LeadsPage() {
 
   return (
     <div className="page">
-      <PageHeader eyebrow="Base comercial" title="Empresas e leads" description={`${leads.length} contactos ativos. Clica numa célula para editar sem sair da tabela.`} actions={<><Button variant="secondary" onClick={() => setImportOpen(true)}><Upload size={16} />Importar CSV</Button><Button variant="secondary" onClick={handleExport}><Download size={16} />Exportar</Button></>} />
+      <PageHeader eyebrow="Base comercial" title="Empresas e leads" description={`${leads.length} contactos ativos. Clica numa célula para editar sem sair da tabela.`} actions={<><Button variant="secondary" onClick={() => { setImportData(null); setImportVerificationResults(null); setImportError(""); setVerifyOnImport(false); setImportOpen(true); }}><Upload size={16} />Importar CSV</Button><Button variant="secondary" onClick={handleExport}><Download size={16} />Exportar</Button></>} />
       <Card className="data-table-card">
         <div className="table-toolbar"><div className="table-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Pesquisar nome, empresa, email..." /><kbd>/</kbd></div><div>{selected.size ? <><span className="selection-count"><Check size={14} />{selected.size} selecionados</span><Link to="/email" onClick={() => setEmailSelection([...selected])}><Button><MailPlus size={16} />Criar rascunhos</Button></Link>{canDelete ? <Button variant="danger" onClick={() => { setDeleteError(""); setDeleteOpen(true); }}><Trash2 size={16} />Apagar</Button> : null}<Button variant="ghost" onClick={() => setSelected(new Set())}><X size={16} /></Button></> : <span className="row-count mono">{table.getFilteredRowModel().rows.length} linhas</span>}</div></div>
         <div className="table-scroll"><table className="data-table"><thead>{table.getHeaderGroups().map((group) => <tr key={group.id}>{group.headers.map((header) => <th key={header.id} onClick={header.column.getToggleSortingHandler()}>{flexRender(header.column.columnDef.header, header.getContext())}{header.column.getCanSort() ? <ArrowDownUp size={12} /> : null}</th>)}</tr>)}</thead><tbody>{table.getRowModel().rows.map((row) => <tr key={row.id}>{row.getVisibleCells().map((cell) => <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>)}</tr>)}</tbody></table></div>
         <div className="table-footer"><span>A mostrar {pagination.pageIndex * pagination.pageSize + 1}–{Math.min((pagination.pageIndex + 1) * pagination.pageSize, table.getFilteredRowModel().rows.length)} de {table.getFilteredRowModel().rows.length}</span><span className="pagination-controls"><Button variant="ghost" disabled={!table.getCanPreviousPage()} onClick={() => table.previousPage()}>Anterior</Button><b className="mono">{pagination.pageIndex + 1}/{table.getPageCount()}</b><Button variant="ghost" disabled={!table.getCanNextPage()} onClick={() => table.nextPage()}>Seguinte</Button></span><span>{dataMode === "supabase" ? "Dados partilhados no servidor" : "Base Nikufra carregada localmente"}</span></div>
       </Card>
 
-      <Modal open={importOpen} onClose={() => setImportOpen(false)} title="Importar contactos" description="O CRM deteta o separador e reconhece colunas em português ou inglês. Podes corrigir o mapeamento antes de importar." width="820px">
+      <Modal open={importOpen} onClose={() => { if (!importBusy) setImportOpen(false); }} title="Importar contactos" description="O CRM deteta o separador e reconhece colunas em português ou inglês. Podes corrigir o mapeamento antes de importar." width="820px">
         <div className="import-drop" onClick={() => fileRef.current?.click()}><Upload size={22} /><strong>Escolhe um CSV ou arrasta para aqui</strong><span>Deteção de duplicados por email · máximo 5 MB</span><input ref={fileRef} type="file" accept=".csv,text/csv" hidden onChange={(event) => event.target.files?.[0] && handleFile(event.target.files[0])} /></div>
         {importData ? <div className="import-preview"><div className="import-preview__head"><strong>{importData.rows.length} registos · separador {importData.delimiter === "\t" ? "tab" : importData.delimiter}</strong><span>{importData.mapping.filter(Boolean).length}/{importData.headers.length} campos reconhecidos</span></div><div className="mapping-grid">{importData.headers.map((header, index) => <label key={`${header}-${index}`}><span>{header}</span><select value={importData.mapping[index] ?? ""} onChange={(event) => setImportData((current) => current ? { ...current, mapping: current.mapping.map((field, fieldIndex) => fieldIndex === index ? (event.target.value || null) as CsvField | null : field) } : current)}><option value="">Ignorar coluna</option>{Object.entries(csvFieldLabels).map(([field, label]) => <option value={field} key={field}>{label}</option>)}</select></label>)}</div><table><thead><tr>{importData.headers.slice(0, 6).map((header, index) => <th key={`${header}-${index}`}>{header}</th>)}</tr></thead><tbody>{importData.rows.slice(0, 5).map((row, index) => <tr key={index}>{row.slice(0, 6).map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>)}</tbody></table></div> : null}
+        {importData && canDelete && dataMode === "supabase" ? <label className="import-verification"><input type="checkbox" checked={verifyOnImport} disabled={importEmailCount > 25 || !importEmailCount || importBusy} onChange={(event) => setVerifyOnImport(event.target.checked)} /><span><strong>Verificar leads após importar</strong><small>Até 25 emails por lote. O CRM verifica sintaxe, domínio e DNS sem enviar os endereços a outro serviço. Um domínio apto a receber correio não confirma a existência da caixa; esses casos ficam inconclusivos. Isto não autoriza envios comerciais.{importEmailCount > 25 ? " Divide esta lista em lotes de até 25 para verificar automaticamente." : ""}</small></span></label> : null}
+        {importVerificationResults ? <div className="import-verification-results" role="status"><strong>Importação concluída · {importVerificationResults.filter((item) => item.status === "valid").length} confirmados por prova anterior · {importVerificationResults.filter((item) => item.status === "invalid").length} inválidos · {importVerificationResults.filter((item) => item.status === "risky").length} arriscados · {importVerificationResults.filter((item) => item.status === "unknown").length} inconclusivos</strong><ul>{importVerificationResults.map((item) => <li key={item.contactId}>{item.email ?? "Sem email"}: {item.reason}</li>)}</ul><small>Um resultado inconclusivo não confirma que a caixa exista. Vê o estado em Outreach → Audiências.</small></div> : null}
         {importError ? <div className="auth-error">{importError}</div> : null}
-        <div className="modal__actions"><Button variant="secondary" onClick={() => setImportOpen(false)}>Cancelar</Button><Button disabled={!importData || importBusy} onClick={() => void handleImport()}>{importBusy ? "A importar…" : "Importar sem duplicados"}</Button></div>
+        <div className="modal__actions"><Button variant="secondary" disabled={importBusy} onClick={() => setImportOpen(false)}>{importData ? "Cancelar" : "Fechar"}</Button>{importData ? <Button disabled={importBusy} onClick={() => void handleImport()}>{importBusy ? "A importar e verificar…" : verifyOnImport ? "Importar e verificar" : "Importar sem duplicados"}</Button> : null}</div>
       </Modal>
       <Modal open={deleteOpen} onClose={() => !deleteBusy && setDeleteOpen(false)} title={`Apagar ${selected.size} registo${selected.size === 1 ? "" : "s"} comercial${selected.size === 1 ? "" : "is"}?`} description="A empresa e a lead são o mesmo registo em todo o CRM.">
         <div className="delete-contact-warning"><AlertTriangle size={20} /><div><strong>A eliminação é definitiva e será refletida também no Kanban.</strong><p>Serão removidos a empresa, todos os contactos associados, oportunidades, atividades e faturação. O Google fica impedido de voltar a importar os contactos apagados.</p></div></div>

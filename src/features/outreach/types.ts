@@ -124,7 +124,7 @@ export interface Eligibility {
   contactId: string;
   eligible: boolean;
   reasons: string[];
-  verification: "verified" | "risky" | "unknown" | "invalid";
+  verification: "valid" | "verified" | "risky" | "unknown" | "pending" | "invalid" | "catch_all";
   suppressed: boolean;
 }
 

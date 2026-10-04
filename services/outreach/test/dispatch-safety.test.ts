@@ -6,7 +6,7 @@ vi.mock("../src/db.js", () => ({
   transaction: vi.fn(),
 }));
 
-import { abortReservedBeforeProvider, dispatchCanaryTripReason, handleDispatchGuardFailure, handleProviderPermitFailure } from "../src/delivery.js";
+import { abortReservedBeforeProvider, dispatchCanaryTripReason, handleDispatchGuardFailure, handleProviderPermitFailure, isSerializationFailure } from "../src/delivery.js";
 
 describe("final dispatch safety gate", () => {
   beforeEach(() => {
@@ -47,6 +47,29 @@ describe("final dispatch safety gate", () => {
 
     expect(mocks.query).toHaveBeenCalledOnce();
     expect(mocks.query.mock.calls[0]?.[0]).toContain("status='cancelled'");
+  });
+
+  it("requeues a serialization abort only when no provider ledger exists", async () => {
+    const error = Object.assign(new Error("could not serialize access"), { code: "40001" });
+    expect(isSerializationFailure(error)).toBe(true);
+    await expect(handleDispatchGuardFailure("00000000-0000-4000-8000-000000000008", error)).resolves.toEqual({
+      reason: null,
+      disposition: "requeued",
+    });
+    expect(mocks.query).toHaveBeenCalledOnce();
+    expect(mocks.query.mock.calls[0]?.[0]).toContain("not exists (select 1 from private.outreach_delivery_ledger");
+    expect(mocks.query.mock.calls[0]?.[0]).toContain("status='pending'");
+  });
+
+  it("quarantines a serialization abort with an existing ledger", async () => {
+    mocks.query.mockResolvedValueOnce({ rowCount: 0, rows: [] }).mockResolvedValueOnce({ rowCount: 1, rows: [] });
+    const error = Object.assign(new Error("could not serialize access"), { code: "40001" });
+    await expect(handleDispatchGuardFailure("00000000-0000-4000-8000-000000000009", error)).resolves.toEqual({
+      reason: null,
+      disposition: "reconciliation_required",
+    });
+    expect(mocks.query.mock.calls[1]?.[0]).toContain("status='reconciliation_required'");
+    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes("status='cancelled'"))).toBe(false);
   });
 
   it("closes a writer-quarantined reservation when provider revalidation rejects before the call", async () => {

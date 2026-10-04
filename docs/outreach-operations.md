@@ -223,6 +223,31 @@ e a [orientação para erros temporários](https://support.google.com/mail/answe
 Não usar trocas artificiais de mensagens ou redes de seed como substituto de
 destinatários interessados.
 
+## Verificação de leads existentes
+
+Em **Outreach → Audiências**, a coluna **Verificar** permite escolher até 25
+contactos de cada vez, mesmo quando ainda não são elegíveis para campanha.
+**Verificar leads** usa a verificação interna do CRM: sintaxe, domínio,
+registos MX e, na ausência de MX, registos A/AAAA. Só o domínio entra na
+consulta DNS; o endereço completo não é enviado a um fornecedor de
+verificação. Null MX ou domínio sem rota de entrega é inválido; domínios
+descartáveis e caixas funcionais são assinalados como arriscados. Um domínio
+com correio configurado fica **inconclusivo** quanto à existência da caixa
+específica e não se torna elegível para campanha por esse motivo. A regra
+de A/AAAA como MX implícito segue a [RFC 5321](https://www.rfc-editor.org/rfc/rfc5321.html);
+o null MX segue a [RFC 7505](https://www.rfc-editor.org/rfc/rfc7505.html).
+Na importação CSV de **Empresas e leads**, um administrador pode assinalar
+**Verificar leads após importar** para um lote de até 25 endereços. A importação
+termina primeiro; se a verificação falhar, os contactos permanecem no CRM.
+Não há chave, créditos nem pedidos a fornecedores externos.
+
+Uma resposta de email ligada ao endereço atual ou outra prova documentada
+pode ser registada por um administrador no fluxo de evidência existente. Uma
+nova consulta DNS inconclusiva preserva uma prova anterior ainda válida; uma
+consulta que identifica endereço inválido ou arriscado bloqueia o envio.
+Verificação técnica não substitui base legal nem ignora supressões. O estado
+de elegibilidade usa o resultado decisivo mais recente do endereço atual.
+
 ## Kill switch e rollback
 
 ```bash

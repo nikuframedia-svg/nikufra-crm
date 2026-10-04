@@ -150,6 +150,30 @@ export function useEligibility(ids: string[]) {
   });
 }
 
+export interface LeadVerificationResult {
+  contactId: string;
+  email: string | null;
+  status: "valid" | "risky" | "invalid" | "unknown";
+  reason: string;
+}
+
+export function useVerifyLeads() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (contactIds: string[]) => {
+      const items: LeadVerificationResult[] = [];
+      for (let index = 0; index < contactIds.length; index += 25) {
+        const result = await postJson<{ items: LeadVerificationResult[] }>("/verifications", {
+          contactIds: contactIds.slice(index, index + 25),
+        });
+        items.push(...result.items);
+      }
+      return { items };
+    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: outreachKeys.all }),
+  });
+}
+
 export function useCreateAudience() {
   const queryClient = useQueryClient();
   return useMutation({ mutationFn: ({ contactIds: _contactIds, ...input }: { name: string; description?: string; contactIds: string[] }) => postJson<Audience>("/audiences", input), onSuccess: () => void queryClient.invalidateQueries({ queryKey: outreachKeys.audiences }) });
