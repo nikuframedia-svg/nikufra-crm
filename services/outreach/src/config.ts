@@ -36,6 +36,8 @@ const schema = z.object({
   MICROSOFT_TENANT: z.string().default("common"),
   OUTREACH_ENABLE_MICROSOFT: booleanValue.default(false),
   OUTREACH_ENABLE_SMTP: booleanValue.default(false),
+  OUTREACH_INSTANTLY_API_KEY: z.string().default(""),
+  OUTREACH_INSTANTLY_DAILY_LIMIT: z.coerce.number().int().min(1).max(100_000).default(25),
   OTEL_EXPORTER_OTLP_ENDPOINT: optionalUrl.default(""),
 });
 
@@ -139,4 +141,6 @@ export const config = {
   },
   smtpRequested: data.OUTREACH_ENABLE_SMTP,
   smtpEnabled: certifiedProviders.smtp && data.OUTREACH_ENABLE_SMTP,
+  instantlyApiKey: data.OUTREACH_INSTANTLY_API_KEY,
+  instantlyDailyLimit: data.OUTREACH_INSTANTLY_DAILY_LIMIT,
 } as const;

@@ -419,6 +419,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); outline
 .import-preview th, .import-preview td { padding: 6px 8px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; }
 .import-preview th { color: var(--muted); background: var(--surface-soft); }
 .import-preview + .modal__actions, .modal > .modal__actions { margin: 20px; }
+.import-verification { display: flex; align-items: flex-start; gap: 10px; margin: 14px 20px 0; color: var(--ink); font-size: 11px; }
+.import-verification input { margin-top: 2px; accent-color: var(--accent); }
+.import-verification span { display: grid; gap: 4px; }
+.import-verification small { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.import-verification-results { margin: 16px 20px 0; padding: 12px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); font-size: 11px; }
+.import-verification-results strong { color: var(--ink); }
+.import-verification-results ul { max-height: 200px; margin: 8px 0; padding-left: 18px; overflow: auto; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
@@ -1106,6 +1113,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); outline
 .outreach-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px; border-bottom: 1px solid var(--line); }
 .outreach-dialog h2 { margin: 0; color: var(--ink-strong); font-size: 17px; }
 .outreach-dialog header p:last-child { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.outreach-verification-panel { padding: 18px 20px 20px; color: var(--muted); font-size: 12px; }
+.outreach-verification-panel > footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.outreach-verification-results p { margin: 0 0 10px; color: var(--ink); font-weight: 700; }
+.outreach-verification-results ul { max-height: 280px; margin: 0; padding-left: 18px; overflow: auto; }
+.outreach-verification-results li { margin: 5px 0; line-height: 1.45; overflow-wrap: anywhere; }
 .outreach-icon-button { display: grid; width: 44px; height: 44px; flex: 0 0 auto; place-items: center; margin: -7px -7px 0 0; padding: 0; border: 0; border-radius: 4px; color: var(--muted); background: transparent; cursor: pointer; }
 .outreach-icon-button:hover { color: var(--ink); background: var(--surface-soft); }
 .outreach-form { display: grid; gap: 13px; padding: 20px; }

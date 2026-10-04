@@ -150,6 +150,40 @@ export function useEligibility(ids: string[]) {
   });
 }
 
+export interface LeadVerificationResult {
+  contactId: string;
+  email: string | null;
+  status: "pending" | "valid" | "invalid" | "catch_all" | "unknown";
+  reason: string;
+  cached: boolean;
+}
+
+export function useVerificationProvider(enabled = true) {
+  return useQuery({
+    queryKey: [...outreachKeys.all, "verification-provider"],
+    queryFn: () => outreachRequest<{ provider: "instantly"; configured: boolean }>("/verifications/provider"),
+    enabled,
+  });
+}
+
+export function useVerifyLeads() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (contactIds: string[]) => {
+      const items: LeadVerificationResult[] = [];
+      for (let index = 0; index < contactIds.length; index += 5) {
+        const result = await postJson<{ items: LeadVerificationResult[] }>("/verifications/provider", {
+          contactIds: contactIds.slice(index, index + 5),
+          acknowledgeProviderTransfer: true,
+        });
+        items.push(...result.items);
+      }
+      return { items };
+    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: outreachKeys.all }),
+  });
+}
+
 export function useCreateAudience() {
   const queryClient = useQueryClient();
   return useMutation({ mutationFn: ({ contactIds: _contactIds, ...input }: { name: string; description?: string; contactIds: string[] }) => postJson<Audience>("/audiences", input), onSuccess: () => void queryClient.invalidateQueries({ queryKey: outreachKeys.audiences }) });

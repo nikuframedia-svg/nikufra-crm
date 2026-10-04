@@ -223,6 +223,40 @@ e a [orientação para erros temporários](https://support.google.com/mail/answe
 Não usar trocas artificiais de mensagens ou redes de seed como substituto de
 destinatários interessados.
 
+## Verificação de leads existentes
+
+Em **Outreach → Audiências**, a coluna **Verificar** permite escolher até 25
+contactos de cada vez, mesmo quando ainda não são elegíveis para campanha.
+**Verificar leads** mostra o fornecedor e pede confirmação antes de transmitir
+endereços. A API envia apenas o endereço de email à Instantly, em lotes de
+cinco; o resultado fica associado ao endereço que foi verificado. Uma nova
+verificação do mesmo endereço reutiliza resultados recentes e consulta jobs
+pendentes antes de criar outro pedido que possa consumir créditos.
+Na importação CSV de **Empresas e leads**, um administrador pode assinalar
+**Verificar leads após importar** para um lote de até 25 endereços. A importação
+termina primeiro; se o fornecedor falhar, os contactos permanecem no CRM e
+continuam bloqueados para campanhas até uma verificação válida.
+
+Esta opção requer `OUTREACH_INSTANTLY_API_KEY` apenas no ambiente da
+`outreach-api`. Criar uma chave Instantly com os scopes
+`email_verifications:create` e `email_verifications:read`, guardar no `.env`
+do servidor com permissões 600 e confirmar saldo de créditos. A chave não
+entra no bundle web, nos logs nem no ambiente do worker. Sem chave, o botão
+mostra a dependência em falta e não faz pedidos pagos. Segundo a
+[documentação da Instantly](https://help.instantly.ai/en/articles/6514690-how-to-verify-leads),
+a verificação consome créditos por endereço; confirmar o preço atual antes de
+processar lotes grandes.
+O servidor limita novas verificações a 25 endereços por dia por omissão;
+`OUTREACH_INSTANTLY_DAILY_LIMIT` permite ajustar este orçamento após rever
+o custo e o volume autorizado.
+
+`valid` exige `verification_status=verified` e `catch_all=false` explícito.
+Caixas `catch_all`, inválidas, pendentes ou inconclusivas ficam bloqueadas para
+envio. A verificação também não substitui base legal, supressões ou resposta
+prévia. O estado de elegibilidade usa sempre o resultado mais recente do
+endereço atual do contacto, sem recuperar uma validação antiga quando a nova
+expira.
+
 ## Kill switch e rollback
 
 ```bash
