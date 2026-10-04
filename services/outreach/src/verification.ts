@@ -65,5 +65,7 @@ export async function verifyEmailAddress(input: string): Promise<EmailVerificati
   // DNS proves only that the domain accepts mail; it cannot prove that this
   // particular mailbox exists. Persisting DNS-only checks as `valid` would let
   // an invented address pass the final dispatch eligibility gate for 30 days.
-  return { email, status: "unknown", reason: "Domínio com MX válido, mas a existência desta mailbox não foi confirmada.", mxHosts, disposable, roleAddress, checkedAt };
+  return { email, status: "unknown", reason: mxHosts.length
+    ? "Domínio com MX válido, mas a existência desta caixa não foi confirmada."
+    : "Domínio com A/AAAA para receber correio, mas a existência desta caixa não foi confirmada.", mxHosts, disposable, roleAddress, checkedAt };
 }
