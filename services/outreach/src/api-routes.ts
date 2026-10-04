@@ -57,7 +57,6 @@ import {
   settings,
 } from "./repository.js";
 import { Router } from "./router.js";
-import { instantlyVerificationSettings, verifyLeadsWithInstantly } from "./instantly-verification.js";
 
 const API = "/api/outreach/v1";
 const uuid = z.uuid();
@@ -215,13 +214,6 @@ export function buildRouter() {
   router.add("POST", `${API}/verifications`, async (context) => {
     assertOrigin(context.request);
     success(context, await verifyContacts(actor(context), await readJson(context.request)));
-  }, { capability: "outreach.campaign.manage" });
-  router.add("GET", `${API}/verifications/provider`, async (context) => {
-    success(context, instantlyVerificationSettings());
-  }, { capability: "outreach.campaign.manage" });
-  router.add("POST", `${API}/verifications/provider`, async (context) => {
-    assertOrigin(context.request);
-    success(context, await verifyLeadsWithInstantly(actor(context), await readJson(context.request)));
   }, { capability: "outreach.campaign.manage" });
   router.add("POST", `${API}/verifications/evidence`, async (context) => {
     assertOrigin(context.request);

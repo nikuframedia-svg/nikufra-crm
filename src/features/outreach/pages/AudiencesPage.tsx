@@ -5,7 +5,7 @@ import { Button } from "../../../components/ui";
 import { stageLabels } from "../../../data/seed";
 import { useCRM } from "../../../state/crm-context";
 import { EligibilityBadge, EmptyPanel, formatNumber, ModuleDialog, OutreachError, OutreachLoading, OutreachPageHeader } from "../components";
-import { useAddRecipients, useAttachAudienceToCampaign, useAudiences, useCampaigns, useCreateAudience, useEligibility, useVerificationProvider, useVerifyLeads, type LeadVerificationResult } from "../hooks";
+import { useAddRecipients, useAttachAudienceToCampaign, useAudiences, useCampaigns, useCreateAudience, useEligibility, useVerifyLeads, type LeadVerificationResult } from "../hooks";
 
 type EligibilityFilter = "all" | "eligible" | "blocked";
 const verificationLabels = { valid: "Válido", verified: "Válido", invalid: "Inválido", risky: "Arriscado", catch_all: "Catch-all", pending: "Pendente", unknown: "Inconclusivo" } as const;
@@ -17,7 +17,6 @@ export function OutreachAudiencesPage() {
   const addRecipients = useAddRecipients();
   const attachAudience = useAttachAudienceToCampaign();
   const createAudience = useCreateAudience();
-  const verificationProvider = useVerificationProvider();
   const verifyLeads = useVerifyLeads();
   const [query, setQuery] = useState("");
   const [owner, setOwner] = useState("all");
@@ -111,12 +110,11 @@ export function OutreachAudiencesPage() {
       <footer><span>{formatNumber(filtered.length)} resultados · {formatNumber(eligibleVisible.length)} elegíveis visíveis · verificação em lotes de até 25</span>{verifySelected.size ? <span className="outreach-selection"><ShieldCheck size={14} />{verifySelected.size} para verificar <button onClick={() => setVerifySelected(new Set())} aria-label="Limpar seleção para verificação"><X size={14} /></button></span> : null}{selected.size ? <span className="outreach-selection"><Check size={14} />{selected.size} para audiência <button onClick={() => setSelected(new Set())} aria-label="Limpar seleção para audiência"><X size={14} /></button></span> : null}</footer>
     </section>
 
-    <ModuleDialog open={verificationOpen} onClose={() => { if (!verifyLeads.isPending) setVerificationOpen(false); }} title="Verificar leads" description={`${verifySelected.size} endereços serão enviados à Instantly para confirmar a caixa. Esta ação pode consumir créditos. A verificação não concede, por si só, autorização para contactar.`}>
+    <ModuleDialog open={verificationOpen} onClose={() => { if (!verifyLeads.isPending) setVerificationOpen(false); }} title="Verificar leads" description={`O CRM vai verificar sintaxe e DNS de ${verifySelected.size} endereços. Um domínio com correio ativo não confirma que cada caixa exista. A verificação não concede autorização para contactar.`}>
       <div className="outreach-verification-panel">
-        {verificationProvider.isPending ? <p>A confirmar a integração…</p> : !verificationProvider.data?.configured ? <div className="outreach-inline-error" role="alert">A integração de verificação ainda não está configurada. É necessária uma chave API da Instantly com permissões de leitura e criação de verificações, e créditos disponíveis.</div> : null}
-        {verificationResults ? <div className="outreach-verification-results" role="status"><p>{verificationResults.filter((item) => item.status === "valid").length} válidos · {verificationResults.filter((item) => item.status === "invalid").length} inválidos · {verificationResults.filter((item) => item.status === "catch_all").length} catch-all · {verificationResults.filter((item) => item.status === "pending" || item.status === "unknown").length} inconclusivos/pendentes</p><ul>{verificationResults.map((item) => <li key={item.contactId}><strong>{item.email ?? "Sem email"}</strong>: {item.reason}{item.cached ? " (resultado anterior)" : ""}</li>)}</ul></div> : null}
+        {verificationResults ? <div className="outreach-verification-results" role="status"><p>{verificationResults.filter((item) => item.status === "valid").length} confirmados por prova anterior · {verificationResults.filter((item) => item.status === "invalid").length} inválidos · {verificationResults.filter((item) => item.status === "risky").length} arriscados · {verificationResults.filter((item) => item.status === "unknown").length} inconclusivos</p><ul>{verificationResults.map((item) => <li key={item.contactId}><strong>{item.email ?? "Sem email"}</strong>: {item.reason}</li>)}</ul></div> : null}
         {verifyLeads.isError ? <div className="outreach-inline-error" role="alert">{verifyLeads.error instanceof Error ? verifyLeads.error.message : "Não foi possível verificar os emails."}</div> : null}
-        <footer><Button variant="secondary" disabled={verifyLeads.isPending} onClick={() => setVerificationOpen(false)}>Fechar</Button><Button disabled={!verificationProvider.data?.configured || verifyLeads.isPending || !verifySelected.size} onClick={() => void handleVerify()}>{verifyLeads.isPending ? "A verificar…" : verificationResults?.some((item) => item.status === "pending") ? "Atualizar pendentes" : "Confirmar verificação"}</Button></footer>
+        <footer><Button variant="secondary" disabled={verifyLeads.isPending} onClick={() => setVerificationOpen(false)}>Fechar</Button><Button disabled={verifyLeads.isPending || !verifySelected.size} onClick={() => void handleVerify()}>{verifyLeads.isPending ? "A verificar…" : "Verificar no CRM"}</Button></footer>
       </div>
     </ModuleDialog>
 

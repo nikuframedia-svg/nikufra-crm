@@ -586,7 +586,16 @@ export async function recordDnsCheck(actor: Actor, mailboxId: string, selector =
 
 export async function verifyContacts(actor: Actor, raw: unknown) {
   const input = z.object({ contactIds: z.array(uuid).min(1).max(100) }).parse(raw);
-  const contacts = await pool.query<{ id: string; email: string | null }>(`select id,email::text from public.contactos where id=any($1::uuid[])`, [input.contactIds]);
+  const contacts = await pool.query<{ id: string; email: string | null; prior_valid: boolean }>(`
+    select c.id,c.email::text,
+      coalesce(latest.status='valid' and (latest.expires_at is null or latest.expires_at>now()),false) prior_valid
+    from public.contactos c
+    left join lateral (
+      select v.status,v.expires_at from public.outreach_email_verifications v
+      where v.email=c.email
+      order by v.verified_at desc nulls last,v.created_at desc,v.id desc limit 1
+    ) latest on true
+    where c.id=any($1::uuid[])`, [input.contactIds]);
   const items: Array<{ contactId: string; email: string | null; status: string; reason: string; [key: string]: unknown }> = [];
   for (const contact of contacts.rows) {
     if (!contact.email) {
@@ -594,12 +603,16 @@ export async function verifyContacts(actor: Actor, raw: unknown) {
       continue;
     }
     const verification = await verifyEmailAddress(contact.email);
+    if (verification.status === "unknown" && contact.prior_valid) {
+      items.push({ contactId: contact.id, email: contact.email, status: "valid", reason: "A análise DNS não confirma a caixa; mantém-se a prova anterior ainda válida.", retainedEvidence: true });
+      continue;
+    }
     const dbStatus = verification.status === "verified" ? "valid" : verification.status;
     items.push({ contactId: contact.id, ...verification, status: dbStatus });
   }
   await transaction(async (client) => {
     for (const item of items) {
-      if (!item.email) continue;
+      if (!item.email || item.retainedEvidence) continue;
       await client.query(`insert into public.outreach_email_verifications(contact_id,email,status,provider,reasons,verified_at,expires_at) values($1,$2,$3,'dns_syntax',$4,now(),now()+interval '30 days')`, [item.contactId, item.email, item.status, [item.reason]]);
     }
     await audit(actor.id, "contacts.verified", "contact", null, { count: items.length }, client);

@@ -24,6 +24,18 @@ export function usableMxRecords<T extends { exchange: string }>(records: T[]) {
   });
 }
 
+function dnsErrorCode(error: unknown) {
+  return typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+}
+
+async function checkAddressFallback(domain: string): Promise<"available" | "absent" | "unknown"> {
+  // SMTP uses an implicit MX pointing to A/AAAA when a domain has no MX.
+  const answers = await Promise.allSettled([dns.resolve4(domain), dns.resolve6(domain)]);
+  if (answers.some((answer) => answer.status === "fulfilled" && answer.value.length > 0)) return "available";
+  if (answers.some((answer) => answer.status === "rejected" && !["ENODATA", "ENOTFOUND"].includes(dnsErrorCode(answer.reason)))) return "unknown";
+  return "absent";
+}
+
 export async function verifyEmailAddress(input: string): Promise<EmailVerification> {
   const email = input.trim().toLowerCase();
   const match = /^([^\s@]+)@([^\s@]+)$/.exec(email);
@@ -36,13 +48,18 @@ export async function verifyEmailAddress(input: string): Promise<EmailVerificati
   try {
     publishedMx = await dns.resolveMx(domain);
   } catch (error) {
-    const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
-    const permanent = code === "ENODATA" || code === "ENOTFOUND";
-    return { email, status: permanent ? "invalid" : "unknown", reason: permanent ? "O domínio não publica registos MX." : "Não foi possível consultar o DNS agora.", mxHosts: [], disposable, roleAddress, checkedAt: new Date().toISOString() };
+    const code = dnsErrorCode(error);
+    if (code !== "ENODATA" && code !== "ENOTFOUND") return { email, status: "unknown", reason: "Não foi possível consultar o DNS agora.", mxHosts: [], disposable, roleAddress, checkedAt: new Date().toISOString() };
+    publishedMx = [];
   }
   const mxHosts = usableMxRecords(publishedMx);
   const checkedAt = new Date().toISOString();
-  if (!mxHosts.length) return { email, status: "invalid", reason: "O domínio não recebe email.", mxHosts: [], disposable, roleAddress, checkedAt };
+  if (publishedMx.length && !mxHosts.length) return { email, status: "invalid", reason: "O domínio anuncia que não recebe email (null MX).", mxHosts: [], disposable, roleAddress, checkedAt };
+  if (!mxHosts.length) {
+    const fallback = await checkAddressFallback(domain);
+    if (fallback === "absent") return { email, status: "invalid", reason: "O domínio não tem MX nem registos A/AAAA para receber email.", mxHosts: [], disposable, roleAddress, checkedAt };
+    if (fallback === "unknown") return { email, status: "unknown", reason: "Não foi possível confirmar os registos DNS do domínio agora.", mxHosts: [], disposable, roleAddress, checkedAt };
+  }
   if (disposable) return { email, status: "risky", reason: "Domínio de email temporário conhecido.", mxHosts, disposable, roleAddress, checkedAt };
   if (roleAddress) return { email, status: "risky", reason: "Endereço funcional/partilhado; confirma destinatário e base legal.", mxHosts, disposable, roleAddress, checkedAt };
   // DNS proves only that the domain accepts mail; it cannot prove that this

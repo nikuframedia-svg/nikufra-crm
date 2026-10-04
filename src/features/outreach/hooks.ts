@@ -153,17 +153,8 @@ export function useEligibility(ids: string[]) {
 export interface LeadVerificationResult {
   contactId: string;
   email: string | null;
-  status: "pending" | "valid" | "invalid" | "catch_all" | "unknown";
+  status: "valid" | "risky" | "invalid" | "unknown";
   reason: string;
-  cached: boolean;
-}
-
-export function useVerificationProvider(enabled = true) {
-  return useQuery({
-    queryKey: [...outreachKeys.all, "verification-provider"],
-    queryFn: () => outreachRequest<{ provider: "instantly"; configured: boolean }>("/verifications/provider"),
-    enabled,
-  });
 }
 
 export function useVerifyLeads() {
@@ -171,10 +162,9 @@ export function useVerifyLeads() {
   return useMutation({
     mutationFn: async (contactIds: string[]) => {
       const items: LeadVerificationResult[] = [];
-      for (let index = 0; index < contactIds.length; index += 5) {
-        const result = await postJson<{ items: LeadVerificationResult[] }>("/verifications/provider", {
-          contactIds: contactIds.slice(index, index + 5),
-          acknowledgeProviderTransfer: true,
+      for (let index = 0; index < contactIds.length; index += 25) {
+        const result = await postJson<{ items: LeadVerificationResult[] }>("/verifications", {
+          contactIds: contactIds.slice(index, index + 25),
         });
         items.push(...result.items);
       }

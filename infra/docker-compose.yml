@@ -251,8 +251,6 @@ services:
       <<: *outreach-environment
       OUTREACH_PROCESS: api
       SERVER_PORT: 8787
-      OUTREACH_INSTANTLY_API_KEY: ${OUTREACH_INSTANTLY_API_KEY:-}
-      OUTREACH_INSTANTLY_DAILY_LIMIT: ${OUTREACH_INSTANTLY_DAILY_LIMIT:-25}
     expose: ["8787"]
     read_only: true
     tmpfs:
