@@ -9,7 +9,7 @@ vi.mock("../src/config.js", () => ({
 }));
 
 import { refreshOAuthCredential } from "../src/oauth.js";
-import { isProviderAuthorizationFailure, listGmailMessageReferences, listInboundMessages, sendProviderMessage, testProvider } from "../src/providers.js";
+import { isProviderAuthorizationFailure, listGmailMessageReferences, listInboundMessages, reconcileProviderMessage, sendProviderMessage, testProvider } from "../src/providers.js";
 import { HttpError } from "../src/errors.js";
 import type { DeliveryEnvelope, OAuthCredential } from "../src/types.js";
 
@@ -89,6 +89,58 @@ describe("Google provider reliability", () => {
     const current = { ...expired, expiresAt: Date.now() + 3_600_000 };
     await expect(refreshOAuthCredential("google", current)).resolves.toBe(current);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("confirms an accepted Gmail message by provider ID when Gmail rewrites Message-ID", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: "gmail-message-1", threadId: "gmail-thread-1", labelIds: ["SENT"], internalDate: "1791273601000",
+      payload: { headers: [
+        { name: "Message-Id", value: "<gmail-generated@mail.gmail.com>" },
+        { name: "X-Nikufra-Idempotency-Key", value: envelope.idempotencyKey },
+      ] },
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const credential = { ...expired, expiresAt: Date.now() + 3_600_000 };
+
+    await expect(reconcileProviderMessage(
+      { provider: "google", credentials: credential, persist: vi.fn() },
+      "<outreach-original@nikufra.ai>",
+      { providerMessageId: "gmail-message-1", idempotencyKey: envelope.idempotencyKey },
+    )).resolves.toMatchObject({ providerMessageId: "gmail-message-1", internetMessageId: "<gmail-generated@mail.gmail.com>" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/messages/gmail-message-1?format=metadata");
+  });
+
+  it("does not confirm a different Gmail Sent message under an accepted provider ID", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: "gmail-message-1", labelIds: ["SENT"],
+      payload: { headers: [
+        { name: "Message-Id", value: "<gmail-generated@mail.gmail.com>" },
+        { name: "X-Nikufra-Idempotency-Key", value: "another-job" },
+      ] },
+    }), { status: 200 })));
+    const credential = { ...expired, expiresAt: Date.now() + 3_600_000 };
+
+    await expect(reconcileProviderMessage(
+      { provider: "google", credentials: credential, persist: vi.fn() },
+      "<outreach-original@nikufra.ai>",
+      { providerMessageId: "gmail-message-1", idempotencyKey: envelope.idempotencyKey },
+    )).rejects.toMatchObject({ code: "provider_receipt_mismatch" });
+  });
+
+  it("falls back to the RFC 5322 search when Gmail no longer has the accepted ID", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response("", { status: 404 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ messages: [{ id: "searched-message", threadId: "searched-thread" }] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const credential = { ...expired, expiresAt: Date.now() + 3_600_000 };
+
+    await expect(reconcileProviderMessage(
+      { provider: "google", credentials: credential, persist: vi.fn() },
+      "<outreach-original@nikufra.ai>",
+      { providerMessageId: "missing-message", idempotencyKey: envelope.idempotencyKey },
+    )).resolves.toMatchObject({ providerMessageId: "searched-message" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("paginates Gmail inbox references before fetching every message", async () => {

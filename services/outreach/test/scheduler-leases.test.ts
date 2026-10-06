@@ -68,7 +68,7 @@ describe("scheduler lease and ambiguity semantics", () => {
       raw: {},
     };
     mocks.poolQuery
-      .mockResolvedValueOnce({ rows: [{ id: "job-a", mailbox_id: "mailbox-a", provider_response: { expectedInternetMessageId } }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ id: "job-a", mailbox_id: "mailbox-a", idempotency_key: "manual:job-a", provider_message_id: "provider-message-a", provider_response: { expectedInternetMessageId } }], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [{
         id: "job-a",
         campaign_id: "campaign-a",
@@ -101,10 +101,11 @@ describe("scheduler lease and ambiguity semantics", () => {
     const candidateSql = String(mocks.poolQuery.mock.calls[0]?.[0]);
     expect(candidateSql).toContain("from private.outreach_delivery_ledger ledger");
     expect(candidateSql).toContain("ledger.status in ('sending','accepted','ambiguous')");
+    expect(candidateSql).toContain("job.lease_expires_at <= now()");
     expect(candidateSql).toContain("normalized as");
     expect(candidateSql).toContain("set status='reconciliation_required'");
     expect(candidateSql).not.toContain("where job.status='reconciliation_required'");
-    expect(mocks.reconcileProviderMessage).toHaveBeenCalledWith(expect.anything(), expectedInternetMessageId);
+    expect(mocks.reconcileProviderMessage).toHaveBeenCalledWith(expect.anything(), expectedInternetMessageId, { providerMessageId: "provider-message-a", idempotencyKey: "manual:job-a" });
     expect(mocks.sendProviderMessage).not.toHaveBeenCalled();
     expect(String(client.query.mock.calls[0]?.[0])).toContain("status in ('sending','accepted','ambiguous')");
   });
@@ -112,7 +113,7 @@ describe("scheduler lease and ambiguity semantics", () => {
   it("keeps a reserved delivery in reconciliation when Sent has no match", async () => {
     const expectedInternetMessageId = "<outreach-job-a@nikufra.ai>";
     mocks.poolQuery
-      .mockResolvedValueOnce({ rows: [{ id: "job-a", mailbox_id: "mailbox-a", provider_response: { expectedInternetMessageId } }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ id: "job-a", mailbox_id: "mailbox-a", idempotency_key: "manual:job-a", provider_message_id: null, provider_response: { expectedInternetMessageId } }], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [], rowCount: 1 });
     mocks.providerSession.mockResolvedValue({ provider: "google" });
     mocks.reconcileProviderMessage.mockResolvedValue(null);
