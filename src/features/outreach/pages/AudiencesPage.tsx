@@ -1,13 +1,14 @@
 import { useDeferredValue, useMemo, useState, type FormEvent } from "react";
 import { Link } from "@tanstack/react-router";
-import { AlertTriangle, Check, ExternalLink, Plus, Search, UsersRound, X } from "lucide-react";
+import { AlertTriangle, Check, ExternalLink, Plus, Search, ShieldCheck, UsersRound, X } from "lucide-react";
 import { Button } from "../../../components/ui";
 import { stageLabels } from "../../../data/seed";
 import { useCRM } from "../../../state/crm-context";
 import { EligibilityBadge, EmptyPanel, formatNumber, ModuleDialog, OutreachError, OutreachLoading, OutreachPageHeader } from "../components";
-import { useAddRecipients, useAttachAudienceToCampaign, useAudiences, useCampaigns, useCreateAudience, useEligibility } from "../hooks";
+import { useAddRecipients, useAttachAudienceToCampaign, useAudiences, useCampaigns, useCreateAudience, useEligibility, useVerifyLeads, type LeadVerificationResult } from "../hooks";
 
 type EligibilityFilter = "all" | "eligible" | "blocked";
+const verificationLabels = { valid: "Válido", verified: "Válido", invalid: "Inválido", risky: "Arriscado", catch_all: "Catch-all", pending: "Pendente", unknown: "Inconclusivo" } as const;
 
 export function OutreachAudiencesPage() {
   const { leads, team } = useCRM();
@@ -16,10 +17,14 @@ export function OutreachAudiencesPage() {
   const addRecipients = useAddRecipients();
   const attachAudience = useAttachAudienceToCampaign();
   const createAudience = useCreateAudience();
+  const verifyLeads = useVerifyLeads();
   const [query, setQuery] = useState("");
   const [owner, setOwner] = useState("all");
   const [eligibilityFilter, setEligibilityFilter] = useState<EligibilityFilter>("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [verifySelected, setVerifySelected] = useState<Set<string>>(new Set());
+  const [verificationOpen, setVerificationOpen] = useState(false);
+  const [verificationResults, setVerificationResults] = useState<LeadVerificationResult[] | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const deferredQuery = useDeferredValue(query);
 
@@ -38,6 +43,7 @@ export function OutreachAudiencesPage() {
     return true;
   });
   const eligibleVisible = filtered.filter((lead) => eligibilityMap.get(lead.id)?.eligible && !lead.optout);
+  const verifiableVisible = filtered.filter((lead) => Boolean(lead.email) && !lead.optout);
 
   if (audiences.isLoading) return <OutreachLoading label="A preparar audiências…" />;
   if (audiences.isError) return <OutreachError error={audiences.error} retry={() => void audiences.refetch()} />;
@@ -48,6 +54,19 @@ export function OutreachAudiencesPage() {
       eligibleVisible.forEach((lead) => checked ? next.add(lead.id) : next.delete(lead.id));
       return next;
     });
+  }
+
+  function toggleVerifiable(checked: boolean) {
+    setVerifySelected(checked ? new Set(verifiableVisible.slice(0, 25).map((lead) => lead.id)) : new Set());
+  }
+
+  async function handleVerify() {
+    try {
+      setVerificationResults((await verifyLeads.mutateAsync([...verifySelected])).items);
+      setSelected(new Set());
+    } catch {
+      /* Keep the selection and dialog open for a retry. */
+    }
   }
 
   async function handleAudience(event: FormEvent<HTMLFormElement>) {
@@ -70,7 +89,7 @@ export function OutreachAudiencesPage() {
   }
 
   return <div className="outreach-page">
-    <OutreachPageHeader eyebrow="Contactos canónicos" title="Audiências" description="Segmenta contactos do CRM. Identidade e propriedade continuam a ser editadas exclusivamente na ficha CRM." actions={<Button disabled={!selected.size} onClick={() => setDialogOpen(true)}><Plus size={15} />Adicionar {selected.size || ""} a audiência ou campanha</Button>} />
+    <OutreachPageHeader eyebrow="Contactos canónicos" title="Audiências" description="Segmenta contactos do CRM. Identidade e propriedade continuam a ser editadas exclusivamente na ficha CRM." actions={<><Button variant="secondary" disabled={!verifySelected.size} onClick={() => { setVerificationResults(null); setVerificationOpen(true); }}><ShieldCheck size={15} />Verificar {verifySelected.size || ""} leads</Button><Button disabled={!selected.size} onClick={() => setDialogOpen(true)}><Plus size={15} />Adicionar {selected.size || ""} a audiência ou campanha</Button></>} />
     <section className="outreach-audience-summary">
       <div><strong>{formatNumber(leads.length)}</strong><span>contactos no CRM</span></div><div><strong>{formatNumber(audiences.data?.items.length ?? 0)}</strong><span>audiências guardadas</span></div><p><AlertTriangle size={15} />Elegibilidade é apenas uma pré-análise. Antes do envio, o worker volta a validar email atual, base legal, verificação, suppression, resposta e quota.</p>
     </section>
@@ -81,15 +100,23 @@ export function OutreachAudiencesPage() {
     </div>
     {eligibility.isError ? <div className="outreach-inline-error" role="alert"><AlertTriangle size={15} />Não foi possível calcular elegibilidade. Nenhum contacto pode ser selecionado até a validação regressar. <button onClick={() => void eligibility.refetch()}>Repetir</button></div> : null}
     <section className="outreach-table-shell">
-      <div className="outreach-table-scroll"><table className="outreach-table"><thead><tr><th><input type="checkbox" aria-label="Selecionar contactos elegíveis visíveis" checked={eligibleVisible.length > 0 && eligibleVisible.every((lead) => selected.has(lead.id))} onChange={(event) => toggleAll(event.target.checked)} /></th><th>Contacto</th><th>Empresa</th><th>Estado CRM</th><th>Responsável</th><th>Elegibilidade</th><th><span className="sr-only">Ficha</span></th></tr></thead><tbody>{filtered.map((lead) => {
+      <div className="outreach-table-scroll"><table className="outreach-table"><thead><tr><th><input type="checkbox" aria-label="Selecionar até 25 emails visíveis para verificação" title="Verificar emails" checked={verifiableVisible.length > 0 && verifiableVisible.slice(0, 25).every((lead) => verifySelected.has(lead.id))} onChange={(event) => toggleVerifiable(event.target.checked)} /><small>Verificar</small></th><th><input type="checkbox" aria-label="Selecionar contactos elegíveis visíveis para audiência" title="Adicionar a audiência" checked={eligibleVisible.length > 0 && eligibleVisible.every((lead) => selected.has(lead.id))} onChange={(event) => toggleAll(event.target.checked)} /><small>Audiência</small></th><th>Contacto</th><th>Empresa</th><th>Estado CRM</th><th>Responsável</th><th>Verificação</th><th>Elegibilidade</th><th><span className="sr-only">Ficha</span></th></tr></thead><tbody>{filtered.map((lead) => {
         const evaluation = eligibilityMap.get(lead.id);
         const eligible = Boolean(evaluation?.eligible && !lead.optout);
         const reasons = lead.optout ? ["Opt-out no CRM"] : evaluation?.reasons;
-        return <tr key={lead.id}><td><input type="checkbox" aria-label={`Selecionar ${lead.nome}`} disabled={!eligible} checked={selected.has(lead.id)} onChange={(event) => setSelected((current) => { const next = new Set(current); event.target.checked ? next.add(lead.id) : next.delete(lead.id); return next; })} /></td><td><span className="outreach-person"><b>{lead.nome}</b><small>{lead.email || "Sem email"} · {lead.cargo || "Cargo não definido"}</small></span></td><td>{lead.empresa}</td><td>{stageLabels[lead.estado]}</td><td>{team.find((member) => member.id === lead.ownerId)?.nome ?? "Sem responsável"}</td><td>{evaluation || lead.optout ? <EligibilityBadge eligible={eligible} reasons={reasons} /> : <span className="outreach-evaluating">A avaliar…</span>}</td><td><Link to="/empresas/$companyId" params={{ companyId: lead.empresaId ?? lead.id }} hash={`contact-${lead.id}`} aria-label={`Abrir elegibilidade de ${lead.nome} na ficha CRM de ${lead.empresa}`}><ExternalLink size={15} /></Link></td></tr>;
+        return <tr key={lead.id}><td><input type="checkbox" aria-label={`Verificar email de ${lead.nome}`} disabled={!lead.email || lead.optout || (verifySelected.size >= 25 && !verifySelected.has(lead.id))} checked={verifySelected.has(lead.id)} onChange={(event) => setVerifySelected((current) => { const next = new Set(current); event.target.checked ? next.add(lead.id) : next.delete(lead.id); return next; })} /></td><td><input type="checkbox" aria-label={`Adicionar ${lead.nome} a audiência`} disabled={!eligible} checked={selected.has(lead.id)} onChange={(event) => setSelected((current) => { const next = new Set(current); event.target.checked ? next.add(lead.id) : next.delete(lead.id); return next; })} /></td><td><span className="outreach-person"><b>{lead.nome}</b><small>{lead.email || "Sem email"} · {lead.cargo || "Cargo não definido"}</small></span></td><td>{lead.empresa}</td><td>{stageLabels[lead.estado]}</td><td>{team.find((member) => member.id === lead.ownerId)?.nome ?? "Sem responsável"}</td><td>{evaluation ? <span className={`outreach-eligibility ${evaluation.verification === "valid" || evaluation.verification === "verified" ? "is-eligible" : "is-blocked"}`}>{verificationLabels[evaluation.verification] ?? "Inconclusivo"}</span> : <span className="outreach-evaluating">A avaliar…</span>}</td><td>{evaluation || lead.optout ? <EligibilityBadge eligible={eligible} reasons={reasons} /> : <span className="outreach-evaluating">A avaliar…</span>}</td><td><Link to="/empresas/$companyId" params={{ companyId: lead.empresaId ?? lead.id }} hash={`contact-${lead.id}`} aria-label={`Abrir elegibilidade de ${lead.nome} na ficha CRM de ${lead.empresa}`}><ExternalLink size={15} /></Link></td></tr>;
       })}</tbody></table></div>
       {!filtered.length ? <EmptyPanel icon={<UsersRound size={22} />} title="Sem contactos neste segmento" description="Altera a pesquisa, o responsável ou o filtro de elegibilidade." /> : null}
-      <footer><span>{formatNumber(filtered.length)} resultados · {formatNumber(eligibleVisible.length)} elegíveis visíveis</span>{selected.size ? <span className="outreach-selection"><Check size={14} />{selected.size} selecionados <button onClick={() => setSelected(new Set())} aria-label="Limpar seleção"><X size={14} /></button></span> : null}</footer>
+      <footer><span>{formatNumber(filtered.length)} resultados · {formatNumber(eligibleVisible.length)} elegíveis visíveis · verificação em lotes de até 25</span>{verifySelected.size ? <span className="outreach-selection"><ShieldCheck size={14} />{verifySelected.size} para verificar <button onClick={() => setVerifySelected(new Set())} aria-label="Limpar seleção para verificação"><X size={14} /></button></span> : null}{selected.size ? <span className="outreach-selection"><Check size={14} />{selected.size} para audiência <button onClick={() => setSelected(new Set())} aria-label="Limpar seleção para audiência"><X size={14} /></button></span> : null}</footer>
     </section>
+
+    <ModuleDialog open={verificationOpen} onClose={() => { if (!verifyLeads.isPending) setVerificationOpen(false); }} title="Verificar leads" description={`O CRM vai verificar sintaxe e DNS de ${verifySelected.size} endereços. Um domínio com correio ativo não confirma que cada caixa exista. A verificação não concede autorização para contactar.`}>
+      <div className="outreach-verification-panel">
+        {verificationResults ? <div className="outreach-verification-results" role="status"><p>{verificationResults.filter((item) => item.status === "valid").length} confirmados por prova anterior · {verificationResults.filter((item) => item.status === "invalid").length} inválidos · {verificationResults.filter((item) => item.status === "risky").length} arriscados · {verificationResults.filter((item) => item.status === "unknown").length} inconclusivos</p><ul>{verificationResults.map((item) => <li key={item.contactId}><strong>{item.email ?? "Sem email"}</strong>: {item.reason}</li>)}</ul></div> : null}
+        {verifyLeads.isError ? <div className="outreach-inline-error" role="alert">{verifyLeads.error instanceof Error ? verifyLeads.error.message : "Não foi possível verificar os emails."}</div> : null}
+        <footer><Button variant="secondary" disabled={verifyLeads.isPending} onClick={() => setVerificationOpen(false)}>Fechar</Button><Button disabled={verifyLeads.isPending || !verifySelected.size} onClick={() => void handleVerify()}>{verifyLeads.isPending ? "A verificar…" : "Verificar no CRM"}</Button></footer>
+      </div>
+    </ModuleDialog>
 
     <ModuleDialog open={dialogOpen} onClose={() => setDialogOpen(false)} title="Adicionar contactos" description={`${selected.size} contactos elegíveis serão associados por ID; os dados pessoais continuam no CRM.`}>
       <form className="outreach-form" onSubmit={(event) => void handleAudience(event)}>

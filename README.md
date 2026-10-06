@@ -73,4 +73,6 @@ O browser recebe apenas a chave pública `anon`. A `SERVICE_ROLE_KEY`, os segred
 
 Antes de uma alteração de infraestrutura: executar os testes, confirmar um backup recente, validar o restauro e verificar `infra/production-readiness.sh`. A aplicação web mantém uma versão anterior no servidor para rollback atómico.
 
+A auditoria da release cobre as dependências do frontend e do serviço Outreach. A exceção específica em `pnpm-workspace.yaml` para `GHSA-vfj7-8cjw-p6xm` foi registada em 2026-10-04: `braces@3.0.3` é transitiva da ferramenta de build Tailwind, não entra nos artefactos de runtime e ainda não tem versão corrigida. Rever e remover a exceção assim que existir atualização; outras vulnerabilidades continuam a bloquear a publicação.
+
 O rollout e a operação segura do módulo de campanhas estão documentados em [docs/outreach-operations.md](docs/outreach-operations.md). O outbound nasce desligado e só pode passar por `disabled → canary → live` com todos os gates técnicos e aprovação administrativa.

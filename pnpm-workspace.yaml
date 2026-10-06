@@ -21,6 +21,13 @@ auditConfig:
 allowBuilds:
   esbuild: true
 
+auditConfig:
+  ignoreGhsas:
+    # 2026-10-04: braces@3.0.3 enters only through Tailwind's build tooling.
+    # GHSA-vfj7-8cjw-p6xm has no patched release yet; remove this exception
+    # as soon as a patched transitive dependency is available.
+    - GHSA-vfj7-8cjw-p6xm
+
 minimumReleaseAgeExclude:
   - mailparser@3.9.32
   - nodemailer@10.0.13

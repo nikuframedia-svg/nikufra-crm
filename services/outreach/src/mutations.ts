@@ -263,6 +263,7 @@ export interface EligibilityResult {
   companyId: string;
   eligible: boolean;
   reasons: string[];
+  verification: string;
   contactName: string;
   companyName: string;
   variables: Record<string, string | null>;
@@ -280,9 +281,11 @@ export async function contactEligibility(contactIds: string[]): Promise<Eligibil
            private.outreach_is_suppressed(c.email::text,c.empresa_id) suppressed
     from public.contactos c join public.empresas e on e.id=c.empresa_id
     left join lateral (
-      select status from public.outreach_email_verifications v
-      where v.email=c.email and (v.expires_at is null or v.expires_at>now())
-      order by (v.status='valid') desc,v.verified_at desc nulls last,v.created_at desc limit 1
+      select case when v.expires_at is null or v.expires_at>now()
+        then v.status else 'unknown'::public.outreach_verification_status end status
+      from public.outreach_email_verifications v
+      where v.email=c.email
+      order by v.verified_at desc nulls last,v.created_at desc,v.id desc limit 1
     ) verification on true
     where c.id=any($1::uuid[])`, [contactIds]);
   return result.rows.map((row) => {
@@ -296,6 +299,7 @@ export async function contactEligibility(contactIds: string[]): Promise<Eligibil
     const firstName = row.contact_name.trim().split(/\s+/)[0] ?? row.contact_name;
     return {
       contactId: row.id, email: row.email, companyId: row.empresa_id, eligible: reasons.length === 0, reasons,
+      verification: row.verification_status ?? "unknown",
       contactName: row.contact_name, companyName: row.company_name,
       variables: {
         nome: row.contact_name, name: row.contact_name, primeiro_nome: firstName, first_name: firstName,
@@ -313,7 +317,7 @@ export async function addAudienceContacts(actor: Actor, audienceId: string, raw:
   const input = addAudienceSchema.parse(raw);
   const eligibility = await contactEligibility(input.contactIds);
   const found = new Set(eligibility.map((item) => item.contactId));
-  for (const id of input.contactIds) if (!found.has(id)) eligibility.push({ contactId: id, email: null, companyId: "", eligible: false, reasons: ["contact_not_found"], contactName: "", companyName: "", variables: {} });
+  for (const id of input.contactIds) if (!found.has(id)) eligibility.push({ contactId: id, email: null, companyId: "", eligible: false, reasons: ["contact_not_found"], verification: "unknown", contactName: "", companyName: "", variables: {} });
   await transaction(async (client) => {
     const audience = await client.query(`select id from public.outreach_audiences where id=$1 for share`, [audienceId]);
     if (!audience.rows[0]) throw new HttpError(404, "audience_not_found", "Audiência não encontrada.");
@@ -582,7 +586,16 @@ export async function recordDnsCheck(actor: Actor, mailboxId: string, selector =
 
 export async function verifyContacts(actor: Actor, raw: unknown) {
   const input = z.object({ contactIds: z.array(uuid).min(1).max(100) }).parse(raw);
-  const contacts = await pool.query<{ id: string; email: string | null }>(`select id,email::text from public.contactos where id=any($1::uuid[])`, [input.contactIds]);
+  const contacts = await pool.query<{ id: string; email: string | null; prior_valid: boolean }>(`
+    select c.id,c.email::text,
+      coalesce(latest.status='valid' and (latest.expires_at is null or latest.expires_at>now()),false) prior_valid
+    from public.contactos c
+    left join lateral (
+      select v.status,v.expires_at from public.outreach_email_verifications v
+      where v.email=c.email
+      order by v.verified_at desc nulls last,v.created_at desc,v.id desc limit 1
+    ) latest on true
+    where c.id=any($1::uuid[])`, [input.contactIds]);
   const items: Array<{ contactId: string; email: string | null; status: string; reason: string; [key: string]: unknown }> = [];
   for (const contact of contacts.rows) {
     if (!contact.email) {
@@ -590,12 +603,16 @@ export async function verifyContacts(actor: Actor, raw: unknown) {
       continue;
     }
     const verification = await verifyEmailAddress(contact.email);
+    if (verification.status === "unknown" && contact.prior_valid) {
+      items.push({ contactId: contact.id, email: contact.email, status: "valid", reason: "A análise DNS não confirma a caixa; mantém-se a prova anterior ainda válida.", retainedEvidence: true });
+      continue;
+    }
     const dbStatus = verification.status === "verified" ? "valid" : verification.status;
     items.push({ contactId: contact.id, ...verification, status: dbStatus });
   }
   await transaction(async (client) => {
     for (const item of items) {
-      if (!item.email) continue;
+      if (!item.email || item.retainedEvidence) continue;
       await client.query(`insert into public.outreach_email_verifications(contact_id,email,status,provider,reasons,verified_at,expires_at) values($1,$2,$3,'dns_syntax',$4,now(),now()+interval '30 days')`, [item.contactId, item.email, item.status, [item.reason]]);
     }
     await audit(actor.id, "contacts.verified", "contact", null, { count: items.length }, client);

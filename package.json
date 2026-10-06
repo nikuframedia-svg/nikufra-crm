@@ -12,7 +12,7 @@
     "test:e2e:outreach": "playwright test tests/e2e/outreach.spec.ts",
     "test:database": "./infra/test-database.sh --bootstrap",
     "release:verify": "pnpm security:audit && pnpm test:all && pnpm build:all && pnpm test:e2e:outreach",
-    "security:audit": "pnpm audit",
+    "security:audit": "pnpm audit && npm --prefix services/outreach audit --omit=dev",
     "local:configure": "./infra/configure-local.sh",
     "local:up": "./infra/local-up.sh",
     "local:down": "./infra/local-down.sh",

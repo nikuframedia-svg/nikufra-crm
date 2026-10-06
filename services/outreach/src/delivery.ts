@@ -194,11 +194,25 @@ function payloadHash(envelope: DeliveryEnvelope) {
 async function beginDispatch(job: JobRow, envelope: DeliveryEnvelope) {
   assertOutboundProcessGate();
   const mime = buildMime({ idempotencyKey: envelope.idempotencyKey, senderName: envelope.senderName, from: envelope.fromEmail, to: envelope.to, subject: envelope.subject, text: envelope.text, unsubscribeUrl: envelope.unsubscribeUrl, inReplyTo: envelope.inReplyTo, references: envelope.references });
-  await transaction(async (client) => {
-    await client.query(`select private.outreach_assert_dispatch_eligible($1,$2)`, [job.id, payloadHash(envelope)]);
-    await client.query(`update private.outreach_delivery_ledger set provider_response=$2::jsonb,last_attempt_at=now() where job_id=$1`, [job.id, JSON.stringify({ expectedInternetMessageId: mime.internetMessageId })]);
-  }, "serializable");
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await transaction(async (client) => {
+        await client.query(`select private.outreach_assert_dispatch_eligible($1,$2)`, [job.id, payloadHash(envelope)]);
+        await client.query(`update private.outreach_delivery_ledger set provider_response=$2::jsonb,last_attempt_at=now() where job_id=$1`, [job.id, JSON.stringify({ expectedInternetMessageId: mime.internetMessageId })]);
+      }, "serializable");
+      break;
+    } catch (error) {
+      // A serialization abort rolls back the reservation, before the provider
+      // is called. Re-run the complete eligibility check on a fresh snapshot.
+      if (!isSerializationFailure(error) || attempt === 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+    }
+  }
   return mime.internetMessageId;
+}
+
+export function isSerializationFailure(error: unknown) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "40001";
 }
 
 async function recordProviderAccepted(jobId: string, receipt: ProviderReceipt, client: PoolClient) {
@@ -355,6 +369,29 @@ async function tripCanaryAfterDispatchFailure(jobId: string, reason: NonNullable
 }
 
 export async function handleDispatchGuardFailure(jobId: string, error: unknown) {
+  if (isSerializationFailure(error)) {
+    // All beginDispatch writes were rolled back. Do not turn contention into a
+    // terminal cancellation; the next claim rechecks eligibility and the
+    // provider boundary. A pre-existing ledger must never be retried blindly.
+    const requeued = await pool.query(`
+      update public.outreach_jobs job
+      set status='pending',lease_owner=null,lease_expires_at=null,
+          scheduled_at=now()+interval '15 seconds',
+          attempt_count=greatest(attempt_count-1,0),
+          last_error='dispatch_serialization_retry',updated_at=now()
+      where job.id=$1 and job.status='leased' and job.lease_owner=$2
+        and not exists (select 1 from private.outreach_delivery_ledger ledger where ledger.job_id=job.id)`,
+    [jobId, config.workerId]);
+    if (requeued.rowCount === 1) return { reason: null, disposition: "requeued" as const };
+    const quarantined = await pool.query(`
+      update public.outreach_jobs job
+      set status='reconciliation_required',lease_owner=null,lease_expires_at=null,
+          last_error='dispatch_serialization_ledger_present',updated_at=now()
+      where job.id=$1 and job.status='leased' and job.lease_owner=$2
+        and exists (select 1 from private.outreach_delivery_ledger ledger where ledger.job_id=job.id)`,
+    [jobId, config.workerId]);
+    return { reason: null, disposition: quarantined.rowCount === 1 ? "reconciliation_required" as const : "unchanged" as const };
+  }
   const reason = dispatchCanaryTripReason(error);
   if (reason === "dispatch.eligibility_failed") {
     // This job definitively did not reach the provider, so cancel it before
