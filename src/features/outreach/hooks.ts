@@ -198,7 +198,7 @@ export function useEligibility(ids: string[]) {
 export interface LeadVerificationResult {
   contactId: string;
   email: string | null;
-  status: "valid" | "risky" | "invalid" | "unknown";
+  status: "valid" | "risky" | "invalid" | "unknown" | "exempt";
   reason: string;
 }
 

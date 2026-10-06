@@ -151,7 +151,7 @@ export interface Eligibility {
   contactId: string;
   eligible: boolean;
   reasons: string[];
-  verification: "valid" | "verified" | "risky" | "unknown" | "pending" | "invalid" | "catch_all";
+  verification: "valid" | "verified" | "risky" | "unknown" | "pending" | "invalid" | "catch_all" | "owned_mailbox_history";
   suppressed: boolean;
 }
 

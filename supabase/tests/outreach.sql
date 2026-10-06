@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap;
-select plan(183);
+select plan(191);
 
 -- Self-contained principals. The first @nikufra.ai account becomes the local
 -- test admin; invitations exercise the same onboarding path as production.
@@ -448,6 +448,40 @@ insert into public.outreach_recipients(
 ) values
   ('f2000000-0000-4000-8000-000000000001', 'f0000000-0000-4000-8000-000000000001', 'c0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000001', 'one@one.example', 'active'),
   ('f2000000-0000-4000-8000-000000000002', 'f0000000-0000-4000-8000-000000000001', 'c0000000-0000-4000-8000-000000000002', 'b0000000-0000-4000-8000-000000000002', 'two@two.example', 'active');
+
+select is(private.outreach_has_owned_mailbox_email(
+  'c0000000-0000-4000-8000-000000000001', 'one@one.example'), false,
+  'lista nova sem histórico continua sujeita a avaliação');
+select is(has_table_privilege('authenticated', 'private.outreach_owned_mailbox_email_evidence', 'select'), false,
+  'browser não consulta prova de origem');
+select is(has_function_privilege('authenticated', 'public.record_google_email_evidence(uuid,uuid,text,text,text,text)', 'execute'), false,
+  'browser não pode forjar prova de origem Gmail');
+insert into private.outreach_owned_mailbox_email_evidence(
+  contact_id, email, mailbox_email, provider_message_id, direction
+) values (
+  'c0000000-0000-4000-8000-000000000001', 'one@one.example',
+  'sender@nikufra.ai', 'gmail-evidence-test', 'received'
+);
+select is(private.outreach_has_owned_mailbox_email(
+  'c0000000-0000-4000-8000-000000000001', 'one@one.example'), true,
+  'mensagem recebida dispensa avaliação do endereço exato');
+select is(private.outreach_has_owned_mailbox_email(
+  'c0000000-0000-4000-8000-000000000001', 'changed@one.example'), false,
+  'alterar endereço não transfere a dispensa');
+select is((private.outreach_recipient_eligibility(
+  'f2000000-0000-4000-8000-000000000001',
+  'e0000000-0000-4000-8000-000000000001') -> 'reasons') ? 'email_not_verified', false,
+  'gate final dispensa apenas a avaliação com origem comprovada');
+select is((private.outreach_recipient_eligibility(
+  'f2000000-0000-4000-8000-000000000001',
+  'e0000000-0000-4000-8000-000000000001') -> 'reasons') ? 'outbound_disabled', true,
+  'gate final mantém o bloqueio global de envio');
+delete from private.outreach_owned_mailbox_email_evidence
+where provider_message_id = 'gmail-evidence-test';
+select is((private.outreach_recipient_eligibility(
+  'f2000000-0000-4000-8000-000000000001',
+  'e0000000-0000-4000-8000-000000000001') -> 'reasons') ? 'email_not_verified', true,
+  'gate volta a exigir avaliação sem prova de origem');
 
 insert into public.outreach_threads(
   id, campaign_id, recipient_id, contact_id, company_id, mailbox_id,

@@ -391,7 +391,7 @@ export async function contactEligibility(contactIds: string[], client?: import("
     outreach_legitimate_interest_purpose: string | null; outreach_lia_reference: string | null;
     outreach_legitimate_interest_expires_at: Date | null;
     empresa_id: string; contact_name: string; company_name: string; cargo: string | null; telefone: string | null; linkedin_url: string | null;
-    vertical: string; pais: string; cidade: string | null; website: string | null; verification_status: string | null; suppressed: boolean;
+    vertical: string; pais: string; cidade: string | null; website: string | null; verification_status: string | null; owned_mailbox_history: boolean; suppressed: boolean;
   }>(`
     select c.id,c.email::text,c.optout,c.outreach_legal_basis,c.outreach_consent_at,
            c.outreach_legal_basis_recorded_at,c.outreach_legal_basis_recorded_by,c.outreach_consent_source,
@@ -399,6 +399,7 @@ export async function contactEligibility(contactIds: string[], client?: import("
            c.outreach_legitimate_interest_expires_at,
            c.empresa_id,c.nome contact_name,e.nome company_name,c.cargo,c.telefone,c.linkedin_url,e.vertical::text,e.pais,e.cidade,e.website,
            verification.status::text verification_status,
+           private.outreach_has_owned_mailbox_email(c.id, c.email::text) owned_mailbox_history,
            private.outreach_is_suppressed(c.email::text,c.empresa_id) suppressed
     from public.contactos c join public.empresas e on e.id=c.empresa_id
     left join lateral (
@@ -422,12 +423,12 @@ export async function contactEligibility(contactIds: string[], client?: import("
         || !row.outreach_legitimate_interest_expires_at
         || row.outreach_legitimate_interest_expires_at.getTime() <= Date.now()
       ))) reasons.push("lawful_basis_missing");
-    if (row.verification_status !== "valid") reasons.push(row.verification_status ? `verification_${row.verification_status}` : "verification_missing");
+    if (!row.owned_mailbox_history && row.verification_status !== "valid") reasons.push(row.verification_status ? `verification_${row.verification_status}` : "verification_missing");
     if (row.suppressed) reasons.push("suppressed");
     const firstName = row.contact_name.trim().split(/\s+/)[0] ?? row.contact_name;
     return {
       contactId: row.id, email: row.email, companyId: row.empresa_id, eligible: reasons.length === 0, reasons,
-      verification: row.verification_status ?? "unknown",
+      verification: row.owned_mailbox_history ? "owned_mailbox_history" : row.verification_status ?? "unknown",
       contactName: row.contact_name, companyName: row.company_name,
       variables: {
         nome: row.contact_name, name: row.contact_name, primeiro_nome: firstName, first_name: firstName,
@@ -704,8 +705,9 @@ export async function recordDnsCheck(actor: Actor, mailboxId: string, selector =
 
 export async function verifyContacts(actor: Actor, raw: unknown) {
   const input = z.object({ contactIds: z.array(uuid).min(1).max(100) }).parse(raw);
-  const contacts = await pool.query<{ id: string; email: string | null; prior_valid: boolean }>(`
+  const contacts = await pool.query<{ id: string; email: string | null; prior_valid: boolean; owned_mailbox_history: boolean }>(`
     select c.id,c.email::text,
+      private.outreach_has_owned_mailbox_email(c.id,c.email::text) owned_mailbox_history,
       coalesce(latest.status='valid' and (latest.expires_at is null or latest.expires_at>now()),false) prior_valid
     from public.contactos c
     left join lateral (
@@ -720,6 +722,10 @@ export async function verifyContacts(actor: Actor, raw: unknown) {
       items.push({ contactId: contact.id, email: null, status: "invalid", reason: "Sem email." });
       continue;
     }
+    if (contact.owned_mailbox_history) {
+      items.push({ contactId: contact.id, email: contact.email, status: "exempt", reason: "Dispensado: mensagem enviada ou recebida numa conta ligada ao CRM." });
+      continue;
+    }
     const verification = await verifyEmailAddress(contact.email);
     if (verification.status === "unknown" && contact.prior_valid) {
       items.push({ contactId: contact.id, email: contact.email, status: "valid", reason: "A análise DNS não confirma a caixa; mantém-se a prova anterior ainda válida.", retainedEvidence: true });
@@ -730,10 +736,10 @@ export async function verifyContacts(actor: Actor, raw: unknown) {
   }
   await transaction(async (client) => {
     for (const item of items) {
-      if (!item.email || item.retainedEvidence) continue;
+      if (!item.email || item.retainedEvidence || item.status === "exempt") continue;
       await client.query(`insert into public.outreach_email_verifications(contact_id,email,status,provider,reasons,verified_at,expires_at) values($1,$2,$3,'dns_syntax',$4,now(),now()+interval '30 days')`, [item.contactId, item.email, item.status, [item.reason]]);
     }
-    await audit(actor.id, "contacts.verified", "contact", null, { count: items.length }, client);
+    await audit(actor.id, "contacts.verified", "contact", null, { count: items.filter((item) => item.status !== "exempt").length, exemptCount: items.filter((item) => item.status === "exempt").length }, client);
   });
   return { items };
 }

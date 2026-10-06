@@ -325,7 +325,17 @@ Deno.serve(async (request) => {
           if (!ensured) continue;
           if (ensured.created) batchContactsCreated += 1;
           const { error: activityError } = await admin.from("atividades").upsert({ oportunidade_id: ensured.opportunity.id, empresa_id: ensured.contact.empresa_id, contacto_id: ensured.contact.id, user_id: tokenRow.user_id, tipo: sent ? "email_enviado" : "email_recebido", direcao: sent ? "enviado" : "recebido", data: date, descricao: subject.slice(0, 500), message_id: message.id, source_mailbox_email: ownEmail, thread_id: message.threadId, assunto: subject.slice(0, 500), snippet: String(message.snippet ?? "").slice(0, 240), reuniao_inferida: inferredMeeting }, { onConflict: "source_mailbox_email,message_id,contacto_id", ignoreDuplicates: true });
-          if (!activityError) batchSynced += 1;
+          if (activityError) throw activityError;
+          const { error: evidenceError } = await admin.rpc("record_google_email_evidence", {
+            p_user_id: tokenRow.user_id,
+            p_contact_id: ensured.contact.id,
+            p_email: externalEmail,
+            p_mailbox_email: ownEmail,
+            p_provider_message_id: message.id,
+            p_direction: sent ? "sent" : "received",
+          });
+          if (evidenceError) throw new Error(`Falha ao registar origem Gmail: ${evidenceError.message}`);
+          batchSynced += 1;
         }
       }
 
