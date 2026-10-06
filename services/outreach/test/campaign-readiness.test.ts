@@ -7,7 +7,7 @@ vi.mock("../src/db.js", () => ({
   transaction: vi.fn(async (callback: (client: { query: typeof mocks.query }) => unknown) => callback({ query: mocks.query })),
 }));
 
-import { campaignAction, updateCampaign } from "../src/mutations.js";
+import { campaignAction, createCampaign, updateCampaign } from "../src/mutations.js";
 import { campaignReadiness, getCampaign } from "../src/repository.js";
 import type { Actor } from "../src/types.js";
 
@@ -61,6 +61,33 @@ describe("campaign readiness authority", () => {
     expect(sql).toContain("dns.mx_status='pass'");
     expect(sql).toContain("dns.checked_at > now()-interval '24 hours'");
     expect(sql).toContain("order by dns.checked_at desc,dns.id desc");
+  });
+
+  it("creates a campaign with its selected audience and materialized recipient atomically", async () => {
+    const audienceId = "00000000-0000-4000-8000-000000000300";
+    const contactId = "00000000-0000-4000-8000-000000000301";
+    const companyId = "00000000-0000-4000-8000-000000000302";
+    mocks.query.mockImplementation(async (sqlValue: unknown) => {
+      const sql = String(sqlValue);
+      if (sql.includes("insert into public.outreach_campaigns")) return { rows: [{ id: campaignId }] };
+      if (sql.includes("insert into public.outreach_campaign_steps")) return { rows: [{ id: "step-1" }] };
+      if (sql.includes("select contact_id from public.outreach_audience_members")) return { rows: [{ contact_id: contactId }] };
+      if (sql.includes("from public.contactos c join public.empresas")) return { rows: [{
+        id: contactId, email: "lead@example.com", optout: false,
+        outreach_legal_basis: "contract", outreach_legal_basis_recorded_at: new Date("2026-10-01T00:00:00Z"),
+        outreach_legal_basis_recorded_by: admin.id, outreach_legal_basis_evidence: "contract-123",
+        empresa_id: companyId, contact_name: "Lead", company_name: "Example", cargo: null, telefone: null,
+        linkedin_url: null, vertical: "industrial", pais: "PT", cidade: null, website: null,
+        verification_status: "valid", suppressed: false,
+      }] };
+      if (sql.includes("select id from public.outreach_campaigns where id=$1 and status")) return { rows: [{ id: campaignId }] };
+      if (sql.includes("select id from public.outreach_audience_members")) return { rows: [{ id: "member-1" }] };
+      return { rows: [], rowCount: 1 };
+    });
+    await expect(createCampaign(admin, { name: "Pilot", audienceId, steps: [{ variants: [{ subject: "Olá", body: "Mensagem" }] }] })).resolves.toMatchObject({ id: campaignId });
+    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes("insert into public.outreach_campaign_audiences"))).toBe(true);
+    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes("insert into public.outreach_recipients"))).toBe(true);
+    expect(mocks.query.mock.calls.some(([sql, params]) => String(sql).includes("campaign.created") && String(params?.[2]).includes(audienceId))).toBe(true);
   });
 
   it("makes campaign detail return backend blockers even when total recipients and inactive steps exist", async () => {
@@ -178,6 +205,38 @@ describe("campaign readiness authority", () => {
     expect(statements.some((sql) => sql.includes("insert into public.outreach_campaign_mailboxes"))).toBe(false);
   });
 
+  it("replaces draft sequence and variants together while retaining campaign settings", async () => {
+    let stepNumber = 0;
+    mocks.query.mockImplementation(async (sqlValue: unknown) => {
+      const sql = String(sqlValue);
+      if (sql.includes("from public.outreach_campaigns") && sql.includes("for update")) return { rows: [{ status: "draft" }] };
+      if (sql.includes("count(*)::text count from public.outreach_jobs")) return { rows: [{ count: "0" }] };
+      if (sql.includes("insert into public.outreach_campaign_steps")) return { rows: [{ id: `step-${++stepNumber}` }] };
+      if (sql.includes("select mailbox_id from public.outreach_campaign_mailboxes")) return { rows: [] };
+      return { rows: [], rowCount: 1 };
+    });
+
+    await updateCampaign(admin, campaignId, { steps: [
+      { kind: "email", delayMinutes: 0, replyToPrevious: false, variants: [{ name: "A", weight: 100, subject: "Primeiro", body: "Olá" }] },
+      { kind: "email", delayMinutes: 2_880, replyToPrevious: true, variants: [{ name: "A", weight: 100, subject: "Segundo", body: "Seguimento" }] },
+    ] });
+
+    const statements = mocks.query.mock.calls.map(([sql]) => String(sql));
+    expect(statements.some((sql) => sql.includes("update public.outreach_campaigns set"))).toBe(false);
+    expect(statements.some((sql) => sql.includes("delete from public.outreach_campaign_steps"))).toBe(true);
+    expect(statements.filter((sql) => sql.includes("insert into public.outreach_campaign_steps"))).toHaveLength(2);
+    expect(statements.filter((sql) => sql.includes("insert into public.outreach_campaign_variants"))).toHaveLength(2);
+    expect(statements.some((sql) => sql.includes("campaign.steps_updated"))).toBe(true);
+  });
+
+  it("refuses sequence replacement after the first launch", async () => {
+    mocks.query.mockResolvedValueOnce({ rows: [{ status: "paused" }] });
+    await expect(updateCampaign(admin, campaignId, { steps: [
+      { kind: "email", variants: [{ subject: "Assunto", body: "Corpo" }] },
+    ] })).rejects.toMatchObject({ status: 409, code: "campaign_steps_locked" });
+    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes("delete from public.outreach_campaign_steps"))).toBe(false);
+  });
+
   it("does not reset campaign configuration when only adding an audience", async () => {
     const audienceId = "00000000-0000-4000-8000-000000000300";
     const contactId = "00000000-0000-4000-8000-000000000301";
@@ -187,6 +246,7 @@ describe("campaign readiness authority", () => {
       if (sql.includes("select contact_id from public.outreach_audience_members")) {
         return { rows: [{ contact_id: contactId }], rowCount: 1 };
       }
+      if (sql.includes("from public.outreach_campaigns") && sql.includes("for update") && sql.includes("status::text status")) return { rows: [{ status: "draft" }] };
       if (sql.includes("from public.contactos c join public.empresas")) {
         return {
           rows: [{
@@ -195,6 +255,9 @@ describe("campaign readiness authority", () => {
             optout: false,
             outreach_legal_basis: "contract",
             outreach_consent_at: null,
+            outreach_legal_basis_recorded_at: new Date("2026-10-01T00:00:00Z"),
+            outreach_legal_basis_recorded_by: admin.id,
+            outreach_legal_basis_evidence: "Existing contract",
             empresa_id: companyId,
             contact_name: "Ready Contact",
             company_name: "Ready Company",
@@ -226,5 +289,6 @@ describe("campaign readiness authority", () => {
     const statements = mocks.query.mock.calls.map(([sql]) => String(sql));
     expect(statements.some((sql) => sql.includes("update public.outreach_campaigns set"))).toBe(false);
     expect(statements.some((sql) => sql.includes("insert into public.outreach_recipients"))).toBe(true);
+    expect(statements.some((sql) => sql.includes("insert into public.outreach_campaign_audiences"))).toBe(true);
   });
 });

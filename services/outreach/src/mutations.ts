@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Actor, Provider } from "./types.js";
 import { pool, transaction } from "./db.js";
+import { config } from "./config.js";
 import { HttpError } from "./errors.js";
 import { assertMailboxReconciliationClear, audit, campaignReadiness, providerSession } from "./repository.js";
 import { inspectDomain } from "./dns.js";
@@ -9,6 +10,33 @@ import { verifyEmailAddress } from "./verification.js";
 import { revokeProviderAuthorization } from "./providers.js";
 
 const uuid = z.uuid();
+const campaignStepSchema = z.object({
+  kind: z.enum(["email", "wait"]).default("email"),
+  delayMinutes: z.number().int().min(0).max(525_600).default(0),
+  replyToPrevious: z.boolean().default(true),
+  active: z.boolean().default(true),
+  variants: z.array(z.object({
+    name: z.string().trim().min(1).max(40).default("A"),
+    weight: z.number().int().min(0).max(10_000).default(100),
+    subject: z.string().trim().min(1).max(998),
+    body: z.string().trim().min(1).max(200_000),
+    active: z.boolean().default(true),
+  })).max(10).default([]),
+}).superRefine((step, context) => {
+  if (step.kind === "email" && !step.variants.length) context.addIssue({ code: "custom", path: ["variants"], message: "Um passo de email precisa de pelo menos uma variante." });
+  if (step.kind === "wait" && step.variants.length) context.addIssue({ code: "custom", path: ["variants"], message: "Um passo de espera não pode ter variantes." });
+  if (new Set(step.variants.map((variant) => variant.name)).size !== step.variants.length) context.addIssue({ code: "custom", path: ["variants"], message: "Os nomes das variantes têm de ser diferentes." });
+});
+type CampaignStepInput = z.infer<typeof campaignStepSchema>;
+
+async function insertCampaignSteps(client: import("pg").PoolClient, campaignId: string, steps: CampaignStepInput[]) {
+  for (const [index, step] of steps.entries()) {
+    const inserted = await client.query<{ id: string }>(`insert into public.outreach_campaign_steps(campaign_id,position,kind,delay_minutes,reply_to_previous,ativo) values($1,$2,$3,$4,$5,$6) returning id`, [campaignId, index + 1, step.kind, step.delayMinutes, step.replyToPrevious, step.active]);
+    for (const variant of step.variants) {
+      await client.query(`insert into public.outreach_campaign_variants(step_id,nome,weight,subject_template,body_template,ativo) values($1,$2,$3,$4,$5,$6)`, [inserted.rows[0]!.id, variant.name, variant.weight, variant.subject, variant.body, variant.active]);
+    }
+  }
+}
 
 export const campaignInputSchema = z.object({
   name: z.string().trim().min(1).max(180),
@@ -27,20 +55,8 @@ export const campaignInputSchema = z.object({
     (ids) => new Set(ids).size === ids.length,
     "Uma mailbox só pode ser selecionada uma vez.",
   ).default([]),
-  steps: z.array(z.object({
-    kind: z.enum(["email", "wait"]).default("email"),
-    delayMinutes: z.number().int().min(0).max(525_600).default(0),
-    replyToPrevious: z.boolean().default(true),
-    variants: z.array(z.object({
-      name: z.string().trim().min(1).max(40).default("A"),
-      weight: z.number().int().min(0).max(10_000).default(100),
-      subject: z.string().min(1).max(998),
-      body: z.string().min(1).max(200_000),
-    })).default([]),
-  }).superRefine((step, context) => {
-    if (step.kind === "email" && !step.variants.length) context.addIssue({ code: "custom", path: ["variants"], message: "Um passo de email precisa de pelo menos uma variante." });
-    if (step.kind === "wait" && step.variants.length) context.addIssue({ code: "custom", path: ["variants"], message: "Um passo de espera não pode ter variantes." });
-  })).default([]),
+  audienceId: uuid.optional(),
+  steps: z.array(campaignStepSchema).max(50).default([]),
 }).superRefine((value, context) => {
   if (value.sendWindowStart >= value.sendWindowEnd) context.addIssue({ code: "custom", path: ["sendWindowEnd"], message: "A janela de envio tem de terminar depois de começar." });
   if (value.startsAt && value.endsAt && value.endsAt <= value.startsAt) context.addIssue({ code: "custom", path: ["endsAt"], message: "A campanha tem de terminar depois de começar." });
@@ -80,14 +96,14 @@ export async function createCampaign(actor: Actor, raw: unknown) {
       [input.name, input.description, actor.id, input.stopCompanyOnReply, input.timezone, input.sendDays, input.sendWindowStart, input.sendWindowEnd, input.startsAt, input.endsAt, input.dailyLimit, input.gapMinutes, input.jitterMinutes],
     );
     const campaignId = campaign.rows[0]!.id;
-    for (const [index, step] of input.steps.entries()) {
-      const inserted = await client.query<{ id: string }>(`insert into public.outreach_campaign_steps(campaign_id,position,kind,delay_minutes,reply_to_previous) values($1,$2,$3,$4,$5) returning id`, [campaignId, index + 1, step.kind, step.delayMinutes, step.replyToPrevious]);
-      for (const variant of step.variants) {
-        await client.query(`insert into public.outreach_campaign_variants(step_id,nome,weight,subject_template,body_template) values($1,$2,$3,$4,$5)`, [inserted.rows[0]!.id, variant.name, variant.weight, variant.subject, variant.body]);
-      }
-    }
+    await insertCampaignSteps(client, campaignId, input.steps);
     await replaceCampaignMailboxes(client, campaignId, input.mailboxIds, actor.id);
-    await client.query(`insert into public.outreach_audit_log(actor_id,action,entity_type,entity_id,details) values($1,'campaign.created','campaign',$2,$3::jsonb)`, [actor.id, campaignId, JSON.stringify({ name: input.name, steps: input.steps.length, mailboxIds: input.mailboxIds })]);
+    if (input.audienceId) {
+      const members = await client.query<{ contact_id: string }>(`select contact_id from public.outreach_audience_members where audience_id=$1`, [input.audienceId]);
+      if (!members.rows.length) throw new HttpError(409, "audience_empty", "A lista selecionada não existe ou ainda não tem contactos.");
+      await materializeRecipients(client, input.audienceId, campaignId, await contactEligibility(members.rows.map((row) => row.contact_id), client));
+    }
+    await client.query(`insert into public.outreach_audit_log(actor_id,action,entity_type,entity_id,details) values($1,'campaign.created','campaign',$2,$3::jsonb)`, [actor.id, campaignId, JSON.stringify({ name: input.name, steps: input.steps.length, mailboxIds: input.mailboxIds, audienceId: input.audienceId ?? null })]);
     return { id: campaignId, mailboxIds: input.mailboxIds };
   });
 }
@@ -113,6 +129,7 @@ const campaignPatchSchema = z.object({
     "Uma mailbox só pode ser selecionada uma vez.",
   ).optional(),
   addAudienceId: uuid.optional(),
+  steps: z.array(campaignStepSchema).min(1).max(50).optional(),
 }).strict().superRefine((value, context) => {
   if (value.sendWindowStart && value.sendWindowEnd && value.sendWindowStart >= value.sendWindowEnd) {
     context.addIssue({ code: "custom", path: ["sendWindowEnd"], message: "A janela de envio tem de terminar depois de começar." });
@@ -138,7 +155,7 @@ export async function updateCampaign(actor: Actor, campaignId: string, raw: unkn
     audienceEligibility = await contactEligibility(members.rows.map((row) => row.contact_id));
   }
   return transaction(async (client) => {
-    if (input.mailboxIds !== undefined) {
+    if (input.mailboxIds !== undefined || input.steps !== undefined || input.addAudienceId !== undefined) {
       const campaign = await client.query<{ status: string }>(`
         select status::text status
         from public.outreach_campaigns
@@ -150,8 +167,8 @@ export async function updateCampaign(actor: Actor, campaignId: string, raw: unkn
       if (campaign.rows[0].status !== "draft") {
         throw new HttpError(
           409,
-          "campaign_mailboxes_locked",
-          "As mailboxes da campanha só podem ser alteradas antes do primeiro lançamento.",
+          input.steps !== undefined ? "campaign_steps_locked" : input.addAudienceId !== undefined ? "campaign_audiences_locked" : "campaign_mailboxes_locked",
+          input.steps !== undefined ? "A sequência só pode ser alterada antes do primeiro lançamento." : input.addAudienceId !== undefined ? "A lista de destinatários só pode ser associada antes do primeiro lançamento." : "As mailboxes da campanha só podem ser alteradas antes do primeiro lançamento.",
         );
       }
     }
@@ -170,8 +187,25 @@ export async function updateCampaign(actor: Actor, campaignId: string, raw: unkn
         JSON.stringify({ mailboxIds: input.mailboxIds, mailboxCount: input.mailboxIds.length }),
       ]);
     }
+    if (input.steps !== undefined) {
+      const jobs = await client.query<{ count: string }>(`select count(*)::text count from public.outreach_jobs where campaign_id=$1`, [campaignId]);
+      if (Number(jobs.rows[0]?.count ?? 0)) throw new HttpError(409, "campaign_steps_locked", "A sequência já tem jobs associados e não pode ser substituída.");
+      await client.query(`delete from public.outreach_campaign_steps where campaign_id=$1`, [campaignId]);
+      await insertCampaignSteps(client, campaignId, input.steps);
+      const recipients = await client.query<{ id: string; contact_id: string }>(`select id,contact_id from public.outreach_recipients where campaign_id=$1 and contact_id is not null`, [campaignId]);
+      const currentContacts = await contactEligibility(recipients.rows.map((row) => row.contact_id), client);
+      const byContact = new Map(currentContacts.map((item) => [item.contactId, item]));
+      for (const recipient of recipients.rows) {
+        const current = byContact.get(recipient.contact_id);
+        if (!current) continue;
+        await client.query(`update public.outreach_recipients set variable_snapshot=$2::jsonb,status=$3,eligibility_reasons=$4 where id=$1`, [
+          recipient.id, JSON.stringify(current.variables), current.eligible ? "eligible" : "ineligible", current.reasons,
+        ]);
+      }
+      await client.query(`insert into public.outreach_audit_log(actor_id,action,entity_type,entity_id,details) values($1,'campaign.steps_updated','campaign',$2,$3::jsonb)`, [actor.id, campaignId, JSON.stringify({ count: input.steps.length })]);
+    }
     if (input.addAudienceId && audienceEligibility) await materializeRecipients(client, input.addAudienceId, campaignId, audienceEligibility);
-    await client.query(`insert into public.outreach_audit_log(actor_id,action,entity_type,entity_id,details) values($1,'campaign.updated','campaign',$2,$3::jsonb)`, [actor.id, campaignId, JSON.stringify({ ...Object.fromEntries(entries), addAudienceId: input.addAudienceId ?? null })]);
+    await client.query(`insert into public.outreach_audit_log(actor_id,action,entity_type,entity_id,details) values($1,'campaign.updated','campaign',$2,$3::jsonb)`, [actor.id, campaignId, JSON.stringify({ ...Object.fromEntries(entries), addAudienceId: input.addAudienceId ?? null, stepsUpdated: input.steps !== undefined })]);
     const selected = await client.query<{ mailbox_id: string }>(`
       select mailbox_id from public.outreach_campaign_mailboxes
       where campaign_id=$1 order by mailbox_id`, [campaignId]);
@@ -204,6 +238,85 @@ export async function campaignAction(actor: Actor, campaignId: string, action: "
     }
     await client.query(`insert into public.outreach_audit_log(actor_id,action,entity_type,entity_id,details) values($1,$2,'campaign',$3,'{}')`, [actor.id, `campaign.${action}`, campaignId]);
     return { id: campaignId, status: action === "pause" ? "paused" : "running" };
+  }, "serializable");
+}
+
+const messageTestSchema = z.object({
+  stepId: uuid,
+  variantId: uuid,
+  contactId: uuid,
+  mailboxId: uuid,
+}).strict();
+
+export async function queueCampaignMessageTest(actor: Actor, sourceCampaignId: string, raw: unknown, idempotencyKey: string) {
+  const input = messageTestSchema.parse(raw);
+  const requestHash = createHash("sha256").update(JSON.stringify({ actorId: actor.id, sourceCampaignId, ...input })).digest("hex");
+  if (config.shadowMode || !config.outboundEnvEnabled) {
+    throw new HttpError(503, "outbound_disabled", "O envio de teste está desligado na operação Outreach.");
+  }
+  const [candidate] = await contactEligibility([input.contactId]);
+  if (!candidate?.eligible) {
+    throw new HttpError(409, "test_contact_ineligible", "O contacto de teste não está elegível para envio.", { reasons: candidate?.reasons ?? ["contact_not_found"] });
+  }
+  return transaction(async (client) => {
+    const existing = await client.query<{ id: string; test_request_hash: string }>(`
+      select id,test_request_hash from public.outreach_campaigns where test_idempotency_key=$1`, [idempotencyKey]);
+    if (existing.rows[0]) {
+      if (existing.rows[0].test_request_hash !== requestHash) throw new HttpError(409, "idempotency_key_reused", "Esta chave de envio de teste já foi usada para outro pedido.");
+      return { id: existing.rows[0].id, sourceCampaignId, queued: true, duplicate: true };
+    }
+    const source = await client.query<{
+      name: string; send_days: number[]; send_window_start: string; send_window_end: string;
+      timezone: string; subject: string; body: string;
+    }>(`
+      select c.nome name,c.send_days,c.send_window_start::text,c.send_window_end::text,c.timezone,
+             v.subject_template subject,v.body_template body
+      from public.outreach_campaigns c
+      join public.outreach_campaign_steps s on s.campaign_id=c.id and s.id=$2 and s.ativo and s.kind='email'
+      join public.outreach_campaign_variants v on v.step_id=s.id and v.id=$3 and v.ativo
+      join public.outreach_campaign_mailboxes selection on selection.campaign_id=c.id and selection.mailbox_id=$4
+      where c.id=$1 and c.test_source_campaign_id is null
+      for share of c,s,v`, [sourceCampaignId, input.stepId, input.variantId, input.mailboxId]);
+    const template = source.rows[0];
+    if (!template) throw new HttpError(409, "test_message_unavailable", "Seleciona uma mensagem ativa e uma mailbox desta campanha.");
+    const operational = await client.query<{ send_enabled: boolean; mode: string }>(`select send_enabled,mode::text mode from public.outreach_system_state where id`, []);
+    if (!operational.rows[0]?.send_enabled || operational.rows[0].mode === "disabled") {
+      throw new HttpError(503, "outbound_disabled", "O envio está desligado nas definições Outreach.");
+    }
+    const inserted = await client.query<{ id: string }>(`
+      insert into public.outreach_campaigns(nome,descricao,created_by,timezone,send_days,send_window_start,send_window_end,daily_limit,gap_minutes,jitter_minutes,test_source_campaign_id,test_idempotency_key,test_request_hash)
+      values($1,$2,$3,$4,$5,$6,$7,1,0,0,$8,$9,$10)
+      on conflict(test_idempotency_key) do nothing returning id`, [
+      `Teste de entrega · ${template.name}`.slice(0, 180),
+      "Envio individual de teste a partir de uma mensagem de campanha.",
+      actor.id, template.timezone, template.send_days, template.send_window_start, template.send_window_end,
+      sourceCampaignId, idempotencyKey, requestHash,
+    ]);
+    if (!inserted.rows[0]) {
+      const duplicate = await client.query<{ id: string; test_request_hash: string }>(`select id,test_request_hash from public.outreach_campaigns where test_idempotency_key=$1`, [idempotencyKey]);
+      if (!duplicate.rows[0] || duplicate.rows[0].test_request_hash !== requestHash) throw new HttpError(409, "idempotency_key_reused", "Esta chave de envio de teste já foi usada para outro pedido.");
+      return { id: duplicate.rows[0].id, sourceCampaignId, queued: true, duplicate: true };
+    }
+    const testCampaignId = inserted.rows[0].id;
+    await insertCampaignSteps(client, testCampaignId, [{ kind: "email", delayMinutes: 0, replyToPrevious: false, active: true, variants: [{ name: "A", weight: 100, subject: template.subject, body: template.body, active: true }] }]);
+    await replaceCampaignMailboxes(client, testCampaignId, [input.mailboxId], actor.id);
+    const audience = await client.query<{ id: string }>(`insert into public.outreach_audiences(nome,descricao,created_by) values($1,$2,$3) returning id`, [`Teste · ${candidate.contactName}`.slice(0, 180), "Destinatário único de teste de mensagem.", actor.id]);
+    await client.query(`insert into public.outreach_audience_members(audience_id,contact_id,eligibility_status,eligibility_reasons,assessed_at,added_by) values($1,$2,'eligible','{}',now(),$3)`, [audience.rows[0]!.id, input.contactId, actor.id]);
+    await materializeRecipients(client, audience.rows[0]!.id, testCampaignId, [candidate]);
+    const readiness = await campaignReadiness(testCampaignId, client);
+    if (!readiness.ready) throw new HttpError(409, "test_not_ready", "O teste precisa de uma mailbox pronta e um destinatário elegível.", readiness);
+    await client.query(`update public.outreach_campaigns set status='running',launched_at=now() where id=$1`, [testCampaignId]);
+    const recipient = await client.query<{ id: string }>(`select id from public.outreach_recipients where campaign_id=$1 and contact_id=$2`, [testCampaignId, input.contactId]);
+    const decision = await client.query<{ decision: { eligible?: boolean; reasons?: string[] } }>(`select private.outreach_recipient_eligibility($1,$2,now()) decision`, [recipient.rows[0]?.id, input.mailboxId]);
+    const temporaryReasons = new Set(["outside_send_window", "daily_quota_reached", "mailbox_gap_not_elapsed"]);
+    const blockers = (decision.rows[0]?.decision?.reasons ?? ["eligibility_unavailable"]).filter((reason) => !temporaryReasons.has(reason));
+    if (blockers.length) throw new HttpError(409, "test_contact_ineligible", "O teste foi bloqueado pelos controlos de envio.", { reasons: blockers });
+    await materializeInitialJobs(client, testCampaignId);
+    await audit(actor.id, "campaign.message_test_queued", "campaign", sourceCampaignId, {
+      testCampaignId, stepId: input.stepId, variantId: input.variantId,
+      contactId: input.contactId, mailboxId: input.mailboxId,
+    }, client);
+    return { id: testCampaignId, sourceCampaignId, queued: true, duplicate: false };
   }, "serializable");
 }
 
@@ -269,14 +382,22 @@ export interface EligibilityResult {
   variables: Record<string, string | null>;
 }
 
-export async function contactEligibility(contactIds: string[]): Promise<EligibilityResult[]> {
+export async function contactEligibility(contactIds: string[], client?: import("pg").PoolClient): Promise<EligibilityResult[]> {
   if (!contactIds.length) return [];
-  const result = await pool.query<{
+  const result = await (client ?? pool).query<{
     id: string; email: string | null; optout: boolean; outreach_legal_basis: string | null; outreach_consent_at: Date | null;
+    outreach_legal_basis_recorded_at: Date | null; outreach_legal_basis_recorded_by: string | null;
+    outreach_consent_source: string | null; outreach_legal_basis_evidence: string | null;
+    outreach_legitimate_interest_purpose: string | null; outreach_lia_reference: string | null;
+    outreach_legitimate_interest_expires_at: Date | null;
     empresa_id: string; contact_name: string; company_name: string; cargo: string | null; telefone: string | null; linkedin_url: string | null;
     vertical: string; pais: string; cidade: string | null; website: string | null; verification_status: string | null; suppressed: boolean;
   }>(`
-    select c.id,c.email::text,c.optout,c.outreach_legal_basis,c.outreach_consent_at,c.empresa_id,c.nome contact_name,e.nome company_name,c.cargo,c.telefone,c.linkedin_url,e.vertical::text,e.pais,e.cidade,e.website,
+    select c.id,c.email::text,c.optout,c.outreach_legal_basis,c.outreach_consent_at,
+           c.outreach_legal_basis_recorded_at,c.outreach_legal_basis_recorded_by,c.outreach_consent_source,
+           c.outreach_legal_basis_evidence,c.outreach_legitimate_interest_purpose,c.outreach_lia_reference,
+           c.outreach_legitimate_interest_expires_at,
+           c.empresa_id,c.nome contact_name,e.nome company_name,c.cargo,c.telefone,c.linkedin_url,e.vertical::text,e.pais,e.cidade,e.website,
            verification.status::text verification_status,
            private.outreach_is_suppressed(c.email::text,c.empresa_id) suppressed
     from public.contactos c join public.empresas e on e.id=c.empresa_id
@@ -292,8 +413,15 @@ export async function contactEligibility(contactIds: string[]): Promise<Eligibil
     const reasons: string[] = [];
     if (!row.email) reasons.push("missing_email");
     if (row.optout) reasons.push("contact_optout");
-    if (!row.outreach_legal_basis || row.outreach_legal_basis === "not_applicable") reasons.push("lawful_basis_missing");
-    if (row.outreach_legal_basis === "consent" && !row.outreach_consent_at) reasons.push("consent_evidence_missing");
+    if (!row.outreach_legal_basis || row.outreach_legal_basis === "not_applicable"
+      || !row.outreach_legal_basis_recorded_at || !row.outreach_legal_basis_recorded_by
+      || (row.outreach_legal_basis === "consent" && (!row.outreach_consent_at || !row.outreach_consent_source?.trim()))
+      || (row.outreach_legal_basis === "contract" && !row.outreach_legal_basis_evidence?.trim())
+      || (row.outreach_legal_basis === "legitimate_interest" && (
+        !row.outreach_legitimate_interest_purpose?.trim() || !row.outreach_lia_reference?.trim()
+        || !row.outreach_legitimate_interest_expires_at
+        || row.outreach_legitimate_interest_expires_at.getTime() <= Date.now()
+      ))) reasons.push("lawful_basis_missing");
     if (row.verification_status !== "valid") reasons.push(row.verification_status ? `verification_${row.verification_status}` : "verification_missing");
     if (row.suppressed) reasons.push("suppressed");
     const firstName = row.contact_name.trim().split(/\s+/)[0] ?? row.contact_name;
@@ -331,23 +459,13 @@ export async function addAudienceContacts(actor: Actor, audienceId: string, raw:
 }
 
 async function materializeRecipients(client: import("pg").PoolClient, audienceId: string, campaignId: string, eligibility: EligibilityResult[]) {
-  const campaign = await client.query(`select id from public.outreach_campaigns where id=$1 and status in ('draft','paused')`, [campaignId]);
-  if (!campaign.rows[0]) throw new HttpError(409, "campaign_not_editable", "Só é possível adicionar uma audiência a uma campanha em rascunho ou pausada.");
-  const templates = await client.query<{ subject_template: string; body_template: string }>(`select v.subject_template,v.body_template from public.outreach_campaign_variants v join public.outreach_campaign_steps s on s.id=v.step_id where s.campaign_id=$1`, [campaignId]);
-  const usedVariables = new Set<string>();
-  for (const template of templates.rows) {
-    for (const value of [template.subject_template, template.body_template]) {
-      for (const match of value.matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g)) if (match[1]) usedVariables.add(match[1]);
-    }
-  }
-  // Sender variables are resolved from the mailbox at dispatch time, never
-  // copied into a contact snapshot.
-  for (const senderKey of ["remetente", "sender", "sender_email"]) usedVariables.delete(senderKey);
+  const campaign = await client.query(`select id from public.outreach_campaigns where id=$1 and status='draft' for update`, [campaignId]);
+  if (!campaign.rows[0]) throw new HttpError(409, "campaign_not_editable", "Só é possível adicionar uma audiência a uma campanha em rascunho.");
+  await client.query(`insert into public.outreach_campaign_audiences(campaign_id,audience_id) values($1,$2) on conflict do nothing`, [campaignId, audienceId]);
   for (const item of eligibility) {
     if (!item.companyId) continue;
     const member = await client.query<{ id: string }>(`select id from public.outreach_audience_members where audience_id=$1 and contact_id=$2`, [audienceId, item.contactId]);
-    const snapshot = Object.fromEntries([...usedVariables].map((key) => [key, item.variables[key] ?? null]));
-    await client.query(`insert into public.outreach_recipients(campaign_id,audience_member_id,contact_id,company_id,email_snapshot,variable_snapshot,status,eligibility_reasons) values($1,$2,$3,$4,$5,$6::jsonb,$7,$8) on conflict(campaign_id,contact_id) where contact_id is not null do update set audience_member_id=excluded.audience_member_id,email_snapshot=excluded.email_snapshot,variable_snapshot=excluded.variable_snapshot,status=excluded.status,eligibility_reasons=excluded.eligibility_reasons`, [campaignId, member.rows[0]?.id ?? null, item.contactId, item.companyId, item.email, JSON.stringify(snapshot), item.eligible ? "eligible" : "ineligible", item.reasons]);
+    await client.query(`insert into public.outreach_recipients(campaign_id,audience_member_id,contact_id,company_id,email_snapshot,variable_snapshot,status,eligibility_reasons) values($1,$2,$3,$4,$5,$6::jsonb,$7,$8) on conflict(campaign_id,contact_id) where contact_id is not null do update set audience_member_id=excluded.audience_member_id,email_snapshot=excluded.email_snapshot,variable_snapshot=excluded.variable_snapshot,status=excluded.status,eligibility_reasons=excluded.eligibility_reasons`, [campaignId, member.rows[0]?.id ?? null, item.contactId, item.companyId, item.email, JSON.stringify(item.variables), item.eligible ? "eligible" : "ineligible", item.reasons]);
   }
 }
 

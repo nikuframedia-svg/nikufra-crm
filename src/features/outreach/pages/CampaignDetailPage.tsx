@@ -5,6 +5,8 @@ import { Link } from "@tanstack/react-router";
 import { Button } from "../../../components/ui";
 import { CampaignBadge, formatDateTime, formatNumber, MetricTile, OutreachError, OutreachLoading, OutreachPageHeader, ProgressBar, useOutreachAccess } from "../components";
 import { useCampaign, useCampaignAction, useSetCampaignMailboxes } from "../hooks";
+import { CampaignAudienceSection } from "./CampaignAudienceSection";
+import { CampaignSequenceSection } from "./CampaignSequenceSection";
 
 export function OutreachCampaignDetailPage() {
   const params = useParams({ strict: false }) as { campaignId?: string };
@@ -46,8 +48,9 @@ export function OutreachCampaignDetailPage() {
       <MetricTile label="Respostas" value={formatNumber(data.replyCount)} detail={`${formatNumber(data.positiveCount)} positivas`} icon={<CheckCircle2 size={17} />} />
       <MetricTile label="Lançada" value={data.launchedAt ? "Sim" : "Não"} detail={formatDateTime(data.launchedAt)} icon={<Clock3 size={17} />} />
     </div>
+    <CampaignAudienceSection campaign={data} canManage={access.can("outreach.campaign.manage")} />
     <div className="outreach-detail-grid">
-      <section className="outreach-panel"><header><div><h3>Sequência</h3><p>Conteúdo e intervalos materializados para esta campanha.</p></div><span>{data.sequence?.length ?? 0} passos</span></header><div className="outreach-sequence">{data.sequence?.length ? [...data.sequence].sort((a, b) => a.order - b.order).map((step) => <article key={step.id}><span>{step.order}</span><div>{step.kind === "wait" ? <><strong>Esperar {step.delayDays ? `${step.delayDays} dia${step.delayDays === 1 ? "" : "s"}` : `${step.delayHours}h`}</strong><p>O próximo passo respeita janela, quota e jitter.</p></> : <><strong>{step.variants[0]?.subject || "Email sem assunto"}</strong><p>{step.variants.length} variante{step.variants.length === 1 ? "" : "s"} · pesos totalizam {step.variants.reduce((sum, variant) => sum + variant.weight, 0)}%</p></>}</div></article>) : <p className="outreach-panel-empty">Ainda não existem passos na sequência.</p>}</div></section>
+      <CampaignSequenceSection campaign={data} canManage={access.can("outreach.campaign.manage")} canTest={access.can("outreach.campaign.manage") && access.can("outreach.campaign.launch")} />
       <aside className="outreach-panel"><header><div><h3>Configuração segura</h3><p>Comportamento aplicado pelo worker.</p></div></header><dl className="outreach-settings-list"><div><dt>Parar ao responder</dt><dd>{data.settings?.stopOnReply ? "Ativo" : "Inativo"}</dd></div><div><dt>Parar empresa ao responder</dt><dd>{data.settings?.stopCompanyOnReply ? "Ativo" : "Inativo"}</dd></div><div><dt>One-click unsubscribe</dt><dd>{data.settings?.includeUnsubscribe ? "Ativo" : "Inativo"}</dd></div><div><dt>Open tracking</dt><dd>{data.settings?.trackOpens ? "Ativo" : "Desligado"}</dd></div><div><dt>Click tracking</dt><dd>{data.settings?.trackClicks ? "Ativo" : "Desligado"}</dd></div></dl><div className="outreach-total-progress"><span><strong>Progresso</strong><b>{Math.round(data.progress || 0)}%</b></span><ProgressBar value={data.progress} label="Progresso total da campanha" /></div></aside>
     </div>
   </div>;

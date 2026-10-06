@@ -60,6 +60,7 @@ export interface SequenceVariant {
   subject: string;
   body: string;
   weight: number;
+  active: boolean;
 }
 
 export interface SequenceStep {
@@ -68,7 +69,33 @@ export interface SequenceStep {
   kind: "email" | "wait";
   delayDays: number;
   delayHours: number;
+  delayMinutes: number;
+  replyToPrevious: boolean;
+  active: boolean;
   variants: SequenceVariant[];
+}
+
+export interface CampaignRecipient {
+  id: string;
+  contactId: string | null;
+  email: string | null;
+  contactName: string | null;
+  companyName: string | null;
+  audienceId: string | null;
+  audienceName: string | null;
+  status: string;
+  reasons: string[];
+}
+
+export interface CampaignMessageTest {
+  id: string;
+  createdAt: string;
+  status: CampaignStatus;
+  recipientEmail: string | null;
+  mailboxEmail: string | null;
+  sentCount: number;
+  jobStatus: string | null;
+  lastError: string | null;
 }
 
 export interface CampaignDetail extends CampaignSummary {

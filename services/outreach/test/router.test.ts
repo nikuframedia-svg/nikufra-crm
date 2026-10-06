@@ -22,6 +22,11 @@ describe("versioned router", () => {
 });
 
 describe("verification evidence API", () => {
+  it("requires launch permission for a real message test", () => {
+    const route = buildRouter().match("POST", "/api/outreach/v1/campaigns/00000000-0000-4000-8000-000000000010/message-tests");
+    expect(route?.route.capability).toBe("outreach.campaign.launch");
+    expect(route?.route.public).toBe(false);
+  });
   it("exposes the attestation workflow only through the admin capability", () => {
     const match = buildRouter().match("POST", "/api/outreach/v1/verifications/evidence");
     expect(match?.route.capability).toBe("outreach.admin");

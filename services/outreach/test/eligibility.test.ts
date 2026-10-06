@@ -15,6 +15,11 @@ describe("audience eligibility pre-analysis", () => {
       optout: false,
       outreach_legal_basis: "legitimate_interest",
       outreach_consent_at: null,
+      outreach_legal_basis_recorded_at: new Date("2026-10-01T00:00:00Z"),
+      outreach_legal_basis_recorded_by: "00000000-0000-4000-8000-000000000009",
+      outreach_legitimate_interest_purpose: "Commercial relationship",
+      outreach_lia_reference: "LIA-2026-01",
+      outreach_legitimate_interest_expires_at: new Date("2099-01-01T00:00:00Z"),
       empresa_id: "00000000-0000-4000-8000-000000000002",
       contact_name: "Restored Lead",
       company_name: "Example",
@@ -42,6 +47,11 @@ describe("audience eligibility pre-analysis", () => {
       optout: false,
       outreach_legal_basis: "legitimate_interest",
       outreach_consent_at: null,
+      outreach_legal_basis_recorded_at: new Date("2026-10-01T00:00:00Z"),
+      outreach_legal_basis_recorded_by: "00000000-0000-4000-8000-000000000009",
+      outreach_legitimate_interest_purpose: "Commercial relationship",
+      outreach_lia_reference: "LIA-2026-01",
+      outreach_legitimate_interest_expires_at: new Date("2099-01-01T00:00:00Z"),
       empresa_id: "00000000-0000-4000-8000-000000000002",
       contact_name: "Invented Lead",
       company_name: "Example",
@@ -58,5 +68,20 @@ describe("audience eligibility pre-analysis", () => {
 
     const [item] = await contactEligibility(["00000000-0000-4000-8000-000000000001"]);
     expect(item).toMatchObject({ eligible: false, reasons: ["verification_unknown"] });
+  });
+
+  it("shows missing lawful-basis evidence before a contact can be selected", async () => {
+    mocks.query.mockResolvedValue({ rows: [{
+      id: "00000000-0000-4000-8000-000000000001", email: "lead@example.com", optout: false,
+      outreach_legal_basis: "legitimate_interest", outreach_legal_basis_recorded_at: null,
+      outreach_legal_basis_recorded_by: null, outreach_lia_reference: null,
+      outreach_legitimate_interest_purpose: null, outreach_legitimate_interest_expires_at: null,
+      empresa_id: "00000000-0000-4000-8000-000000000002", contact_name: "Lead",
+      company_name: "Example", cargo: null, telefone: null, linkedin_url: null,
+      vertical: "industrial", pais: "PT", cidade: null, website: null,
+      verification_status: "valid", suppressed: false,
+    }] });
+    const [item] = await contactEligibility(["00000000-0000-4000-8000-000000000001"]);
+    expect(item).toMatchObject({ eligible: false, reasons: ["lawful_basis_missing"] });
   });
 });

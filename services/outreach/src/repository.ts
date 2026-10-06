@@ -72,8 +72,8 @@ export async function overview(actor: Actor) {
     send_enabled: boolean;
   }>(`
     select
-      (select count(*) from public.outreach_campaigns where status <> 'archived')::text campaigns_total,
-      (select count(*) from public.outreach_campaigns where status = 'running')::text campaigns_running,
+      (select count(*) from public.outreach_campaigns where status <> 'archived' and test_source_campaign_id is null)::text campaigns_total,
+      (select count(*) from public.outreach_campaigns where status = 'running' and test_source_campaign_id is null)::text campaigns_running,
       (select count(*) from public.outreach_messages where direction = 'outbound' and occurred_at >= current_date)::text sent_today,
       (select count(*) from public.outreach_messages where direction = 'inbound' and kind = 'reply')::text replies_total,
       (select count(*) from public.outreach_threads where classification = 'positive')::text positive_replies,
@@ -153,9 +153,9 @@ export async function listCampaigns(pagination: Pagination, search = "") {
       left join public.outreach_recipients r on r.campaign_id=c.id
       left join public.outreach_messages m on m.campaign_id=c.id
       left join public.outreach_threads t on t.campaign_id=c.id
-      where ($1 = '%%' or c.nome ilike $1) and c.status <> 'archived'
+      where ($1 = '%%' or c.nome ilike $1) and c.status <> 'archived' and c.test_source_campaign_id is null
       group by c.id order by c.updated_at desc limit $2 offset $3`, [query, pagination.pageSize, pagination.offset]),
-    pool.query<{ count: string }>(`select count(*)::text count from public.outreach_campaigns where ($1='%%' or nome ilike $1) and status <> 'archived'`, [query]),
+    pool.query<{ count: string }>(`select count(*)::text count from public.outreach_campaigns where ($1='%%' or nome ilike $1) and status <> 'archived' and test_source_campaign_id is null`, [query]),
   ]);
   return { items: items.rows, page: { page: pagination.page, pageSize: pagination.pageSize, total: Number(count.rows[0]?.count ?? 0) } };
 }
@@ -235,7 +235,7 @@ export async function campaignReadiness(
 export async function getCampaign(id: string) {
   const campaign = await pool.query(`select c.id, c.nome as name, c.descricao as description, c.status, c.stop_company_on_reply as "stopCompanyOnReply", c.timezone, c.send_days as "sendDays", c.send_window_start::text as "sendWindowStart", c.send_window_end::text as "sendWindowEnd", c.starts_at as "startsAt", c.ends_at as "endsAt", c.daily_limit as "dailyLimit", c.gap_minutes as "gapMinutes", c.jitter_minutes as "jitterMinutes", c.launched_at as "launchedAt", c.paused_at as "pausedAt", c.created_at as "createdAt", c.updated_at as "updatedAt",
     coalesce((select array_agg(selection.mailbox_id order by selection.mailbox_id) from public.outreach_campaign_mailboxes selection where selection.campaign_id=c.id),'{}'::uuid[]) as "mailboxIds",
-    coalesce((select array_agg(distinct member.audience_id) from public.outreach_recipients recipient join public.outreach_audience_members member on member.id=recipient.audience_member_id where recipient.campaign_id=c.id),'{}'::uuid[]) as "audienceIds",
+    coalesce((select array_agg(selection.audience_id order by selection.added_at,selection.audience_id) from public.outreach_campaign_audiences selection where selection.campaign_id=c.id),'{}'::uuid[]) as "audienceIds",
     (select count(*)::int from public.outreach_recipients recipient where recipient.campaign_id=c.id) as "recipientCount",
     (select count(*)::int from public.outreach_messages message where message.campaign_id=c.id and message.direction='outbound') as "sentCount",
     (select count(*)::int from public.outreach_messages message where message.campaign_id=c.id and message.direction='inbound' and message.kind='reply') as "replyCount",
@@ -287,6 +287,45 @@ export async function getCampaign(id: string) {
     blockers: readiness.blockers,
     warnings: [],
   };
+}
+
+export async function listCampaignRecipients(campaignId: string, pagination: Pagination) {
+  const [items, count] = await Promise.all([
+    pool.query(`
+      select r.id,r.contact_id as "contactId",r.email_snapshot::text email,r.status::text status,
+             r.eligibility_reasons as reasons,c.nome as "contactName",e.nome as "companyName",
+             a.id as "audienceId",a.nome as "audienceName"
+      from public.outreach_recipients r
+      left join public.contactos c on c.id=r.contact_id
+      left join public.empresas e on e.id=r.company_id
+      left join public.outreach_audience_members member on member.id=r.audience_member_id
+      left join public.outreach_audiences a on a.id=member.audience_id
+      where r.campaign_id=$1
+      order by r.created_at desc,r.id
+      limit $2 offset $3`, [campaignId, pagination.pageSize, pagination.offset]),
+    pool.query<{ count: string }>(`select count(*)::text count from public.outreach_recipients where campaign_id=$1`, [campaignId]),
+  ]);
+  return { items: items.rows, page: { page: pagination.page, pageSize: pagination.pageSize, total: Number(count.rows[0]?.count ?? 0) } };
+}
+
+export async function listCampaignMessageTests(campaignId: string) {
+  const result = await pool.query(`
+    select test.id,test.created_at as "createdAt",test.status::text status,
+           recipient.email_snapshot::text as "recipientEmail",mailbox.email::text as "mailboxEmail",
+           (select count(*)::int from public.outreach_messages sent where sent.campaign_id=test.id and sent.direction='outbound') as "sentCount",
+           job.status::text as "jobStatus",job.last_error as "lastError"
+    from public.outreach_campaigns test
+    left join lateral (
+      select email_snapshot from public.outreach_recipients where campaign_id=test.id order by created_at limit 1
+    ) recipient on true
+    left join public.outreach_campaign_mailboxes selection on selection.campaign_id=test.id
+    left join public.outreach_mailboxes mailbox on mailbox.id=selection.mailbox_id
+    left join lateral (
+      select status,last_error from public.outreach_jobs where campaign_id=test.id order by created_at desc limit 1
+    ) job on true
+    where test.test_source_campaign_id=$1
+    order by test.created_at desc,test.id desc limit 25`, [campaignId]);
+  return { items: result.rows };
 }
 
 export async function listAudiences(pagination: Pagination, search = "") {

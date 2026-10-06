@@ -25,6 +25,7 @@ import {
   ignoreInboundReconciliation,
   adjudicateJobReconciliation,
   updateCampaign,
+  queueCampaignMessageTest,
   updateMailbox,
   updateThread,
   updateSystemSettings,
@@ -46,6 +47,8 @@ import {
   listJobReconciliation,
   listAudiences,
   listCampaigns,
+  listCampaignRecipients,
+  listCampaignMessageTests,
   listMailboxes,
   listSuppressions,
   listThreads,
@@ -98,10 +101,20 @@ export function buildRouter() {
     success(context, await createCampaign(actor(context), await readJson(context.request)), 201);
   }, { capability: "outreach.campaign.manage" });
   router.add("GET", `${API}/campaigns/:campaignId`, async (context) => success(context, await getCampaign(uuid.parse(context.params.campaignId))), { capability: "outreach.read" });
+  router.add("GET", `${API}/campaigns/:campaignId/recipients`, async (context) => success(context, await listCampaignRecipients(uuid.parse(context.params.campaignId), pageParams(context.url))), { capability: "outreach.campaign.manage" });
+  router.add("GET", `${API}/campaigns/:campaignId/message-tests`, async (context) => success(context, await listCampaignMessageTests(uuid.parse(context.params.campaignId))), { capability: "outreach.campaign.manage" });
   router.add("PATCH", `${API}/campaigns/:campaignId`, async (context) => {
     assertOrigin(context.request);
     success(context, await updateCampaign(actor(context), uuid.parse(context.params.campaignId), await readJson(context.request)));
   }, { capability: "outreach.campaign.manage" });
+  router.add("POST", `${API}/campaigns/:campaignId/message-tests`, async (context) => {
+    assertOrigin(context.request);
+    const currentActor = actor(context);
+    requireCapability(currentActor, "outreach.campaign.manage");
+    const key = singleHeader(context.request.headers["idempotency-key"]);
+    if (!key || !/^[A-Za-z0-9._:-]{8,200}$/.test(key)) throw new HttpError(400, "idempotency_key_required", "Indica um Idempotency-Key válido para o teste.");
+    success(context, await queueCampaignMessageTest(currentActor, uuid.parse(context.params.campaignId), await readJson(context.request), key), 202);
+  }, { capability: "outreach.campaign.launch" });
   for (const action of ["launch", "pause", "resume"] as const) {
     router.add("POST", `${API}/campaigns/:campaignId/${action}`, async (context) => {
       assertOrigin(context.request);
