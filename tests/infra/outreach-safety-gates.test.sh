@@ -8,8 +8,8 @@ trap cleanup EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # All production entry points share one fail-closed disk policy. The default
-# remains 80%; an explicit exception can reach 90%, never exceed it, and can
-# never weaken the absolute 20 GiB free-space floor.
+# remains 80%; an explicit exception can reach 90% with 20 GiB free, or 95%
+# only when the free-space floor is raised to at least 50 GiB.
 # shellcheck disable=SC1091
 source "${ROOT}/infra/disk-safety.sh"
 unset NIKUFRA_DISK_USAGE_MAX_PERCENT NIKUFRA_DISK_MIN_FREE_BYTES
@@ -18,7 +18,7 @@ for accepted_limit in 80 90; do
   NIKUFRA_DISK_USAGE_MAX_PERCENT="${accepted_limit}"
   [[ "$(nikufra_disk_max_percent)" == "${accepted_limit}" ]] || fail "limite válido ${accepted_limit}% foi recusado"
 done
-for rejected_limit in 0 91 100 -1 80.0 foo 080; do
+for rejected_limit in 0 91 95 96 100 -1 80.0 foo 080; do
   NIKUFRA_DISK_USAGE_MAX_PERCENT="${rejected_limit}"
   if nikufra_disk_max_percent >/dev/null 2>&1; then fail "limite inválido ${rejected_limit} foi aceite"; fi
 done
@@ -28,12 +28,23 @@ NIKUFRA_DISK_MIN_FREE_BYTES=21474836479
 if nikufra_disk_min_free_kib >/dev/null 2>&1; then fail "reserva inferior a 20 GiB foi aceite"; fi
 NIKUFRA_DISK_MIN_FREE_BYTES=21474836480
 [[ "$(nikufra_disk_min_free_kib)" == 20971520 ]] || fail "reserva exata de 20 GiB foi recusada"
+NIKUFRA_DISK_USAGE_MAX_PERCENT=95
+NIKUFRA_DISK_MIN_FREE_BYTES=53687091200
+[[ "$(nikufra_disk_max_percent)" == 95 ]] || fail "95% com reserva de 50 GiB foi recusado"
+[[ "$(nikufra_disk_min_free_kib)" == 52428800 ]] || fail "reserva de 50 GiB foi recusada"
+NIKUFRA_DISK_MIN_FREE_BYTES=53687091199
+if nikufra_disk_max_percent >/dev/null 2>&1; then fail "95% com reserva inferior a 50 GiB foi aceite"; fi
+unset NIKUFRA_DISK_USAGE_MAX_PERCENT
 unset NIKUFRA_DISK_MIN_FREE_BYTES
 nikufra_disk_is_safe 79 20971520 80 20971520 || fail "79% com 20 GiB devia passar no limite 80"
 if nikufra_disk_is_safe 80 999999999 80 20971520; then fail "utilização igual ao teto foi aceite"; fi
 nikufra_disk_is_safe 89 20971520 90 20971520 || fail "89% com 20 GiB devia passar no limite 90"
 if nikufra_disk_is_safe 90 999999999 90 20971520; then fail "90% foi aceite no teto exclusivo de 90"; fi
 if nikufra_disk_is_safe 89 20971519 90 20971520; then fail "menos de 20 GiB livres foi aceite"; fi
+nikufra_disk_is_safe 94 52428800 95 52428800 || fail "94% com 50 GiB devia passar no limite 95"
+if nikufra_disk_is_safe 95 999999999 95 52428800; then fail "95% foi aceite no teto exclusivo de 95"; fi
+if nikufra_disk_is_safe 94 999999999 95 52428799; then fail "95% com reserva inferior a 50 GiB foi aceite"; fi
+if nikufra_disk_is_safe 94 52428799 95 52428800; then fail "menos de 50 GiB livres foi aceite"; fi
 for malformed_probe in 'x 20971520' '79 x' '' ; do
   read -r malformed_used malformed_free <<< "${malformed_probe}"
   if nikufra_disk_is_safe "${malformed_used:-}" "${malformed_free:-}" 90 20971520; then

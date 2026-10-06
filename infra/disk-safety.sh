@@ -1,19 +1,29 @@
 #!/usr/bin/env bash
 
 # Shared, fail-closed disk policy for deployment and production readiness.
-# The percentage ceiling can be raised explicitly, but never above 90%. The
-# absolute free-space floor can be raised, but never below 20 GiB.
+# Usage above 90% is only allowed with an explicit 50 GiB free-space floor.
+# The default remains 80% usage and at least 20 GiB free.
 NIKUFRA_DISK_DEFAULT_MAX_PERCENT=80
-NIKUFRA_DISK_HARD_MAX_PERCENT=90
+NIKUFRA_DISK_HARD_MAX_PERCENT=95
 NIKUFRA_DISK_DEFAULT_MIN_FREE_BYTES=21474836480
 NIKUFRA_DISK_HARD_MIN_FREE_BYTES=21474836480
+NIKUFRA_DISK_HIGH_USAGE_MIN_FREE_BYTES=53687091200
+NIKUFRA_DISK_HIGH_USAGE_MIN_FREE_KIB=52428800
 
 nikufra_disk_max_percent() {
-  local value="${NIKUFRA_DISK_USAGE_MAX_PERCENT:-${NIKUFRA_DISK_DEFAULT_MAX_PERCENT}}"
-  if [[ ! "${value}" =~ ^([1-9]|[1-8][0-9]|90)$ ]]; then
+  local value="${NIKUFRA_DISK_USAGE_MAX_PERCENT:-${NIKUFRA_DISK_DEFAULT_MAX_PERCENT}}" min_free_bytes
+  if [[ ! "${value}" =~ ^([1-9]|[1-8][0-9]|9[0-5])$ ]]; then
     printf 'NIKUFRA_DISK_USAGE_MAX_PERCENT tem de ser um inteiro canónico entre 1 e %s (recebido: %s).\n' \
       "${NIKUFRA_DISK_HARD_MAX_PERCENT}" "${value:-vazio}" >&2
     return 1
+  fi
+  if (( value > 90 )); then
+    nikufra_disk_min_free_kib >/dev/null || return 1
+    min_free_bytes="${NIKUFRA_DISK_MIN_FREE_BYTES:-${NIKUFRA_DISK_DEFAULT_MIN_FREE_BYTES}}"
+    if (( min_free_bytes < NIKUFRA_DISK_HIGH_USAGE_MIN_FREE_BYTES )); then
+      printf 'Acima de 90%% de utilização, NIKUFRA_DISK_MIN_FREE_BYTES tem de reservar pelo menos 50 GiB.\n' >&2
+      return 1
+    fi
   fi
   printf '%s\n' "${value}"
 }
@@ -37,6 +47,7 @@ nikufra_disk_is_safe() {
     && "${available_kib}" =~ ^[0-9]+$ \
     && "${max_percent}" =~ ^[0-9]+$ \
     && "${min_free_kib}" =~ ^[0-9]+$ ]] || return 2
+  (( 10#${max_percent} <= 90 || 10#${min_free_kib} >= NIKUFRA_DISK_HIGH_USAGE_MIN_FREE_KIB )) || return 1
   (( 10#${used_percent} < 10#${max_percent} \
     && 10#${available_kib} >= 10#${min_free_kib} ))
 }
