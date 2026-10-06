@@ -164,6 +164,23 @@ SPF/DKIM/DMARC verificado nas últimas 24 horas e conservar no audit log a
 sequência 1→3→5→10 do canary atual. Um canary sem tráfego nunca é prova de
 readiness. Open/click tracking permanece desligado.
 
+### Listas, sequência e teste de mensagem
+
+Ao criar um rascunho, é possível escolher uma audiência do CRM e escrever
+várias mensagens com intervalos. No detalhe, a lista pode ser associada e a
+sequência pode ser editada apenas antes do primeiro lançamento. O backend
+substitui os passos e variantes numa única transação e reavalia os contactos
+do rascunho. A lista de destinatários mostra também os que ficaram bloqueados.
+
+O botão **Testar envio** de uma mensagem cria uma campanha de teste individual
+com uma cópia da variante guardada, a lead e a mailbox selecionadas. Exige
+permissão de lançamento, evidência de elegibilidade, mailbox selecionada e
+pronta, allowlist no canary e os gates normais do worker. Usa a quota e a rampa
+da mailbox. O histórico de testes aparece na campanha original; `sent` prova
+que o Gmail aceitou o envio, mas a colocação na caixa de entrada deve ser
+confirmada no destinatário. O teste não altera destinatários, jobs ou métricas
+da campanha original.
+
 A promoção final requer UUID de um administrador CRM ativo:
 
 ```bash

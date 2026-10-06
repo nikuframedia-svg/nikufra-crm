@@ -4,6 +4,8 @@ import type {
   Audience,
   AuditEvent,
   CampaignDetail,
+  CampaignRecipient,
+  CampaignMessageTest,
   CampaignSummary,
   Collection,
   Eligibility,
@@ -22,6 +24,8 @@ export const outreachKeys = {
   overview: ["outreach", "overview"] as const,
   campaigns: ["outreach", "campaigns"] as const,
   campaign: (id: string) => ["outreach", "campaign", id] as const,
+  campaignRecipients: (id: string) => ["outreach", "campaign", id, "recipients"] as const,
+  campaignMessageTests: (id: string) => ["outreach", "campaign", id, "message-tests"] as const,
   audiences: ["outreach", "audiences"] as const,
   eligibility: (ids: string[]) => ["outreach", "eligibility", ...[...ids].sort()] as const,
   mailboxes: ["outreach", "mailboxes"] as const,
@@ -92,12 +96,12 @@ export function useCampaigns(page = 1, pageSize = 100, search = "") {
 
 export function useCampaign(id: string) {
   return useQuery({ queryKey: outreachKeys.campaign(id), queryFn: async () => {
-    type RawStep = { id: string; position: number; kind?: "email" | "wait"; delayMinutes: number; variants?: CampaignDetail["sequence"][number]["variants"] };
+    type RawStep = { id: string; position: number; kind?: "email" | "wait"; delayMinutes: number; replyToPrevious?: boolean; active?: boolean; variants?: Array<Partial<CampaignDetail["sequence"][number]["variants"][number]> & { id: string; name: string; subject: string; body: string; weight: number }> };
     type RawDetail = Partial<CampaignDetail> & { steps?: RawStep[]; recipientCounts?: Array<{ status: string; count: number }>; stopCompanyOnReply?: boolean; sendDays?: number[]; sendWindowStart?: string; sendWindowEnd?: string };
     const raw = await outreachRequest<RawDetail>(`/campaigns/${encodeURIComponent(id)}`);
     const counts = raw.recipientCounts ?? [];
     const recipientCount = raw.recipientCount ?? counts.reduce((sum, item) => sum + Number(item.count), 0);
-    const sequence = raw.sequence ?? (raw.steps ?? []).map((step) => ({ id: step.id, order: step.position, kind: step.kind ?? "email", delayDays: Math.floor(Number(step.delayMinutes || 0) / 1_440), delayHours: Math.floor((Number(step.delayMinutes || 0) % 1_440) / 60), variants: step.variants ?? [] }));
+    const sequence = raw.sequence ?? (raw.steps ?? []).map((step) => ({ id: step.id, order: step.position, kind: step.kind ?? "email", delayMinutes: Number(step.delayMinutes || 0), delayDays: Math.floor(Number(step.delayMinutes || 0) / 1_440), delayHours: Math.floor((Number(step.delayMinutes || 0) % 1_440) / 60), replyToPrevious: step.replyToPrevious ?? true, active: step.active ?? true, variants: (step.variants ?? []).map((variant) => ({ ...variant, active: variant.active ?? true })) }));
     const mailboxIds = raw.mailboxIds ?? [];
     const blockers = raw.blockers ?? [...(!sequence.length ? ["Adiciona pelo menos um passo à sequência."] : []), ...(!recipientCount ? ["Adiciona uma audiência com contactos elegíveis."] : []), ...(!mailboxIds.length ? ["Seleciona pelo menos uma mailbox para a campanha."] : [])];
     return {
@@ -112,7 +116,7 @@ export function useCampaign(id: string) {
 
 export function useCreateCampaign() {
   const queryClient = useQueryClient();
-  return useMutation({ mutationFn: (input: { name: string; description: string; dailyLimit: number; steps: Array<{ delayMinutes: number; replyToPrevious: boolean; variants: Array<{ name: string; weight: number; subject: string; body: string }> }> }) => postJson<CampaignDetail>("/campaigns", input), onSuccess: () => void queryClient.invalidateQueries({ queryKey: outreachKeys.all }) });
+  return useMutation({ mutationFn: (input: { name: string; description: string; dailyLimit: number; audienceId?: string; steps: Array<{ delayMinutes: number; replyToPrevious: boolean; variants: Array<{ name: string; weight: number; subject: string; body: string }> }> }) => postJson<CampaignDetail>("/campaigns", input), onSuccess: () => void queryClient.invalidateQueries({ queryKey: outreachKeys.all }) });
 }
 
 export function useCampaignAction(id: string) {
@@ -128,8 +132,49 @@ export function useSetCampaignMailboxes(id: string) {
   });
 }
 
-export function useAudiences() {
-  return useQuery({ queryKey: outreachKeys.audiences, queryFn: async () => { const result = asCollection(await outreachRequest<Collection<Audience & { memberCount?: number }> | Array<Audience & { memberCount?: number }>>("/audiences?pageSize=100")); return { ...result, items: result.items.map((item) => ({ ...item, contactCount: Number(item.contactCount ?? item.memberCount ?? 0), eligibleCount: Number(item.eligibleCount ?? 0) })) }; } });
+export interface CampaignStepDraft {
+  kind: "email" | "wait";
+  delayMinutes: number;
+  replyToPrevious: boolean;
+  active: boolean;
+  variants: Array<{ name: string; weight: number; subject: string; body: string; active: boolean }>;
+}
+
+export function useSaveCampaignSteps(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (steps: CampaignStepDraft[]) => patchJson<{ id: string }>(`/campaigns/${encodeURIComponent(id)}`, { steps }),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: outreachKeys.campaign(id) }); void queryClient.invalidateQueries({ queryKey: outreachKeys.campaigns }); },
+  });
+}
+
+export function useCampaignRecipients(id: string, page = 1, enabled = true) {
+  return useQuery({
+    queryKey: [...outreachKeys.campaignRecipients(id), page],
+    queryFn: () => outreachRequest<Collection<CampaignRecipient>>(`/campaigns/${encodeURIComponent(id)}/recipients?page=${page}&pageSize=25`),
+    enabled: Boolean(id) && enabled,
+  });
+}
+
+export function useQueueCampaignMessageTest(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ idempotencyKey, ...input }: { stepId: string; variantId: string; contactId: string; mailboxId: string; idempotencyKey: string }) => outreachRequest<{ id: string; queued: boolean; duplicate: boolean }>(`/campaigns/${encodeURIComponent(id)}/message-tests`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify(input) }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: outreachKeys.campaignMessageTests(id) }),
+  });
+}
+
+export function useCampaignMessageTests(id: string, enabled = true) {
+  return useQuery({
+    queryKey: outreachKeys.campaignMessageTests(id),
+    queryFn: () => outreachRequest<Collection<CampaignMessageTest>>(`/campaigns/${encodeURIComponent(id)}/message-tests`),
+    enabled: Boolean(id) && enabled,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useAudiences(enabled = true) {
+  return useQuery({ queryKey: outreachKeys.audiences, queryFn: async () => { const result = asCollection(await outreachRequest<Collection<Audience & { memberCount?: number }> | Array<Audience & { memberCount?: number }>>("/audiences?pageSize=100")); return { ...result, items: result.items.map((item) => ({ ...item, contactCount: Number(item.contactCount ?? item.memberCount ?? 0), eligibleCount: Number(item.eligibleCount ?? 0) })) }; }, enabled });
 }
 
 export function useEligibility(ids: string[]) {
@@ -186,7 +231,7 @@ export function useAddRecipients() {
 
 export function useAttachAudienceToCampaign() {
   const queryClient = useQueryClient();
-  return useMutation({ mutationFn: ({ campaignId, audienceId }: { campaignId: string; audienceId: string }) => patchJson<CampaignDetail>(`/campaigns/${encodeURIComponent(campaignId)}`, { addAudienceId: audienceId }), onSuccess: () => void queryClient.invalidateQueries({ queryKey: outreachKeys.campaigns }) });
+  return useMutation({ mutationFn: ({ campaignId, audienceId }: { campaignId: string; audienceId: string }) => patchJson<CampaignDetail>(`/campaigns/${encodeURIComponent(campaignId)}`, { addAudienceId: audienceId }), onSuccess: (_data, variables) => { void queryClient.invalidateQueries({ queryKey: outreachKeys.campaign(variables.campaignId) }); void queryClient.invalidateQueries({ queryKey: outreachKeys.campaigns }); } });
 }
 
 export function useMailboxes(enabled = true) {

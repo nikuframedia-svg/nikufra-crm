@@ -58,8 +58,11 @@ const capabilities = [
   "outreach.admin",
 ];
 
-async function mockOutreachApi(page: Page) {
-  let selectedMailboxIds: string[] = [];
+async function mockOutreachApi(page: Page, testReady = false) {
+  let selectedMailboxIds: string[] = testReady ? [mailbox.id] : [];
+  let audienceIds: string[] = [];
+  let messageTests: Array<{ id: string; createdAt: string; status: string; recipientEmail: string; mailboxEmail: string; sentCount: number; jobStatus: string; lastError: null }> = [];
+  let campaignSteps = [{ id: "step-1", position: 1, kind: "email", delayMinutes: 0, replyToPrevious: true, active: true, variants: [{ id: "variant-1", name: "A", weight: 100, subject: "{{empresa}} × Nikufra", body: "Olá {{nome}}", active: true }] }];
   await page.route("**/api/outreach/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -67,12 +70,21 @@ async function mockOutreachApi(page: Page) {
     let data: unknown = {};
 
     if (path === "/overview") data = { campaignsTotal: 1, campaignsRunning: 0, sentToday: 4, repliesTotal: 2, positiveReplies: 1, queuedJobs: 3, sendMode: "disabled", outboundEnabled: false };
+    else if (path === "/campaigns" && request.method() === "POST") data = { id: "campaign-3" };
     else if (path === "/campaigns") data = { items: [url.searchParams.get("page") === "2" ? secondCampaign : campaign], page: { page: Number(url.searchParams.get("page") ?? 1), pageSize: Number(url.searchParams.get("pageSize") ?? 25), total: 26 } };
     else if (path === "/campaigns/campaign-1" && request.method() === "PATCH") {
-      selectedMailboxIds = (request.postDataJSON() as { mailboxIds: string[] }).mailboxIds;
+      const input = request.postDataJSON() as { mailboxIds?: string[]; addAudienceId?: string; steps?: typeof campaignSteps };
+      if (input.mailboxIds) selectedMailboxIds = input.mailboxIds;
+      if (input.addAudienceId) audienceIds = [...audienceIds, input.addAudienceId];
+      if (input.steps) campaignSteps = input.steps.map((step, index) => ({ ...step, id: `step-${index + 1}`, position: index + 1, variants: step.variants.map((variant, variantIndex) => ({ ...variant, id: `variant-${index + 1}-${variantIndex + 1}` })) }));
       data = { id: campaign.id, mailboxIds: selectedMailboxIds };
     }
-    else if (path === "/campaigns/campaign-1") data = { ...campaign, mailboxIds: selectedMailboxIds, availableMailboxes: [{ id: mailbox.id, email: mailbox.email, displayName: mailbox.displayName, provider: mailbox.provider, status: mailbox.status, sendEnabled: mailbox.sendEnabled, dnsReady: true, dnsCheckedAt: "2026-09-30T14:00:00Z", ready: false, selected: selectedMailboxIds.includes(mailbox.id) }], readiness: { ready: false, activeStepVariantCount: 1, eligibleRecipientCount: 14, selectedMailboxCount: selectedMailboxIds.length, readyMailboxCount: 0 }, blockers: selectedMailboxIds.length ? ["A mailbox selecionada ainda não está pronta."] : ["Seleciona pelo menos uma mailbox para a campanha."], steps: [{ id: "step-1", position: 1, kind: "email", delayMinutes: 0, variants: [{ id: "variant-1", name: "A", weight: 100, subject: "{{empresa}} × Nikufra", body: "Olá {{nome}}" }] }], recipientCounts: [{ status: "eligible", count: 14 }], stopCompanyOnReply: true, sendDays: [1, 2, 3, 4, 5], sendWindowStart: "09:00", sendWindowEnd: "17:00" };
+    else if (path === "/campaigns/campaign-1/message-tests" && request.method() === "POST") { messageTests = [{ id: "test-campaign-1", createdAt: new Date().toISOString(), status: "running", recipientEmail: "contacto@example.invalid", mailboxEmail: mailbox.email, sentCount: 0, jobStatus: "pending", lastError: null }]; data = { id: "test-campaign-1", queued: true, duplicate: false }; }
+    else if (path === "/campaigns/campaign-1/message-tests") data = { items: messageTests };
+    else if (path === "/campaigns/campaign-1/recipients") data = { items: [], page: { page: 1, pageSize: 25, total: 0 } };
+    else if (path === "/campaigns/campaign-3/recipients") data = { items: [], page: { page: 1, pageSize: 25, total: 0 } };
+    else if (path === "/campaigns/campaign-3") data = { ...campaign, id: "campaign-3", name: "Nova campanha", recipientCount: 0, mailboxIds: [], audienceIds: [], availableMailboxes: [], steps: [], recipientCounts: [], readiness: { ready: false, activeStepVariantCount: 0, eligibleRecipientCount: 0, selectedMailboxCount: 0, readyMailboxCount: 0 }, blockers: ["Seleciona destinatários e mailbox."] };
+    else if (path === "/campaigns/campaign-1") data = { ...campaign, audienceIds, mailboxIds: selectedMailboxIds, availableMailboxes: [{ id: mailbox.id, email: mailbox.email, displayName: mailbox.displayName, provider: mailbox.provider, status: mailbox.status, sendEnabled: testReady, dnsReady: true, dnsCheckedAt: "2026-09-30T14:00:00Z", ready: testReady, selected: selectedMailboxIds.includes(mailbox.id) }], readiness: { ready: false, activeStepVariantCount: campaignSteps.length, eligibleRecipientCount: 14, selectedMailboxCount: selectedMailboxIds.length, readyMailboxCount: testReady ? selectedMailboxIds.length : 0 }, blockers: selectedMailboxIds.length ? ["A mailbox selecionada ainda não está pronta."] : ["Seleciona pelo menos uma mailbox para a campanha."], steps: campaignSteps, recipientCounts: [{ status: "eligible", count: 14 }], stopCompanyOnReply: true, sendDays: [1, 2, 3, 4, 5], sendWindowStart: "09:00", sendWindowEnd: "17:00" };
     else if (path === "/audiences") data = { items: [{ id: "audience-1", name: "Fabricantes", description: "Contactos CRM", memberCount: 14, eligibleCount: 12, createdAt: "2026-09-29T10:00:00Z" }] };
     else if (path === "/audiences/eligibility") data = { items: (url.searchParams.get("ids") ?? "").split(",").filter(Boolean).map((contactId) => ({ contactId, eligible: true, reasons: [] })) };
     else if (path === "/mailboxes") data = { items: [mailbox] };
@@ -88,7 +100,7 @@ async function mockOutreachApi(page: Page) {
   });
 }
 
-async function openRoute(page: Page, path: string, theme: "light" | "dark" = "light") {
+async function openRoute(page: Page, path: string, theme: "light" | "dark" = "light", testReady = false) {
   await page.addInitScript((selectedTheme) => {
     localStorage.setItem("nikufra:theme", selectedTheme);
     localStorage.setItem("nikufra:v2:leads", JSON.stringify([{
@@ -123,7 +135,7 @@ async function openRoute(page: Page, path: string, theme: "light" | "dark" = "li
       dataFechoPrevista: "2026-12-01",
     }]));
   }, theme);
-  await mockOutreachApi(page);
+  await mockOutreachApi(page, testReady);
   await page.goto(path);
   await expect(page.locator(".outreach-module")).toBeVisible();
   await expect(page.locator(".outreach-loading")).toHaveCount(0);
@@ -239,6 +251,66 @@ test("campaign mailbox selection saves the exact selected ids", async ({ page })
   const request = await requestPromise;
   expect(request.postDataJSON()).toEqual({ mailboxIds: [mailbox.id] });
   await expect(mailboxes).toContainText("0 prontas de 1 selecionadas");
+});
+
+test("new campaign form accepts a recipient list and multiple messages", async ({ page }) => {
+  await openRoute(page, "/outreach/campanhas");
+  await page.getByRole("button", { name: "Nova campanha" }).click();
+  await page.getByRole("textbox", { name: "Nome", exact: true }).fill("Piloto Q4");
+  await page.getByRole("combobox", { name: "Lista de destinatários" }).selectOption("audience-1");
+  await page.getByRole("textbox", { name: "Assunto" }).fill("Primeiro contacto");
+  await page.getByRole("textbox", { name: "Mensagem" }).fill("Olá {{nome}}");
+  await page.getByRole("button", { name: "Adicionar mensagem" }).click();
+  const second = page.locator(".outreach-create-step").nth(1);
+  await second.getByRole("textbox", { name: "Assunto" }).fill("Seguimento");
+  await second.getByRole("textbox", { name: "Mensagem" }).fill("Volto a contactar.");
+  await expectNoCriticalAccessibilityViolations(page);
+  const requestPromise = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/campaigns"));
+  await page.getByRole("button", { name: "Criar rascunho" }).click();
+  const payload = (await requestPromise).postDataJSON() as { audienceId: string; steps: Array<{ delayMinutes: number; variants: Array<{ subject: string }> }> };
+  expect(payload.audienceId).toBe("audience-1");
+  expect(payload.steps).toHaveLength(2);
+  expect(payload.steps[1]).toMatchObject({ delayMinutes: 2_880, variants: [{ subject: "Seguimento" }] });
+});
+
+test("a draft campaign can attach a recipient list and save another message", async ({ page }) => {
+  await openRoute(page, "/outreach/campanhas/campaign-1");
+  const audience = page.locator(".outreach-campaign-audience");
+  await audience.getByRole("combobox", { name: "Lista de destinatários" }).selectOption("audience-1");
+  const attachRequest = page.waitForRequest((request) => request.method() === "PATCH" && request.url().endsWith("/campaigns/campaign-1") && Boolean((request.postDataJSON() as { addAudienceId?: string }).addAudienceId));
+  await audience.getByRole("button", { name: "Adicionar lista" }).click();
+  expect((await attachRequest).postDataJSON()).toEqual({ addAudienceId: "audience-1" });
+  await expect(audience).toContainText("Fabricantes");
+
+  const sequence = page.locator(".outreach-campaign-sequence");
+  await sequence.getByRole("button", { name: "Editar mensagens" }).click();
+  await sequence.getByRole("button", { name: "Adicionar email" }).click();
+  await expectNoCriticalAccessibilityViolations(page);
+  const second = sequence.locator(".outreach-sequence-step").nth(1);
+  await second.getByRole("textbox", { name: "Assunto" }).fill("Seguimento");
+  await second.getByRole("textbox", { name: "Mensagem" }).fill("Olá {{nome}}, volto a contactar.");
+  const saveRequest = page.waitForRequest((request) => request.method() === "PATCH" && request.url().endsWith("/campaigns/campaign-1") && Boolean((request.postDataJSON() as { steps?: unknown[] }).steps));
+  await sequence.getByRole("button", { name: "Guardar sequência" }).click();
+  const payload = (await saveRequest).postDataJSON() as { steps: Array<{ delayMinutes: number; variants: Array<{ subject: string }> }> };
+  expect(payload.steps).toHaveLength(2);
+  expect(payload.steps[1]).toMatchObject({ delayMinutes: 2_880, variants: [{ subject: "Seguimento" }] });
+  await expect(sequence).toContainText("Seguimento");
+});
+
+test("message test asks for an eligible lead and queues one real send", async ({ page }) => {
+  await openRoute(page, "/outreach/campanhas/campaign-1", "light", true);
+  await page.locator(".outreach-campaign-sequence").getByRole("button", { name: "Testar envio" }).click();
+  await expectNoCriticalAccessibilityViolations(page);
+  await page.getByRole("searchbox", { name: "Pesquisar lead de teste" }).fill("Contacto de Teste");
+  await page.getByRole("listbox", { name: "Destinatário" }).selectOption("11111111-1111-4111-8111-111111111111");
+  await page.getByRole("checkbox", { name: /Confirmo que quero enviar/ }).check();
+  const requestPromise = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/campaigns/campaign-1/message-tests"));
+  await page.getByRole("button", { name: "Enviar teste" }).click();
+  const request = await requestPromise;
+  expect(request.headers()["idempotency-key"]).toBeTruthy();
+  expect(request.postDataJSON()).toMatchObject({ stepId: "step-1", variantId: "variant-1", contactId: "11111111-1111-4111-8111-111111111111", mailboxId: mailbox.id });
+  await expect(page.getByRole("status")).toContainText("Teste colocado em fila");
+  await expect(page.locator(".outreach-message-tests")).toContainText("contacto@example.invalid");
 });
 
 test("an existing mailbox can restart OAuth with its own id and email", async ({ page }) => {
