@@ -1,3 +1,5 @@
+begin;
+
 -- One-message test campaigns use the ordinary outbound worker and its gates.
 -- Keep them out of the main campaign list and make retries idempotent.
 alter table public.outreach_campaigns
@@ -41,3 +43,5 @@ do $$ begin
     execute 'grant select, insert, update, delete on public.outreach_campaign_audiences to outreach_service';
   end if;
 end $$;
+
+commit;
