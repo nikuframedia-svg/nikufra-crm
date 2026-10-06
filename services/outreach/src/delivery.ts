@@ -538,12 +538,15 @@ export async function reconcileAmbiguousJobs(limit = 20) {
   // Reconciliation is read-only at the provider boundary and must keep
   // running under the kill switch. It can only confirm a message that already
   // exists in Sent; it never calls the provider send endpoint.
-  const rows = await pool.query<{ id: string; mailbox_id: string; provider_response: { expectedInternetMessageId?: string; manualSubject?: string; manualBody?: string } }>(`
+  const rows = await pool.query<{ id: string; mailbox_id: string; idempotency_key: string; provider_message_id: string | null; provider_response: { expectedInternetMessageId?: string; manualSubject?: string; manualBody?: string } }>(`
     with candidates as materialized (
-      select job.id,job.mailbox_id,ledger.provider_response,ledger.last_attempt_at
+      select job.id,job.mailbox_id,job.idempotency_key,ledger.provider_message_id,ledger.provider_response,ledger.last_attempt_at
       from private.outreach_delivery_ledger ledger
       join public.outreach_jobs job on job.id=ledger.job_id
       where ledger.status in ('sending','accepted','ambiguous')
+        -- A live dispatch can briefly have an accepted receipt before its
+        -- final transaction commits. Do not quarantine its valid lease.
+        and (job.status <> 'leased' or job.lease_expires_at <= now())
       order by ledger.last_attempt_at,job.id
       limit $1
     ), normalized as (
@@ -554,7 +557,7 @@ export async function reconcileAmbiguousJobs(limit = 20) {
       where job.id=candidate.id
       returning job.id
     )
-    select candidate.id,candidate.mailbox_id,candidate.provider_response
+    select candidate.id,candidate.mailbox_id,candidate.idempotency_key,candidate.provider_message_id,candidate.provider_response
     from candidates candidate join normalized using(id)
     order by candidate.last_attempt_at,candidate.id`, [limit]);
   let confirmed = 0;
@@ -563,7 +566,10 @@ export async function reconcileAmbiguousJobs(limit = 20) {
     if (!internetMessageId) continue;
     try {
       const session = await providerSession(row.mailbox_id);
-      const receipt = await reconcileProviderMessage(session, internetMessageId);
+      const receipt = await reconcileProviderMessage(session, internetMessageId, {
+        providerMessageId: row.provider_message_id,
+        idempotencyKey: row.idempotency_key,
+      });
       if (!receipt) {
         // Rotate no-match jobs behind newer reconciliation work instead of
         // allowing the first page to starve every later ambiguous delivery.

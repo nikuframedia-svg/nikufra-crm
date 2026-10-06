@@ -171,9 +171,38 @@ export async function sendProviderMessage(
   return { providerMessageId: result.messageId || mime.internetMessageId, providerThreadId: null, internetMessageId: mime.internetMessageId, acceptedAt: new Date().toISOString() };
 }
 
-export async function reconcileProviderMessage(session: ProviderSession, internetMessageId: string): Promise<ProviderReceipt | null> {
+export async function reconcileProviderMessage(
+  session: ProviderSession,
+  internetMessageId: string,
+  accepted?: { providerMessageId: string | null; idempotencyKey: string },
+): Promise<ProviderReceipt | null> {
   if (session.provider === "google") {
     const credential = await freshOAuth(session);
+    if (accepted?.providerMessageId) {
+      // Gmail may replace our RFC 5322 Message-ID after accepting the send.
+      // The ID returned by messages.send is authoritative, but confirm the
+      // exact job marker in Sent before finalizing any ambiguous delivery.
+      const response = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(accepted.providerMessageId)}?format=metadata`,
+        { headers: { authorization: `Bearer ${credential.accessToken}` }, signal: AbortSignal.timeout(20_000) },
+      );
+      if (response.status !== 404) {
+        if (!response.ok) throw new HttpError(502, "provider_error", `Provider respondeu ${response.status}.`, { providerStatus: response.status });
+        const message = await response.json() as { id?: string; threadId?: string; internalDate?: string; labelIds?: string[]; payload?: { headers?: { name: string; value: string }[] } };
+        const headers = gmailHeaders(message.payload ?? {});
+        if (message.id !== accepted.providerMessageId || !message.labelIds?.includes("SENT") || headers.get("x-nikufra-idempotency-key") !== accepted.idempotencyKey) {
+          throw new HttpError(409, "provider_receipt_mismatch", "O ID aceite pelo Gmail não corresponde ao job em reconciliação.");
+        }
+        const actualInternetMessageId = headers.get("message-id");
+        if (!actualInternetMessageId) throw new HttpError(409, "provider_receipt_missing_message_id", "A mensagem enviada não tem Message-ID.");
+        return {
+          providerMessageId: message.id,
+          providerThreadId: message.threadId ?? null,
+          internetMessageId: actualInternetMessageId,
+          acceptedAt: message.internalDate ? new Date(Number(message.internalDate)).toISOString() : new Date().toISOString(),
+        };
+      }
+    }
     const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
     url.searchParams.set("q", `in:sent rfc822msgid:${internetMessageId}`);
     url.searchParams.set("maxResults", "2");
