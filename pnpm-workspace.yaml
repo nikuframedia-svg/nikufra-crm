@@ -6,18 +6,6 @@ overrides:
   source-map-js: 1.2.2
   postcss-selector-parser: 7.1.6
 
-# The remaining braces advisory has no patched release. It is reachable only
-# through Tailwind's build-time dependency tree, which processes repository
-# source, not untrusted runtime input. Keep this one exception explicit until
-# upstream publishes a fix; the two fixable advisories remain patched above.
-audit:
-  ignore:
-    - GHSA-vfj7-8cjw-p6xm
-# CI still uses pnpm 10, which matches audit exceptions by CVE instead.
-auditConfig:
-  ignoreCves:
-    - CVE-2026-93687
-
 allowBuilds:
   esbuild: true
 
