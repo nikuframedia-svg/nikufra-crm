@@ -254,16 +254,21 @@ export async function queueCampaignMessageTest(actor: Actor, sourceCampaignId: s
   if (config.shadowMode || !config.outboundEnvEnabled) {
     throw new HttpError(503, "outbound_disabled", "O envio de teste está desligado na operação Outreach.");
   }
-  const [candidate] = await contactEligibility([input.contactId]);
-  if (!candidate?.eligible) {
-    throw new HttpError(409, "test_contact_ineligible", "O contacto de teste não está elegível para envio.", { reasons: candidate?.reasons ?? ["contact_not_found"] });
-  }
   return transaction(async (client) => {
     const existing = await client.query<{ id: string; test_request_hash: string }>(`
       select id,test_request_hash from public.outreach_campaigns where test_idempotency_key=$1`, [idempotencyKey]);
     if (existing.rows[0]) {
       if (existing.rows[0].test_request_hash !== requestHash) throw new HttpError(409, "idempotency_key_reused", "Esta chave de envio de teste já foi usada para outro pedido.");
       return { id: existing.rows[0].id, sourceCampaignId, queued: true, duplicate: true };
+    }
+    const member = await client.query<{ id: string }>(`
+      select r.id from public.outreach_recipients r
+      where r.campaign_id=$1 and r.contact_id=$2
+      for share`, [sourceCampaignId, input.contactId]);
+    if (!member.rows[0]) throw new HttpError(409, "test_contact_not_in_campaign", "O destinatário tem de fazer parte da lista desta campanha.");
+    const [candidate] = await contactEligibility([input.contactId], client);
+    if (!candidate?.eligible) {
+      throw new HttpError(409, "test_contact_ineligible", "O contacto de teste não está elegível para envio.", { reasons: candidate?.reasons ?? ["contact_not_found"] });
     }
     const source = await client.query<{
       name: string; send_days: number[]; send_window_start: string; send_window_end: string;

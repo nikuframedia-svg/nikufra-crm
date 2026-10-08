@@ -26,7 +26,7 @@ export const outreachKeys = {
   campaign: (id: string) => ["outreach", "campaign", id] as const,
   campaignRecipients: (id: string) => ["outreach", "campaign", id, "recipients"] as const,
   campaignMessageTests: (id: string) => ["outreach", "campaign", id, "message-tests"] as const,
-  messageTestContacts: (search: string) => ["outreach", "message-test-contacts", search] as const,
+  messageTestContacts: (campaignId: string, search: string) => ["outreach", "campaign", campaignId, "message-test-contacts", search] as const,
   audiences: ["outreach", "audiences"] as const,
   eligibility: (ids: string[]) => ["outreach", "eligibility", ...[...ids].sort()] as const,
   mailboxes: ["outreach", "mailboxes"] as const,
@@ -176,11 +176,11 @@ export function useCampaignMessageTests(id: string, enabled = true) {
 
 export interface MessageTestContact { id: string; name: string; email: string; companyName: string }
 
-export function useMessageTestContacts(search: string, enabled = true) {
+export function useMessageTestContacts(campaignId: string, search: string, enabled = true) {
   return useQuery({
-    queryKey: outreachKeys.messageTestContacts(search),
-    queryFn: () => outreachRequest<Collection<MessageTestContact>>(`/message-test-contacts?search=${encodeURIComponent(search)}`),
-    enabled,
+    queryKey: outreachKeys.messageTestContacts(campaignId, search),
+    queryFn: () => outreachRequest<Collection<MessageTestContact>>(`/campaigns/${encodeURIComponent(campaignId)}/message-test-contacts?search=${encodeURIComponent(search)}`),
+    enabled: Boolean(campaignId) && enabled,
     staleTime: 30_000,
   });
 }

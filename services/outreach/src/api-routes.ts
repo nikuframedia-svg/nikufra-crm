@@ -104,7 +104,7 @@ export function buildRouter() {
   router.add("GET", `${API}/campaigns/:campaignId`, async (context) => success(context, await getCampaign(uuid.parse(context.params.campaignId))), { capability: "outreach.read" });
   router.add("GET", `${API}/campaigns/:campaignId/recipients`, async (context) => success(context, await listCampaignRecipients(uuid.parse(context.params.campaignId), pageParams(context.url))), { capability: "outreach.campaign.manage" });
   router.add("GET", `${API}/campaigns/:campaignId/message-tests`, async (context) => success(context, await listCampaignMessageTests(uuid.parse(context.params.campaignId))), { capability: "outreach.campaign.manage" });
-  router.add("GET", `${API}/message-test-contacts`, async (context) => success(context, await searchMessageTestContacts(context.url.searchParams.get("search") ?? "")), { capability: "outreach.campaign.manage" });
+  router.add("GET", `${API}/campaigns/:campaignId/message-test-contacts`, async (context) => success(context, await searchMessageTestContacts(uuid.parse(context.params.campaignId), context.url.searchParams.get("search") ?? "")), { capability: "outreach.campaign.manage" });
   router.add("PATCH", `${API}/campaigns/:campaignId`, async (context) => {
     assertOrigin(context.request);
     success(context, await updateCampaign(actor(context), uuid.parse(context.params.campaignId), await readJson(context.request)));

@@ -82,7 +82,7 @@ async function mockOutreachApi(page: Page, testReady = false, verification: "val
     }
     else if (path === "/campaigns/campaign-1/message-tests" && request.method() === "POST") { messageTests = [{ id: "test-campaign-1", createdAt: new Date().toISOString(), status: "running", recipientEmail: "contacto@example.invalid", mailboxEmail: mailbox.email, sentCount: 0, jobStatus: "pending", lastError: null }]; data = { id: "test-campaign-1", queued: true, duplicate: false }; }
     else if (path === "/campaigns/campaign-1/message-tests") data = { items: messageTests };
-    else if (path === "/message-test-contacts") data = { items: !url.searchParams.get("search") || "Contacto de Teste contacto@example.invalid Empresa de Teste".toLowerCase().includes((url.searchParams.get("search") ?? "").toLowerCase()) ? [{ id: "44444444-4444-4444-8444-444444444444", name: "Contacto de Teste", email: "contacto@example.invalid", companyName: "Empresa de Teste" }] : [] };
+    else if (path === "/campaigns/campaign-1/message-test-contacts") data = { items: !url.searchParams.get("search") || "Contacto de Teste contacto@example.invalid Empresa de Teste".toLowerCase().includes((url.searchParams.get("search") ?? "").toLowerCase()) ? [{ id: "44444444-4444-4444-8444-444444444444", name: "Contacto de Teste", email: "contacto@example.invalid", companyName: "Empresa de Teste" }] : [] };
     else if (path === "/campaigns/campaign-1/recipients") data = { items: [], page: { page: 1, pageSize: 25, total: 0 } };
     else if (path === "/campaigns/campaign-3/recipients") data = { items: [], page: { page: 1, pageSize: 25, total: 0 } };
     else if (path === "/campaigns/campaign-3") data = { ...campaign, id: "campaign-3", name: "Nova campanha", recipientCount: 0, mailboxIds: [], audienceIds: [], availableMailboxes: [], steps: [], recipientCounts: [], readiness: { ready: false, activeStepVariantCount: 0, eligibleRecipientCount: 0, selectedMailboxCount: 0, readyMailboxCount: 0 }, blockers: ["Seleciona destinatários e mailbox."] };
@@ -323,13 +323,15 @@ test("a draft campaign can attach a recipient list and save another message", as
 
 test("message test asks for an eligible lead and queues one real send", async ({ page }) => {
   await openRoute(page, "/outreach/campanhas/campaign-1", "light", true);
+  const contactsRequest = page.waitForRequest((request) => request.method() === "GET" && request.url().includes("/campaigns/campaign-1/message-test-contacts"));
   await page.locator(".outreach-campaign-sequence").getByRole("button", { name: "Testar envio" }).click();
+  await contactsRequest;
   await expectNoCriticalAccessibilityViolations(page);
   const dialog = page.locator(".outreach-dialog");
   const dialogWidth = await dialog.evaluate((element) => element.getBoundingClientRect().width);
   expect(dialogWidth).toBeGreaterThan(page.viewportSize()!.width < 640 ? 340 : 800);
   expect(Number.parseFloat(await dialog.locator("h2").evaluate((element) => getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(21);
-  await page.getByRole("searchbox", { name: "Pesquisar contacto de teste" }).fill("Contacto de Teste");
+  await page.getByRole("searchbox", { name: "Pesquisar destinatário da campanha" }).fill("Contacto de Teste");
   await page.locator(".outreach-dialog").getByRole("combobox", { name: "Destinatário", exact: true }).selectOption("44444444-4444-4444-8444-444444444444");
   await page.getByRole("checkbox", { name: /Confirmo que quero enviar/ }).check();
   const requestPromise = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/campaigns/campaign-1/message-tests"));
@@ -351,6 +353,16 @@ test("message test refreshes stale DNS and shows the real CRM contact", async ({
   await page.getByRole("button", { name: "Rever DNS" }).click();
   await dnsRequest;
   await expect(page.locator(".outreach-dialog").getByRole("combobox", { name: "Remetente", exact: true })).toHaveValue(mailbox.id);
+});
+
+test("message test does not offer a contact outside the selected campaign", async ({ page }) => {
+  await openRoute(page, "/outreach/campanhas/campaign-1", "light", true);
+  await page.locator(".outreach-campaign-sequence").getByRole("button", { name: "Testar envio" }).click();
+  const recipient = page.locator(".outreach-dialog").getByRole("combobox", { name: "Destinatário", exact: true });
+  await expect(recipient).toContainText("Contacto de Teste");
+  await page.getByRole("searchbox", { name: "Pesquisar destinatário da campanha" }).fill("externo@example.invalid");
+  await expect(recipient).toContainText("Nenhum destinatário corresponde à pesquisa");
+  await expect(recipient).not.toContainText("Contacto de Teste");
 });
 
 test("message test explains when global sending is disabled", async ({ page }) => {
