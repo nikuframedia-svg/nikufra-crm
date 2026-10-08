@@ -22,7 +22,7 @@ export function StageChip({ stage }: { stage: Stage }) {
   return <span className={`stage-chip stage-chip--${stage}`}><span />{stageLabels[stage]}</span>;
 }
 
-export function Modal({ open, title, description, onClose, children, width = "560px" }: { open: boolean; title: string; description?: string; onClose: () => void; children: ReactNode; width?: string }) {
+export function Modal({ open, title, description, onClose, children, width = "760px" }: { open: boolean; title: string; description?: string; onClose: () => void; children: ReactNode; width?: string }) {
   if (!open) return null;
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>

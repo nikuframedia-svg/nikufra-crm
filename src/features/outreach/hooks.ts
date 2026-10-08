@@ -26,6 +26,7 @@ export const outreachKeys = {
   campaign: (id: string) => ["outreach", "campaign", id] as const,
   campaignRecipients: (id: string) => ["outreach", "campaign", id, "recipients"] as const,
   campaignMessageTests: (id: string) => ["outreach", "campaign", id, "message-tests"] as const,
+  messageTestContacts: (search: string) => ["outreach", "message-test-contacts", search] as const,
   audiences: ["outreach", "audiences"] as const,
   eligibility: (ids: string[]) => ["outreach", "eligibility", ...[...ids].sort()] as const,
   mailboxes: ["outreach", "mailboxes"] as const,
@@ -173,6 +174,17 @@ export function useCampaignMessageTests(id: string, enabled = true) {
   });
 }
 
+export interface MessageTestContact { id: string; name: string; email: string; companyName: string }
+
+export function useMessageTestContacts(search: string, enabled = true) {
+  return useQuery({
+    queryKey: outreachKeys.messageTestContacts(search),
+    queryFn: () => outreachRequest<Collection<MessageTestContact>>(`/message-test-contacts?search=${encodeURIComponent(search)}`),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
 export function useAudiences(enabled = true) {
   return useQuery({ queryKey: outreachKeys.audiences, queryFn: async () => { const result = asCollection(await outreachRequest<Collection<Audience & { memberCount?: number }> | Array<Audience & { memberCount?: number }>>("/audiences?pageSize=100")); return { ...result, items: result.items.map((item) => ({ ...item, contactCount: Number(item.contactCount ?? item.memberCount ?? 0), eligibleCount: Number(item.eligibleCount ?? 0) })) }; }, enabled });
 }
@@ -240,7 +252,10 @@ export function useMailboxes(enabled = true) {
 
 export function useMailboxAction() {
   const queryClient = useQueryClient();
-  return useMutation({ mutationFn: ({ id, action }: { id: string; action: "test" | "dns" }) => postJson<Mailbox>(`/mailboxes/${encodeURIComponent(id)}/${action}`, {}), onSuccess: () => void queryClient.invalidateQueries({ queryKey: outreachKeys.mailboxes }) });
+  return useMutation({ mutationFn: ({ id, action }: { id: string; action: "test" | "dns" }) => postJson<Mailbox>(`/mailboxes/${encodeURIComponent(id)}/${action}`, {}), onSuccess: () => {
+    void queryClient.invalidateQueries({ queryKey: outreachKeys.mailboxes });
+    void queryClient.invalidateQueries({ queryKey: ["outreach", "campaign"] });
+  } });
 }
 
 export function useStartMailboxOAuth() {
