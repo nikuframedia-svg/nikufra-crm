@@ -48,6 +48,7 @@ describe("single-message test campaign", () => {
         verification_status: "valid", suppressed: false,
       }] };
       if (sql.includes("where test_idempotency_key=$1")) return { rows: [] };
+      if (sql.includes("from public.outreach_recipients r") && sql.includes("r.campaign_id=$1 and r.contact_id=$2")) return { rows: [{ id: id("111") }] };
       if (sql.includes("from public.outreach_campaigns c") && sql.includes("join public.outreach_campaign_steps")) return { rows: [{ name: "Source", send_days: [1, 2, 3, 4, 5], send_window_start: "09:00", send_window_end: "17:00", timezone: "Europe/Lisbon", subject: "Olá {{nome}}", body: "Mensagem" }] };
       if (sql.includes("from public.outreach_system_state")) return { rows: [{ send_enabled: true, mode: "canary" }] };
       if (sql.includes("insert into public.outreach_campaigns")) return { rows: [{ id: testCampaignId }] };
@@ -87,6 +88,17 @@ describe("single-message test campaign", () => {
       throw new Error(`Unexpected SQL: ${sql}`);
     });
     await expect(queueCampaignMessageTest(admin, sourceCampaignId, request, "test-key-123")).resolves.toMatchObject({ id: testCampaignId, duplicate: true });
+    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes("insert into public.outreach_campaigns"))).toBe(false);
+  });
+
+  it("rejects a contact outside the source campaign before preparing a send", async () => {
+    mocks.query.mockImplementation(async (sqlValue: unknown) => {
+      const sql = String(sqlValue);
+      if (sql.includes("where test_idempotency_key=$1")) return { rows: [] };
+      if (sql.includes("from public.outreach_recipients r") && sql.includes("r.campaign_id=$1 and r.contact_id=$2")) return { rows: [] };
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    await expect(queueCampaignMessageTest(admin, sourceCampaignId, request, "test-key-123")).rejects.toMatchObject({ status: 409, code: "test_contact_not_in_campaign" });
     expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes("insert into public.outreach_campaigns"))).toBe(false);
   });
 });

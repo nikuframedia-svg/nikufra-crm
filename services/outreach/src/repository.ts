@@ -308,16 +308,17 @@ export async function listCampaignRecipients(campaignId: string, pagination: Pag
   return { items: items.rows, page: { page: pagination.page, pageSize: pagination.pageSize, total: Number(count.rows[0]?.count ?? 0) } };
 }
 
-export async function searchMessageTestContacts(search: string) {
+export async function searchMessageTestContacts(campaignId: string, search: string) {
   const term = search.trim().slice(0, 120);
   const result = await pool.query(`
     select c.id, c.nome as name, c.email::text as email, e.nome as "companyName"
-    from public.contactos c
+    from public.outreach_recipients r
+    join public.contactos c on c.id=r.contact_id
     join public.empresas e on e.id=c.empresa_id
-    where c.email is not null and btrim(c.email::text) <> ''
-      and ($1::text = '' or position(lower($1) in lower(c.nome || ' ' || c.email::text || ' ' || e.nome)) > 0)
-    order by c.updated_at desc, c.id
-    limit 30`, [term]);
+    where r.campaign_id=$1 and c.email is not null and btrim(c.email::text) <> ''
+      and ($2::text = '' or position(lower($2) in lower(c.nome || ' ' || c.email::text || ' ' || e.nome)) > 0)
+    order by r.created_at desc, c.id
+    limit 30`, [campaignId, term]);
   return { items: result.rows };
 }
 
