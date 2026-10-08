@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, FlaskConical, Plus, Save, Trash2 } from "lucide-react";
 import { Button } from "../../../components/ui";
-import { useCRM } from "../../../state/crm-context";
 import { formatDateTime, ModuleDialog } from "../components";
-import { useCampaignMessageTests, useEligibility, useQueueCampaignMessageTest, useSaveCampaignSteps, type CampaignStepDraft } from "../hooks";
+import { outreachKeys, useCampaignMessageTests, useEligibility, useMailboxAction, useMessageTestContacts, useQueueCampaignMessageTest, useSaveCampaignSteps, useSettings, type CampaignStepDraft } from "../hooks";
 import type { CampaignDetail, SequenceStep } from "../types";
 
 function toDraft(sequence: SequenceStep[]): CampaignStepDraft[] {
@@ -26,12 +26,24 @@ function delayLabel(minutes: number) {
   return `${minutes} minutos`;
 }
 
+function mailboxStatus(mailbox: CampaignDetail["availableMailboxes"][number]) {
+  if (mailbox.provider !== "google") return "Este fornecedor ainda não permite o envio de testes.";
+  if (mailbox.status !== "active") return "Conta desligada. Volta a ligá-la em Mailboxes.";
+  if (!mailbox.sendEnabled) return "Envio desativado para esta conta.";
+  if (mailbox.ready) return "Pronta para envio.";
+  if (!mailbox.dnsCheckedAt) return "DNS ainda sem verificação.";
+  if (Date.now() - new Date(mailbox.dnsCheckedAt).getTime() >= 86_400_000) return `Última verificação DNS em ${formatDateTime(mailbox.dnsCheckedAt)}; é preciso renovar.`;
+  return "A última verificação DNS não passou. Revê os registos antes de enviar.";
+}
+
 export function CampaignSequenceSection({ campaign, canManage, canTest }: { campaign: CampaignDetail; canManage: boolean; canTest: boolean }) {
+  const queryClient = useQueryClient();
   const saved = useMemo(() => toDraft(campaign.sequence), [campaign.sequence]);
   const [draft, setDraft] = useState<CampaignStepDraft[]>(saved);
   const [editing, setEditing] = useState(false);
   const [testTarget, setTestTarget] = useState<{ stepId: string; variantId: string; subject: string } | null>(null);
   const [search, setSearch] = useState("");
+  const [committedSearch, setCommittedSearch] = useState("");
   const [contactId, setContactId] = useState("");
   const [mailboxId, setMailboxId] = useState("");
   const [confirmed, setConfirmed] = useState(false);
@@ -40,20 +52,27 @@ export function CampaignSequenceSection({ campaign, canManage, canTest }: { camp
   const save = useSaveCampaignSteps(campaign.id);
   const test = useQueueCampaignMessageTest(campaign.id);
   const messageTests = useCampaignMessageTests(campaign.id, canTest);
-  const { leads } = useCRM();
+  const contacts = useMessageTestContacts(committedSearch, Boolean(testTarget));
+  const settings = useSettings(Boolean(testTarget));
+  const dnsCheck = useMailboxAction();
   const eligibility = useEligibility(contactId ? [contactId] : []);
-  const selectedLead = leads.find((lead) => lead.id === contactId);
-  const contactEligible = Boolean(eligibility.data?.items[0]?.eligible && selectedLead && !selectedLead.optout);
-  const readyMailboxes = campaign.availableMailboxes.filter((item) => item.selected && item.ready);
-  const choices = useMemo(() => {
-    const needle = search.trim().toLocaleLowerCase("pt-PT");
-    if (needle.length < 2) return [];
-    return leads.filter((lead) => `${lead.nome} ${lead.email} ${lead.empresa}`.toLocaleLowerCase("pt-PT").includes(needle)).slice(0, 30);
-  }, [leads, search]);
+  const choices = contacts.data?.items ?? [];
+  const selectedLead = choices.find((lead) => lead.id === contactId);
+  const contactEligible = Boolean(eligibility.data?.items.find((item) => item.contactId === contactId)?.eligible && selectedLead);
+  const selectedMailboxes = campaign.availableMailboxes.filter((item) => item.selected);
+  const readyMailboxes = selectedMailboxes.filter((item) => item.ready);
+  const outboundReady = Boolean(settings.data?.outboundEnabled);
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
   const canEdit = canManage && campaign.status === "draft";
 
   useEffect(() => { setDraft(saved); }, [saved]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setCommittedSearch(search.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+  useEffect(() => {
+    if (testTarget && readyMailboxes.length && !readyMailboxes.some((item) => item.id === mailboxId)) setMailboxId(readyMailboxes[0].id);
+  }, [mailboxId, readyMailboxes, testTarget]);
 
   function changeStep(index: number, update: (step: CampaignStepDraft) => CampaignStepDraft) {
     setDraft((current) => current.map((step, at) => at === index ? update(step) : step));
@@ -73,14 +92,15 @@ export function CampaignSequenceSection({ campaign, canManage, canTest }: { camp
   }
 
   function openTest(stepId: string, variantId: string, subject: string) {
+    void queryClient.invalidateQueries({ queryKey: outreachKeys.campaign(campaign.id) });
     setTestTarget({ stepId, variantId, subject });
-    setSearch(""); setContactId(""); setMailboxId(readyMailboxes[0]?.id ?? "");
+    setSearch(""); setCommittedSearch(""); setContactId(""); setMailboxId(readyMailboxes[0]?.id ?? "");
     setConfirmed(false); setTestCampaignId(""); setTestKey(crypto.randomUUID()); test.reset();
   }
 
   async function sendTest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!testTarget || !contactEligible || !confirmed || !mailboxId) return;
+    if (!testTarget || !contactEligible || !confirmed || !mailboxId || !outboundReady) return;
     try {
       const result = await test.mutateAsync({ stepId: testTarget.stepId, variantId: testTarget.variantId, contactId, mailboxId, idempotencyKey: testKey });
       setTestCampaignId(result.id);
@@ -118,15 +138,21 @@ export function CampaignSequenceSection({ campaign, canManage, canTest }: { camp
     <ModuleDialog open={Boolean(testTarget)} onClose={() => { if (!test.isPending) setTestTarget(null); }} title="Testar envio da mensagem" description="Envia um email real a um contacto selecionado. O teste usa uma campanha individual e respeita os bloqueios de envio.">
       {testCampaignId ? <div className="outreach-test-result" role="status"><strong>Teste colocado em fila</strong><p>O worker enviará dentro da janela e quota disponíveis. A aceitação pelo Gmail não confirma chegada à caixa de entrada.</p><Link to="/outreach/campanhas/$campaignId" params={{ campaignId: testCampaignId }}>Ver estado do teste</Link></div> : <form className="outreach-form" onSubmit={(event) => void sendTest(event)}>
         <p><strong>Mensagem:</strong> {testTarget?.subject}</p>
-        <label>Pesquisar lead de teste<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Nome ou email (mínimo 2 letras)" /></label>
-        <label>Destinatário<select required size={Math.min(6, Math.max(2, choices.length + 1))} value={contactId} onChange={(event) => { setContactId(event.target.value); setTestKey(crypto.randomUUID()); }}><option value="">Seleciona uma lead…</option>{choices.map((lead) => <option key={lead.id} value={lead.id}>{lead.nome} · {lead.email || "sem email"} · {lead.empresa}</option>)}</select></label>
+        <label>Pesquisar contacto de teste<input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setContactId(""); }} placeholder="Nome, email ou empresa" /></label>
+        <label>Destinatário<select required value={contactId} disabled={contacts.isLoading || contacts.isError || !choices.length} onChange={(event) => { setContactId(event.target.value); setTestKey(crypto.randomUUID()); }}><option value="">{contacts.isLoading ? "A carregar contactos do CRM…" : choices.length ? "Seleciona um contacto…" : "Nenhum contacto encontrado"}</option>{choices.map((lead) => <option key={lead.id} value={lead.id}>{lead.name} · {lead.email} · {lead.companyName}</option>)}</select></label>
+        {contacts.isError ? <p className="outreach-inline-error" role="alert">Não foi possível consultar os contactos do CRM. {contacts.error instanceof Error ? contacts.error.message : "Tenta novamente."}</p> : null}
+        {!contacts.isLoading && !contacts.isError ? <p className="outreach-field-help">A mostrar até 30 contactos reais. Pesquisa para encontrar outro contacto.</p> : null}
         {contactId && eligibility.isLoading ? <p className="outreach-field-help">A verificar elegibilidade…</p> : null}
-        {contactId && !contactEligible && !eligibility.isLoading ? <p className="outreach-inline-error" role="alert">Esta lead não está apta para o teste: {(eligibility.data?.items[0]?.reasons ?? ["sem verificação disponível"]).join(" · ")}.</p> : null}
-        <label>Remetente<select required value={mailboxId} onChange={(event) => { setMailboxId(event.target.value); setTestKey(crypto.randomUUID()); }}><option value="">Seleciona uma mailbox pronta…</option>{readyMailboxes.map((mailbox) => <option key={mailbox.id} value={mailbox.id}>{mailbox.displayName || mailbox.email} · {mailbox.email}</option>)}</select></label>
-        {!readyMailboxes.length ? <p className="outreach-inline-error">Seleciona e prepara uma mailbox na secção acima antes de testar.</p> : null}
+        {contactId && eligibility.isError ? <p className="outreach-inline-error" role="alert">Não foi possível confirmar a elegibilidade. {eligibility.error instanceof Error ? eligibility.error.message : "Tenta novamente."}</p> : null}
+        {contactId && !contactEligible && !eligibility.isLoading && !eligibility.isError ? <p className="outreach-inline-error" role="alert">Este contacto não está apto para o teste: {(eligibility.data?.items.find((item) => item.contactId === contactId)?.reasons ?? ["sem verificação disponível"]).join(" · ")}.</p> : null}
+        <label>Remetente<select required value={mailboxId} disabled={!readyMailboxes.length} onChange={(event) => { setMailboxId(event.target.value); setTestKey(crypto.randomUUID()); }}><option value="">Seleciona uma mailbox pronta…</option>{selectedMailboxes.map((mailbox) => <option key={mailbox.id} value={mailbox.id} disabled={!mailbox.ready}>{mailbox.displayName || mailbox.email} · {mailbox.email}{!mailbox.ready ? ` · ${mailbox.status !== "active" ? "desligada" : !mailbox.sendEnabled ? "envio desativado" : "DNS por rever"}` : ""}</option>)}</select></label>
+        {!selectedMailboxes.length ? <p className="outreach-inline-error">Não há mailboxes selecionadas nesta campanha. Seleciona uma na secção acima.</p> : null}
+        {selectedMailboxes.length ? <div className="outreach-test-mailbox-list"><strong>Estado das mailboxes desta campanha</strong>{selectedMailboxes.map((mailbox) => <div className="outreach-test-mailbox-status" key={mailbox.id}><span><strong>{mailbox.email}</strong><small>{mailboxStatus(mailbox)}</small></span>{mailbox.provider === "google" && mailbox.status === "active" && mailbox.sendEnabled && !mailbox.dnsReady ? <Button type="button" variant="secondary" disabled={dnsCheck.isPending} onClick={() => dnsCheck.mutate({ id: mailbox.id, action: "dns" })}>{dnsCheck.isPending && dnsCheck.variables?.id === mailbox.id ? "A verificar…" : "Rever DNS"}</Button> : null}</div>)}</div> : null}
+        {dnsCheck.isError ? <p className="outreach-inline-error" role="alert">{dnsCheck.error instanceof Error ? dnsCheck.error.message : "Não foi possível verificar o DNS."}</p> : null}
+        {settings.isLoading ? <p className="outreach-field-help">A consultar o estado do envio…</p> : settings.isError ? <p className="outreach-inline-error" role="alert">Não foi possível consultar o estado do envio. {settings.error instanceof Error ? settings.error.message : "Tenta novamente."}</p> : !outboundReady ? <p className="outreach-inline-error" role="alert">O envio global de Outreach está desligado. O teste só pode ser enviado quando a operação voltar a estar ativa.</p> : null}
         <label className="outreach-check-row"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />Confirmo que quero enviar esta mensagem real para {selectedLead?.email || "a lead selecionada"}.</label>
         {test.isError ? <p className="outreach-inline-error" role="alert">{test.error instanceof Error ? test.error.message : "Não foi possível colocar o teste em fila."}</p> : null}
-        <footer><Button type="button" variant="secondary" onClick={() => setTestTarget(null)}>Cancelar</Button><Button type="submit" disabled={!contactEligible || !confirmed || !mailboxId || test.isPending}>{test.isPending ? "A validar…" : "Enviar teste"}</Button></footer>
+        <footer><Button type="button" variant="secondary" onClick={() => setTestTarget(null)}>Cancelar</Button><Button type="submit" disabled={!contactEligible || !confirmed || !mailboxId || !outboundReady || test.isPending}>{test.isPending ? "A validar…" : "Enviar teste"}</Button></footer>
       </form>}
     </ModuleDialog>
   </section>;

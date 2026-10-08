@@ -27,6 +27,11 @@ describe("verification evidence API", () => {
     expect(route?.route.capability).toBe("outreach.campaign.launch");
     expect(route?.route.public).toBe(false);
   });
+  it("restricts message test contact search to campaign managers", () => {
+    const route = buildRouter().match("GET", "/api/outreach/v1/message-test-contacts");
+    expect(route?.route.capability).toBe("outreach.campaign.manage");
+    expect(route?.route.public).toBe(false);
+  });
   it("exposes the attestation workflow only through the admin capability", () => {
     const match = buildRouter().match("POST", "/api/outreach/v1/verifications/evidence");
     expect(match?.route.capability).toBe("outreach.admin");
