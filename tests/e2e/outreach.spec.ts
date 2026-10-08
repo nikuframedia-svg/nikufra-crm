@@ -58,7 +58,7 @@ const capabilities = [
   "outreach.admin",
 ];
 
-async function mockOutreachApi(page: Page, testReady = false, verification: "valid" | "unknown" = "valid", staleDns = false) {
+async function mockOutreachApi(page: Page, testReady = false, verification: "valid" | "unknown" | "basis_missing" = "valid", staleDns = false) {
   let selectedMailboxIds: string[] = testReady ? [mailbox.id] : [];
   let dnsReady = testReady && !staleDns;
   let audienceIds: string[] = [];
@@ -88,7 +88,7 @@ async function mockOutreachApi(page: Page, testReady = false, verification: "val
     else if (path === "/campaigns/campaign-3") data = { ...campaign, id: "campaign-3", name: "Nova campanha", recipientCount: 0, mailboxIds: [], audienceIds: [], availableMailboxes: [], steps: [], recipientCounts: [], readiness: { ready: false, activeStepVariantCount: 0, eligibleRecipientCount: 0, selectedMailboxCount: 0, readyMailboxCount: 0 }, blockers: ["Seleciona destinatários e mailbox."] };
     else if (path === "/campaigns/campaign-1") data = { ...campaign, audienceIds, mailboxIds: selectedMailboxIds, availableMailboxes: [{ id: mailbox.id, email: mailbox.email, displayName: mailbox.displayName, provider: mailbox.provider, status: mailbox.status, sendEnabled: testReady, dnsReady, dnsCheckedAt: "2026-09-30T14:00:00Z", ready: dnsReady, selected: selectedMailboxIds.includes(mailbox.id) }], readiness: { ready: false, activeStepVariantCount: campaignSteps.length, eligibleRecipientCount: 14, selectedMailboxCount: selectedMailboxIds.length, readyMailboxCount: dnsReady ? selectedMailboxIds.length : 0 }, blockers: selectedMailboxIds.length ? ["A mailbox selecionada ainda não está pronta."] : ["Seleciona pelo menos uma mailbox para a campanha."], steps: campaignSteps, recipientCounts: [{ status: "eligible", count: 14 }], stopCompanyOnReply: true, sendDays: [1, 2, 3, 4, 5], sendWindowStart: "09:00", sendWindowEnd: "17:00" };
     else if (path === "/audiences") data = { items: [{ id: "audience-1", name: "Fabricantes", description: "Contactos CRM", memberCount: 14, eligibleCount: 12, createdAt: "2026-09-29T10:00:00Z" }] };
-    else if (path === "/audiences/eligibility") data = { items: (url.searchParams.get("ids") ?? "").split(",").filter(Boolean).map((contactId) => ({ contactId, eligible: verification === "valid", reasons: verification === "valid" ? [] : ["verification_missing"], verification, suppressed: false })) };
+    else if (path === "/audiences/eligibility") data = { items: (url.searchParams.get("ids") ?? "").split(",").filter(Boolean).map((contactId) => ({ contactId, eligible: verification === "valid", reasons: verification === "valid" ? [] : [verification === "basis_missing" ? "lawful_basis_missing" : "verification_missing"], verification: verification === "basis_missing" ? "valid" : verification, suppressed: false })) };
     else if (path === "/mailboxes") data = { items: [mailbox] };
     else if (path === `/mailboxes/${mailbox.id}/dns` && request.method() === "POST") { dnsReady = true; data = { spf: { status: "pass" }, dkim: { status: "pass" }, dmarc: { status: "pass" }, mx: { status: "pass" } }; }
     else if (path === "/threads") data = { items: [url.searchParams.get("page") === "2" ? secondThread : thread], page: { page: Number(url.searchParams.get("page") ?? 1), pageSize: Number(url.searchParams.get("pageSize") ?? 25), total: 26 } };
@@ -103,7 +103,7 @@ async function mockOutreachApi(page: Page, testReady = false, verification: "val
   });
 }
 
-async function openRoute(page: Page, path: string, theme: "light" | "dark" = "light", testReady = false, verification: "valid" | "unknown" = "valid", staleDns = false) {
+async function openRoute(page: Page, path: string, theme: "light" | "dark" = "light", testReady = false, verification: "valid" | "unknown" | "basis_missing" = "valid", staleDns = false) {
   await page.addInitScript((selectedTheme) => {
     localStorage.setItem("nikufra:theme", selectedTheme);
     localStorage.setItem("nikufra:v2:leads", JSON.stringify([{
@@ -333,7 +333,7 @@ test("message test asks for an eligible lead and queues one real send", async ({
   expect(Number.parseFloat(await dialog.locator("h2").evaluate((element) => getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(21);
   await page.getByRole("searchbox", { name: "Pesquisar destinatário da campanha" }).fill("Contacto de Teste");
   await page.locator(".outreach-dialog").getByRole("combobox", { name: "Destinatário", exact: true }).selectOption("44444444-4444-4444-8444-444444444444");
-  await page.getByRole("checkbox", { name: /Confirmo que quero enviar/ }).check();
+  await page.getByRole("checkbox", { name: /Confirmo que posso contactar/ }).check();
   const requestPromise = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/campaigns/campaign-1/message-tests"));
   await page.getByRole("button", { name: "Enviar teste" }).click();
   const request = await requestPromise;
@@ -341,6 +341,17 @@ test("message test asks for an eligible lead and queues one real send", async ({
   expect(request.postDataJSON()).toMatchObject({ stepId: "step-1", variantId: "variant-1", contactId: "44444444-4444-4444-8444-444444444444", mailboxId: mailbox.id });
   await expect(page.getByRole("status")).toContainText("Teste colocado em fila");
   await expect(page.locator(".outreach-message-tests")).toContainText("contacto@example.invalid");
+});
+
+test("message test warns about missing legal record and allows a confirmed send", async ({ page }) => {
+  await openRoute(page, "/outreach/campanhas/campaign-1", "light", true, "basis_missing");
+  await page.locator(".outreach-campaign-sequence").getByRole("button", { name: "Testar envio" }).click();
+  await page.locator(".outreach-dialog").getByRole("combobox", { name: "Destinatário", exact: true })
+    .selectOption("44444444-4444-4444-8444-444444444444");
+  await expect(page.locator(".outreach-inline-warning")).toContainText("fundamento legal");
+  await expect(page.getByRole("button", { name: "Enviar teste" })).toBeDisabled();
+  await page.getByRole("checkbox", { name: /Confirmo que posso contactar/ }).check();
+  await expect(page.getByRole("button", { name: "Enviar teste" })).toBeEnabled();
 });
 
 test("message test refreshes stale DNS and shows the real CRM contact", async ({ page }) => {

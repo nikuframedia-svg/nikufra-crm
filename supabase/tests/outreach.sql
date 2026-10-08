@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap;
-select plan(191);
+select plan(193);
 
 -- Self-contained principals. The first @nikufra.ai account becomes the local
 -- test admin; invitations exercise the same onboarding path as production.
@@ -863,6 +863,46 @@ select ok(
   ) -> 'reasons') ? 'lawful_basis_missing',
   'LIA expirada bloqueia o envio mesmo com os restantes gates verdes'
 );
+insert into public.outreach_campaigns(
+  id, nome, status, created_by, timezone, send_days,
+  send_window_start, send_window_end, gap_minutes,
+  test_source_campaign_id, test_idempotency_key
+) values (
+  'f0000000-0000-4000-8000-000000000004', 'Mensagem individual', 'running',
+  'a0000000-0000-4000-8000-000000000001', 'UTC',
+  array[0,1,2,3,4,5,6]::smallint[], '00:00', '23:59:59', 0,
+  'f0000000-0000-4000-8000-000000000001', 'sql-message-test'
+);
+insert into public.outreach_recipients(
+  id, campaign_id, contact_id, company_id, email_snapshot, status, eligibility_reasons
+) values (
+  'f2000000-0000-4000-8000-000000000004', 'f0000000-0000-4000-8000-000000000004',
+  'c0000000-0000-4000-8000-000000000002', 'b0000000-0000-4000-8000-000000000002',
+  'two@two.example', 'eligible', array['lawful_basis_missing']::text[]
+);
+insert into public.outreach_campaign_mailboxes(campaign_id, mailbox_id, selected_by)
+values (
+  'f0000000-0000-4000-8000-000000000004',
+  'e0000000-0000-4000-8000-000000000001',
+  'a0000000-0000-4000-8000-000000000001'
+);
+select is(
+  (private.outreach_recipient_eligibility(
+    'f2000000-0000-4000-8000-000000000004',
+    'e0000000-0000-4000-8000-000000000001'
+  ) -> 'reasons') ? 'lawful_basis_missing',
+  false,
+  'teste individual mostra a ausência de fundamento como aviso, sem bloqueio no gate final'
+);
+select is(
+  (private.outreach_recipient_eligibility(
+    'f2000000-0000-4000-8000-000000000004',
+    'e0000000-0000-4000-8000-000000000001'
+  ) ->> 'eligible')::boolean,
+  true,
+  'teste individual fica elegível quando não há outros bloqueios'
+);
+delete from public.outreach_campaigns where id='f0000000-0000-4000-8000-000000000004';
 update public.contactos
 set outreach_legitimate_interest_expires_at = now() + interval '1 year'
 where id = 'c0000000-0000-4000-8000-000000000002';
