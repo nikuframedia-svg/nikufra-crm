@@ -267,9 +267,12 @@ export async function queueCampaignMessageTest(actor: Actor, sourceCampaignId: s
       for share`, [sourceCampaignId, input.contactId]);
     if (!member.rows[0]) throw new HttpError(409, "test_contact_not_in_campaign", "O destinatário tem de fazer parte da lista desta campanha.");
     const [candidate] = await contactEligibility([input.contactId], client);
-    if (!candidate?.eligible) {
-      throw new HttpError(409, "test_contact_ineligible", "O contacto de teste não está elegível para envio.", { reasons: candidate?.reasons ?? ["contact_not_found"] });
+    const testWarnings = candidate?.reasons.filter((reason) => reason === "lawful_basis_missing") ?? [];
+    const testBlockers = candidate?.reasons.filter((reason) => reason !== "lawful_basis_missing") ?? ["contact_not_found"];
+    if (!candidate || testBlockers.length) {
+      throw new HttpError(409, "test_contact_ineligible", "O contacto de teste não está elegível para envio.", { reasons: testBlockers });
     }
+    const testCandidate = { ...candidate, eligible: true };
     const source = await client.query<{
       name: string; send_days: number[]; send_window_start: string; send_window_end: string;
       timezone: string; subject: string; body: string;
@@ -306,8 +309,8 @@ export async function queueCampaignMessageTest(actor: Actor, sourceCampaignId: s
     await insertCampaignSteps(client, testCampaignId, [{ kind: "email", delayMinutes: 0, replyToPrevious: false, active: true, variants: [{ name: "A", weight: 100, subject: template.subject, body: template.body, active: true }] }]);
     await replaceCampaignMailboxes(client, testCampaignId, [input.mailboxId], actor.id);
     const audience = await client.query<{ id: string }>(`insert into public.outreach_audiences(nome,descricao,created_by) values($1,$2,$3) returning id`, [`Teste · ${candidate.contactName}`.slice(0, 180), "Destinatário único de teste de mensagem.", actor.id]);
-    await client.query(`insert into public.outreach_audience_members(audience_id,contact_id,eligibility_status,eligibility_reasons,assessed_at,added_by) values($1,$2,'eligible','{}',now(),$3)`, [audience.rows[0]!.id, input.contactId, actor.id]);
-    await materializeRecipients(client, audience.rows[0]!.id, testCampaignId, [candidate]);
+    await client.query(`insert into public.outreach_audience_members(audience_id,contact_id,eligibility_status,eligibility_reasons,assessed_at,added_by) values($1,$2,'eligible',$3,now(),$4)`, [audience.rows[0]!.id, input.contactId, testWarnings, actor.id]);
+    await materializeRecipients(client, audience.rows[0]!.id, testCampaignId, [testCandidate]);
     const readiness = await campaignReadiness(testCampaignId, client);
     if (!readiness.ready) throw new HttpError(409, "test_not_ready", "O teste precisa de uma mailbox pronta e um destinatário elegível.", readiness);
     await client.query(`update public.outreach_campaigns set status='running',launched_at=now() where id=$1`, [testCampaignId]);
@@ -319,7 +322,7 @@ export async function queueCampaignMessageTest(actor: Actor, sourceCampaignId: s
     await materializeInitialJobs(client, testCampaignId);
     await audit(actor.id, "campaign.message_test_queued", "campaign", sourceCampaignId, {
       testCampaignId, stepId: input.stepId, variantId: input.variantId,
-      contactId: input.contactId, mailboxId: input.mailboxId,
+      contactId: input.contactId, mailboxId: input.mailboxId, warnings: testWarnings,
     }, client);
     return { id: testCampaignId, sourceCampaignId, queued: true, duplicate: false };
   }, "serializable");

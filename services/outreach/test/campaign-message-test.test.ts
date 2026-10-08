@@ -91,6 +91,60 @@ describe("single-message test campaign", () => {
     expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes("insert into public.outreach_campaigns"))).toBe(false);
   });
 
+  it("queues a test with a visible audit warning when only the legal record is missing", async () => {
+    mocks.query.mockImplementation(async (sqlValue: unknown) => {
+      const sql = String(sqlValue);
+      if (sql.includes("from public.contactos c join public.empresas")) return { rows: [{
+        id: contactId, email: "lead@example.com", optout: false,
+        outreach_legal_basis: null, outreach_legal_basis_recorded_at: null,
+        outreach_legal_basis_recorded_by: null,
+        empresa_id: companyId, contact_name: "Lead", company_name: "Example", cargo: null,
+        telefone: null, linkedin_url: null, vertical: "industrial", pais: "PT", cidade: null,
+        website: null, verification_status: "valid", suppressed: false,
+      }] };
+      if (sql.includes("where test_idempotency_key=$1")) return { rows: [] };
+      if (sql.includes("from public.outreach_recipients r") && sql.includes("r.campaign_id=$1 and r.contact_id=$2")) return { rows: [{ id: id("111") }] };
+      if (sql.includes("from public.outreach_campaigns c") && sql.includes("join public.outreach_campaign_steps")) return { rows: [{ name: "Source", send_days: [1, 2, 3, 4, 5], send_window_start: "09:00", send_window_end: "17:00", timezone: "Europe/Lisbon", subject: "Olá", body: "Mensagem" }] };
+      if (sql.includes("from public.outreach_system_state")) return { rows: [{ send_enabled: true, mode: "canary" }] };
+      if (sql.includes("insert into public.outreach_campaigns")) return { rows: [{ id: testCampaignId }] };
+      if (sql.includes("insert into public.outreach_campaign_steps")) return { rows: [{ id: id("108") }] };
+      if (sql.includes("select id from public.outreach_mailboxes")) return { rows: [{ id: mailboxId }] };
+      if (sql.includes("insert into public.outreach_audiences")) return { rows: [{ id: audienceId }] };
+      if (sql.includes("select id from public.outreach_campaigns where id=$1 and status")) return { rows: [{ id: testCampaignId }] };
+      if (sql.includes("select id from public.outreach_audience_members")) return { rows: [{ id: id("109") }] };
+      if (sql.includes("select id from public.outreach_recipients")) return { rows: [{ id: id("110") }] };
+      if (sql.includes("private.outreach_recipient_eligibility")) return { rows: [{ decision: { eligible: true, reasons: [] } }] };
+      if (sql.includes("count(*)::text count from public.outreach_jobs")) return { rows: [{ count: "1" }] };
+      return { rows: [], rowCount: 1 };
+    });
+
+    await expect(queueCampaignMessageTest(admin, sourceCampaignId, request, "missing-basis-test")).resolves.toMatchObject({ queued: true });
+    expect(mocks.query.mock.calls.some(([sql, params]) => String(sql).includes("insert into public.outreach_recipients")
+      && Array.isArray(params) && params.includes("eligible") && params.some((value) => Array.isArray(value) && value.includes("lawful_basis_missing")))).toBe(true);
+    expect(mocks.audit).toHaveBeenCalledWith(admin.id, "campaign.message_test_queued", "campaign", sourceCampaignId,
+      expect.objectContaining({ warnings: ["lawful_basis_missing"] }), expect.anything());
+  });
+
+  it("still blocks an opted-out recipient before creating a test campaign", async () => {
+    mocks.query.mockImplementation(async (sqlValue: unknown) => {
+      const sql = String(sqlValue);
+      if (sql.includes("where test_idempotency_key=$1")) return { rows: [] };
+      if (sql.includes("from public.outreach_recipients r") && sql.includes("r.campaign_id=$1 and r.contact_id=$2")) return { rows: [{ id: id("111") }] };
+      if (sql.includes("from public.contactos c join public.empresas")) return { rows: [{
+        id: contactId, email: "lead@example.com", optout: true,
+        outreach_legal_basis: null, outreach_legal_basis_recorded_at: null,
+        outreach_legal_basis_recorded_by: null, empresa_id: companyId,
+        contact_name: "Lead", company_name: "Example", cargo: null, telefone: null,
+        linkedin_url: null, vertical: "industrial", pais: "PT", cidade: null,
+        website: null, verification_status: "valid", suppressed: false,
+      }] };
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    await expect(queueCampaignMessageTest(admin, sourceCampaignId, request, "optout-test"))
+      .rejects.toMatchObject({ status: 409, code: "test_contact_ineligible", details: { reasons: ["contact_optout"] } });
+    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes("insert into public.outreach_campaigns"))).toBe(false);
+  });
+
   it("rejects a contact outside the source campaign before preparing a send", async () => {
     mocks.query.mockImplementation(async (sqlValue: unknown) => {
       const sql = String(sqlValue);
