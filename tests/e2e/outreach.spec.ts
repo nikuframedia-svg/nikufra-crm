@@ -58,7 +58,7 @@ const capabilities = [
   "outreach.admin",
 ];
 
-async function mockOutreachApi(page: Page, testReady = false) {
+async function mockOutreachApi(page: Page, testReady = false, verification: "valid" | "unknown" = "valid") {
   let selectedMailboxIds: string[] = testReady ? [mailbox.id] : [];
   let audienceIds: string[] = [];
   let messageTests: Array<{ id: string; createdAt: string; status: string; recipientEmail: string; mailboxEmail: string; sentCount: number; jobStatus: string; lastError: null }> = [];
@@ -86,7 +86,7 @@ async function mockOutreachApi(page: Page, testReady = false) {
     else if (path === "/campaigns/campaign-3") data = { ...campaign, id: "campaign-3", name: "Nova campanha", recipientCount: 0, mailboxIds: [], audienceIds: [], availableMailboxes: [], steps: [], recipientCounts: [], readiness: { ready: false, activeStepVariantCount: 0, eligibleRecipientCount: 0, selectedMailboxCount: 0, readyMailboxCount: 0 }, blockers: ["Seleciona destinatários e mailbox."] };
     else if (path === "/campaigns/campaign-1") data = { ...campaign, audienceIds, mailboxIds: selectedMailboxIds, availableMailboxes: [{ id: mailbox.id, email: mailbox.email, displayName: mailbox.displayName, provider: mailbox.provider, status: mailbox.status, sendEnabled: testReady, dnsReady: true, dnsCheckedAt: "2026-09-30T14:00:00Z", ready: testReady, selected: selectedMailboxIds.includes(mailbox.id) }], readiness: { ready: false, activeStepVariantCount: campaignSteps.length, eligibleRecipientCount: 14, selectedMailboxCount: selectedMailboxIds.length, readyMailboxCount: testReady ? selectedMailboxIds.length : 0 }, blockers: selectedMailboxIds.length ? ["A mailbox selecionada ainda não está pronta."] : ["Seleciona pelo menos uma mailbox para a campanha."], steps: campaignSteps, recipientCounts: [{ status: "eligible", count: 14 }], stopCompanyOnReply: true, sendDays: [1, 2, 3, 4, 5], sendWindowStart: "09:00", sendWindowEnd: "17:00" };
     else if (path === "/audiences") data = { items: [{ id: "audience-1", name: "Fabricantes", description: "Contactos CRM", memberCount: 14, eligibleCount: 12, createdAt: "2026-09-29T10:00:00Z" }] };
-    else if (path === "/audiences/eligibility") data = { items: (url.searchParams.get("ids") ?? "").split(",").filter(Boolean).map((contactId) => ({ contactId, eligible: true, reasons: [] })) };
+    else if (path === "/audiences/eligibility") data = { items: (url.searchParams.get("ids") ?? "").split(",").filter(Boolean).map((contactId) => ({ contactId, eligible: verification === "valid", reasons: verification === "valid" ? [] : ["verification_missing"], verification, suppressed: false })) };
     else if (path === "/mailboxes") data = { items: [mailbox] };
     else if (path === "/threads") data = { items: [url.searchParams.get("page") === "2" ? secondThread : thread], page: { page: Number(url.searchParams.get("page") ?? 1), pageSize: Number(url.searchParams.get("pageSize") ?? 25), total: 26 } };
     else if (path === "/threads/thread-1") data = { ...thread, messages: [{ id: "message-1", direction: "inbound", subject: thread.subject, body: "Podemos falar na próxima semana?", occurredAt: thread.lastMessageAt, status: "received" }] };
@@ -100,7 +100,7 @@ async function mockOutreachApi(page: Page, testReady = false) {
   });
 }
 
-async function openRoute(page: Page, path: string, theme: "light" | "dark" = "light", testReady = false) {
+async function openRoute(page: Page, path: string, theme: "light" | "dark" = "light", testReady = false, verification: "valid" | "unknown" = "valid") {
   await page.addInitScript((selectedTheme) => {
     localStorage.setItem("nikufra:theme", selectedTheme);
     localStorage.setItem("nikufra:v2:leads", JSON.stringify([{
@@ -135,7 +135,7 @@ async function openRoute(page: Page, path: string, theme: "light" | "dark" = "li
       dataFechoPrevista: "2026-12-01",
     }]));
   }, theme);
-  await mockOutreachApi(page, testReady);
+  await mockOutreachApi(page, testReady, verification);
   await page.goto(path);
   await expect(page.locator(".outreach-module")).toBeVisible();
   await expect(page.locator(".outreach-loading")).toHaveCount(0);
@@ -180,6 +180,27 @@ for (const path of routes) {
     await expectNoCriticalAccessibilityViolations(page);
   });
 }
+
+test("an inconclusive contact can join an audience only after confirmation", async ({ page }) => {
+  await openRoute(page, "/outreach/audiencias", "light", false, "unknown");
+  const contact = page.getByRole("checkbox", { name: "Adicionar Contacto de Teste a audiência" });
+  await expect(contact).toBeEnabled();
+  await contact.check();
+  await page.getByRole("button", { name: "Adicionar 1 a audiência ou campanha" }).click();
+  await page.getByRole("button", { name: "Adicionar contactos", exact: true }).click();
+
+  const confirmation = page.getByRole("dialog", { name: "Tem a certeza?" });
+  await expect(confirmation).toContainText("1 dos 1 contactos selecionados têm verificação inconclusiva ou pendente");
+  await expectNoCriticalAccessibilityViolations(page);
+  await confirmation.getByRole("button", { name: "Voltar" }).click();
+  await expect(page.getByRole("dialog", { name: "Adicionar contactos" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Adicionar contactos", exact: true }).click();
+  const requestPromise = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/audiences/audience-1/recipients"));
+  await page.getByRole("dialog", { name: "Tem a certeza?" }).getByRole("button", { name: "Confirmar e adicionar" }).click();
+  expect((await requestPromise).postDataJSON()).toEqual({ contactIds: ["11111111-1111-4111-8111-111111111111"] });
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});
 
 test("light and dark themes remain accessible", async ({ page }) => {
   await openRoute(page, "/outreach", "light");
