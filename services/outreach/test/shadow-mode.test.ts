@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const mocks = vi.hoisted(() => ({
   config: { outboundEnvEnabled: false, shadowMode: true },
@@ -78,9 +84,39 @@ describe("outbound shadow mode", () => {
 
     expect(control).toContain("set_env OUTREACH_SHADOW_MODE true");
     expect(control.match(/set_env OUTREACH_SHADOW_MODE false/g)).toHaveLength(2);
+    expect(control.match(/up -d --no-deps --force-recreate --wait outreach-api outreach-worker/g)).toHaveLength(3);
     expect(readiness).toContain('"${OUTREACH_SHADOW_MODE:-true}" == true');
     expect(readiness).toContain('"${OUTREACH_SHADOW_MODE:-true}" == false');
     expect(readiness).toContain('"${worker_shadow_mode}" == true');
     expect(readiness).toContain('"${worker_shadow_mode}" == false');
+  });
+
+  it("keeps the published image pinned when status loads a stale env tag", async () => {
+    const root = await mkdtemp(join(tmpdir(), "outreach-control-test-"));
+    const infra = join(root, "infra");
+    const bin = join(root, "bin");
+    const log = join(root, "docker-tags.log");
+    const releaseId = `${"a".repeat(40)}-123-1`;
+    try {
+      await Promise.all([mkdir(infra), mkdir(bin)]);
+      await copyFile(new URL("../../../infra/outreach-control.sh", import.meta.url), join(infra, "outreach-control.sh"));
+      await writeFile(join(root, ".release-id"), `${releaseId}\n`);
+      await writeFile(join(infra, ".env"), "OUTREACH_SEND_ENABLED=false\nOUTREACH_SHADOW_MODE=true\nOUTREACH_IMAGE_TAG=local\n");
+      const fakeDocker = join(bin, "docker");
+      await writeFile(fakeDocker, '#!/bin/sh\nprintf "%s\\n" "$OUTREACH_IMAGE_TAG" >> "$OUTREACH_TEST_LOG"\ncase "$*" in\n  *" exec -T db psql "*) echo "disabled:false" ;;\n  *" ps outreach-api outreach-worker"*) echo "mock containers" ;;\n  *) exit 1 ;;\nesac\n');
+      await chmod(fakeDocker, 0o755);
+
+      const result = await execFileAsync("bash", [join(infra, "outreach-control.sh"), "status"], {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, OUTREACH_TEST_LOG: log },
+      });
+
+      expect(result.stdout).toContain("db_mode=disabled:false");
+      expect((await readFile(log, "utf8")).trim().split("\n")).toEqual([
+        `release-${releaseId}`,
+        `release-${releaseId}`,
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
