@@ -8,6 +8,19 @@ COMPOSE=(docker compose --env-file "${ENV_FILE}" -f "${SCRIPT_DIR}/docker-compos
 [[ -f "${ENV_FILE}" ]] || { echo "Falta ${ENV_FILE}." >&2; exit 1; }
 action="${1:-status}"
 
+pin_release_image() {
+  local release_file="${SCRIPT_DIR}/../.release-id" release_id
+  [[ -f "${release_file}" && ! -L "${release_file}" ]] || return 0
+  release_id="$(< "${release_file}")"
+  [[ "${release_id}" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$ ]] || {
+    echo "Identidade da release inválida para tag Outreach." >&2
+    return 1
+  }
+  export OUTREACH_IMAGE_TAG="release-${release_id}"
+}
+
+pin_release_image
+
 set_env() {
   local key="$1" value="$2"
   if grep -qE "^${key}=" "${ENV_FILE}"; then
@@ -30,6 +43,7 @@ db_mode() {
 case "${action}" in
   status)
     set -a; source "${ENV_FILE}"; set +a
+    pin_release_image
     printf 'env_send_enabled=%s\nenv_shadow_mode=%s\ndb_mode=%s\n' \
       "${OUTREACH_SEND_ENABLED:-false}" "${OUTREACH_SHADOW_MODE:-true}" "$(db_mode)"
     "${COMPOSE[@]}" ps outreach-api outreach-worker
@@ -55,7 +69,7 @@ case "${action}" in
       echo "ERRO: o worker ficou PARADO e a API só pode arrancar com OUTREACH_SEND_ENABLED=false, mas a base não confirmou disabled. Recupera PostgreSQL e repete '$0 disable'; não reinicies o worker manualmente." >&2
       exit 1
     fi
-    "${COMPOSE[@]}" up -d --force-recreate --wait outreach-api outreach-worker
+    "${COMPOSE[@]}" up -d --no-deps --force-recreate --wait outreach-api outreach-worker
     [[ "$(db_mode)" == "disabled:false" ]] || { echo "ERRO: o hard gate persistido deixou de estar disabled:false." >&2; exit 1; }
     "${SCRIPT_DIR}/outreach-readiness.sh" --dark
     echo "Kill switch aplicado: outbound desligado; inbound e unsubscribe permanecem ativos."
@@ -71,7 +85,7 @@ from private.outreach_transition_system('canary', :'approver'::uuid, false, 'can
 SQL
     set_env OUTREACH_SEND_ENABLED true
     set_env OUTREACH_SHADOW_MODE false
-    "${COMPOSE[@]}" up -d --force-recreate outreach-api outreach-worker
+    "${COMPOSE[@]}" up -d --no-deps --force-recreate --wait outreach-api outreach-worker
     echo "Canary ativo apenas para a allowlist configurada."
     ;;
   live)
@@ -85,7 +99,7 @@ SQL
     [[ "$(db_mode)" == "live:true" ]] || { echo "A promoção foi recusada: o perfil não é um administrador CRM ativo." >&2; exit 1; }
     set_env OUTREACH_SEND_ENABLED true
     set_env OUTREACH_SHADOW_MODE false
-    "${COMPOSE[@]}" up -d --force-recreate outreach-api outreach-worker
+    "${COMPOSE[@]}" up -d --no-deps --force-recreate --wait outreach-api outreach-worker
     echo "Outreach promovido para live."
     ;;
   *)
