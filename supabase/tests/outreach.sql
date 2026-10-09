@@ -873,12 +873,12 @@ select ok(
 );
 insert into public.outreach_campaigns(
   id, nome, status, created_by, timezone, send_days,
-  send_window_start, send_window_end, gap_minutes,
+  send_window_start, send_window_end, daily_limit, gap_minutes,
   test_source_campaign_id, test_idempotency_key
 ) values (
   'f0000000-0000-4000-8000-000000000004', 'Mensagem individual', 'running',
   'a0000000-0000-4000-8000-000000000001', 'UTC',
-  array[0,1,2,3,4,5,6]::smallint[], '00:00', '23:59:59', 0,
+  array[0,1,2,3,4,5,6]::smallint[], '00:00', '23:59:59', 1, 0,
   'f0000000-0000-4000-8000-000000000001', 'sql-message-test'
 );
 insert into public.outreach_recipients(
