@@ -27,13 +27,20 @@ const mailboxId = id("105");
 const testCampaignId = id("106");
 const audienceId = id("107");
 const admin: Actor = { id: id("1"), email: "admin@nikufra.ai", name: "Admin", crmRole: "admin", outreachRole: "viewer", capabilities: new Set() };
-const request = { stepId, variantId, contactId, mailboxId };
+const request = { stepId, variantId, contactId, mailboxId, confirmed: true as const };
 const requestHash = createHash("sha256").update(JSON.stringify({ actorId: admin.id, sourceCampaignId, ...request })).digest("hex");
 
 describe("single-message test campaign", () => {
   beforeEach(() => {
     mocks.query.mockReset(); mocks.audit.mockReset(); mocks.readiness.mockReset();
     mocks.readiness.mockResolvedValue({ ready: true });
+  });
+
+  it("requires an explicit send confirmation before accessing the database", async () => {
+    const unconfirmed = { stepId, variantId, contactId, mailboxId };
+    await expect(queueCampaignMessageTest(admin, sourceCampaignId, unconfirmed, "unconfirmed-test"))
+      .rejects.toThrow();
+    expect(mocks.query).not.toHaveBeenCalled();
   });
 
   it("queues one ordinary guarded job without changing the source campaign", async () => {

@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap;
-select plan(193);
+select plan(195);
 
 -- Self-contained principals. The first @nikufra.ai account becomes the local
 -- test admin; invitations exercise the same onboarding path as production.
@@ -863,14 +863,22 @@ select ok(
   ) -> 'reasons') ? 'lawful_basis_missing',
   'LIA expirada bloqueia o envio mesmo com os restantes gates verdes'
 );
+delete from private.outreach_canary_allowlist where email='two@two.example';
+select ok(
+  (private.outreach_recipient_eligibility(
+    'f2000000-0000-4000-8000-000000000002',
+    'e0000000-0000-4000-8000-000000000001'
+  ) -> 'reasons') ? 'not_in_canary_allowlist',
+  'canary mantém campanhas normais limitadas à allowlist'
+);
 insert into public.outreach_campaigns(
   id, nome, status, created_by, timezone, send_days,
-  send_window_start, send_window_end, gap_minutes,
+  send_window_start, send_window_end, daily_limit, gap_minutes,
   test_source_campaign_id, test_idempotency_key
 ) values (
   'f0000000-0000-4000-8000-000000000004', 'Mensagem individual', 'running',
   'a0000000-0000-4000-8000-000000000001', 'UTC',
-  array[0,1,2,3,4,5,6]::smallint[], '00:00', '23:59:59', 0,
+  array[0,1,2,3,4,5,6]::smallint[], '00:00', '23:59:59', 1, 0,
   'f0000000-0000-4000-8000-000000000001', 'sql-message-test'
 );
 insert into public.outreach_recipients(
@@ -900,9 +908,26 @@ select is(
     'e0000000-0000-4000-8000-000000000001'
   ) ->> 'eligible')::boolean,
   true,
-  'teste individual fica elegível quando não há outros bloqueios'
+  'teste individual confirmado pode enviar fora da allowlist quando não há outros bloqueios'
 );
+insert into public.outreach_recipients(
+  id, campaign_id, contact_id, company_id, email_snapshot, status
+) values (
+  'f2000000-0000-4000-8000-000000000005', 'f0000000-0000-4000-8000-000000000004',
+  'c0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000001',
+  'one@one.example', 'eligible'
+);
+select ok(
+  (private.outreach_recipient_eligibility(
+    'f2000000-0000-4000-8000-000000000004',
+    'e0000000-0000-4000-8000-000000000001'
+  ) -> 'reasons') ? 'not_in_canary_allowlist',
+  'campanha de teste com mais de um destinatário não contorna a allowlist'
+);
+delete from public.outreach_recipients where id='f2000000-0000-4000-8000-000000000005';
 delete from public.outreach_campaigns where id='f0000000-0000-4000-8000-000000000004';
+insert into private.outreach_canary_allowlist(email, added_by)
+values ('two@two.example', 'a0000000-0000-4000-8000-000000000001');
 update public.contactos
 set outreach_legitimate_interest_expires_at = now() + interval '1 year'
 where id = 'c0000000-0000-4000-8000-000000000002';

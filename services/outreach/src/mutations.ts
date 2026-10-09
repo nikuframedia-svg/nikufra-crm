@@ -246,6 +246,7 @@ const messageTestSchema = z.object({
   variantId: uuid,
   contactId: uuid,
   mailboxId: uuid,
+  confirmed: z.literal(true),
 }).strict();
 
 export async function queueCampaignMessageTest(actor: Actor, sourceCampaignId: string, raw: unknown, idempotencyKey: string) {
@@ -318,7 +319,17 @@ export async function queueCampaignMessageTest(actor: Actor, sourceCampaignId: s
     const decision = await client.query<{ decision: { eligible?: boolean; reasons?: string[] } }>(`select private.outreach_recipient_eligibility($1,$2,now()) decision`, [recipient.rows[0]?.id, input.mailboxId]);
     const temporaryReasons = new Set(["outside_send_window", "daily_quota_reached", "mailbox_gap_not_elapsed"]);
     const blockers = (decision.rows[0]?.decision?.reasons ?? ["eligibility_unavailable"]).filter((reason) => !temporaryReasons.has(reason));
-    if (blockers.length) throw new HttpError(409, "test_contact_ineligible", "O teste foi bloqueado pelos controlos de envio.", { reasons: blockers });
+    if (blockers.length) {
+      const reasonLabels: Record<string, string> = {
+        suppressed: "o contacto pediu para não receber emails",
+        email_not_verified: "o endereço de email não tem verificação válida",
+        mailbox_not_sendable: "a mailbox escolhida não está pronta",
+        dns_not_ready: "o DNS da mailbox precisa de nova verificação",
+        daily_quota_reached: "a quota diária da mailbox foi atingida",
+        outbound_disabled: "o envio global está desligado",
+      };
+      throw new HttpError(409, "test_contact_ineligible", `Não foi possível preparar o teste: ${blockers.map((reason) => reasonLabels[reason] ?? reason).join(" · ")}.`, { reasons: blockers });
+    }
     await materializeInitialJobs(client, testCampaignId);
     await audit(actor.id, "campaign.message_test_queued", "campaign", sourceCampaignId, {
       testCampaignId, stepId: input.stepId, variantId: input.variantId,
