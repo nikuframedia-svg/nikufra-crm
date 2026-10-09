@@ -15,7 +15,7 @@ export function OutreachOverviewPage() {
 
     <section className={`outreach-mode-banner outreach-mode-banner--${data.sendMode}`}>
       <ShieldCheck size={19} />
-      <div><strong>{data.sendMode === "live" ? "Outbound em produção" : data.sendMode === "canary" ? "Canary controlado" : "Envios reais bloqueados"}</strong><p>{data.sendMode === "live" ? "A elegibilidade é revalidada imediatamente antes de cada submissão." : data.sendMode === "canary" ? "Apenas destinatários na allowlist podem receber mensagens." : "Inbound e reconciliação continuam ativos; nenhum job pode enviar."}</p></div>
+      <div><strong>{data.sendMode === "live" ? "Outbound em produção" : data.sendMode === "canary" ? "Canary controlado" : "Envios reais bloqueados"}</strong><p>{data.sendMode === "live" ? "A elegibilidade é revalidada imediatamente antes de cada submissão." : data.sendMode === "canary" ? "Campanhas normais usam a allowlist. Um teste individual confirmado pode contactar um destinatário da campanha, sujeito à quota e aos restantes controlos." : "Inbound e reconciliação continuam ativos; nenhum job pode enviar."}</p></div>
       <span>{data.outboundEnabled ? "Gate aberto" : "Kill switch ativo"}</span>
     </section>
 

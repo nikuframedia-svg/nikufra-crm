@@ -160,7 +160,7 @@ export function useCampaignRecipients(id: string, page = 1, enabled = true) {
 export function useQueueCampaignMessageTest(id: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ idempotencyKey, ...input }: { stepId: string; variantId: string; contactId: string; mailboxId: string; idempotencyKey: string }) => outreachRequest<{ id: string; queued: boolean; duplicate: boolean }>(`/campaigns/${encodeURIComponent(id)}/message-tests`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify(input) }),
+    mutationFn: ({ idempotencyKey, ...input }: { stepId: string; variantId: string; contactId: string; mailboxId: string; confirmed: true; idempotencyKey: string }) => outreachRequest<{ id: string; queued: boolean; duplicate: boolean }>(`/campaigns/${encodeURIComponent(id)}/message-tests`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify(input) }),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: outreachKeys.campaignMessageTests(id) }),
   });
 }

@@ -58,7 +58,7 @@ const capabilities = [
   "outreach.admin",
 ];
 
-async function mockOutreachApi(page: Page, testReady = false, verification: "valid" | "unknown" | "basis_missing" = "valid", staleDns = false) {
+async function mockOutreachApi(page: Page, testReady = false, verification: "valid" | "unknown" | "basis_missing" = "valid", staleDns = false, canary = false) {
   let selectedMailboxIds: string[] = testReady ? [mailbox.id] : [];
   let dnsReady = testReady && !staleDns;
   let audienceIds: string[] = [];
@@ -95,7 +95,7 @@ async function mockOutreachApi(page: Page, testReady = false, verification: "val
     else if (path === "/threads/thread-1") data = { ...thread, messages: [{ id: "message-1", direction: "inbound", subject: thread.subject, body: "Podemos falar na próxima semana?", occurredAt: thread.lastMessageAt, status: "received" }] };
     else if (path === "/threads/thread-2") data = { ...secondThread, messages: [{ id: "message-2", direction: "inbound", subject: secondThread.subject, body: "Podemos falar amanhã?", occurredAt: secondThread.lastMessageAt, status: "received" }] };
     else if (path === "/suppressions") data = { items: [{ id: "suppression-1", scope: "email", email: "blocked@example.com", reason: "manual", note: "Pedido comercial", createdAt: "2026-09-28T09:00:00Z" }] };
-    else if (path === "/settings") data = { adminOnly: false, mode: testReady ? "live" : "disabled", sendEnabled: testReady, outboundEnvEnabled: testReady, actor: { role: "admin", outreachRole: "viewer", capabilities }, members: [{ id: "member-1", name: "João", email: "joao@nikufra.ai", role: "admin" }] };
+    else if (path === "/settings") data = { adminOnly: false, mode: testReady ? canary ? "canary" : "live" : "disabled", sendEnabled: testReady, outboundEnvEnabled: testReady, canaryAllowlist: [], actor: { role: "admin", outreachRole: "viewer", capabilities }, members: [{ id: "member-1", name: "João", email: "joao@nikufra.ai", role: "admin" }] };
     else if (path === "/audit") data = { items: [{ id: "audit-1", actorName: "João", action: "campaign.created", entityType: "campaign", summary: "Campanha criada", createdAt: "2026-09-30T12:00:00Z" }] };
     else if (path === "/metrics") data = { days: 30, daily: [], totals: {} };
 
@@ -103,7 +103,7 @@ async function mockOutreachApi(page: Page, testReady = false, verification: "val
   });
 }
 
-async function openRoute(page: Page, path: string, theme: "light" | "dark" = "light", testReady = false, verification: "valid" | "unknown" | "basis_missing" = "valid", staleDns = false) {
+async function openRoute(page: Page, path: string, theme: "light" | "dark" = "light", testReady = false, verification: "valid" | "unknown" | "basis_missing" = "valid", staleDns = false, canary = false) {
   await page.addInitScript((selectedTheme) => {
     localStorage.setItem("nikufra:theme", selectedTheme);
     localStorage.setItem("nikufra:v2:leads", JSON.stringify([{
@@ -138,7 +138,7 @@ async function openRoute(page: Page, path: string, theme: "light" | "dark" = "li
       dataFechoPrevista: "2026-12-01",
     }]));
   }, theme);
-  await mockOutreachApi(page, testReady, verification, staleDns);
+  await mockOutreachApi(page, testReady, verification, staleDns, canary);
   await page.goto(path);
   await expect(page.locator(".outreach-module")).toBeVisible();
   await expect(page.locator(".outreach-loading")).toHaveCount(0);
@@ -338,9 +338,20 @@ test("message test asks for an eligible lead and queues one real send", async ({
   await page.getByRole("button", { name: "Enviar teste" }).click();
   const request = await requestPromise;
   expect(request.headers()["idempotency-key"]).toBeTruthy();
-  expect(request.postDataJSON()).toMatchObject({ stepId: "step-1", variantId: "variant-1", contactId: "44444444-4444-4444-8444-444444444444", mailboxId: mailbox.id });
+  expect(request.postDataJSON()).toMatchObject({ stepId: "step-1", variantId: "variant-1", contactId: "44444444-4444-4444-8444-444444444444", mailboxId: mailbox.id, confirmed: true });
   await expect(page.getByRole("status")).toContainText("Teste colocado em fila");
   await expect(page.locator(".outreach-message-tests")).toContainText("contacto@example.invalid");
+});
+
+test("message test permits a confirmed campaign contact outside the canary allowlist", async ({ page }) => {
+  await openRoute(page, "/outreach/campanhas/campaign-1", "light", true, "valid", false, true);
+  await page.locator(".outreach-campaign-sequence").getByRole("button", { name: "Testar envio" }).click();
+  await page.locator(".outreach-dialog").getByRole("combobox", { name: "Destinatário", exact: true })
+    .selectOption("44444444-4444-4444-8444-444444444444");
+  await expect(page.locator(".outreach-inline-warning")).toContainText("fora da allowlist de canary");
+  await expect(page.getByRole("button", { name: "Enviar teste" })).toBeDisabled();
+  await page.getByRole("checkbox", { name: /Confirmo que posso contactar/ }).check();
+  await expect(page.getByRole("button", { name: "Enviar teste" })).toBeEnabled();
 });
 
 test("message test warns about missing legal record and allows a confirmed send", async ({ page }) => {

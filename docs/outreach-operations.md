@@ -174,9 +174,11 @@ do rascunho. A lista de destinatários mostra também os que ficaram bloqueados.
 
 O botão **Testar envio** de uma mensagem cria uma campanha de teste individual
 com uma cópia da variante guardada, a lead e a mailbox selecionadas. Exige
-permissão de lançamento, evidência de elegibilidade, mailbox selecionada e
-pronta, allowlist no canary e os gates normais do worker. Usa a quota e a rampa
-da mailbox. O histórico de testes aparece na campanha original; `sent` prova
+permissão de lançamento, confirmação explícita, mailbox selecionada e pronta,
+e os gates normais do worker. No canary, só este teste individual de um único
+destinatário da campanha pode enviar fora da allowlist; as campanhas normais
+continuam limitadas à allowlist. Opt-out, supressão, quota diária e rampa da
+mailbox continuam ativos. O histórico de testes aparece na campanha original; `sent` prova
 que o Gmail aceitou o envio, mas a colocação na caixa de entrada deve ser
 confirmada no destinatário. O teste não altera destinatários, jobs ou métricas
 da campanha original.
