@@ -31,6 +31,7 @@ type ContactSeed = {
 };
 
 const publicEmailDomains = new Set(["gmail.com", "hotmail.com", "hotmail.pt", "outlook.com", "outlook.pt", "icloud.com", "me.com", "live.com", "live.pt", "yahoo.com", "yahoo.es", "sapo.pt"]);
+const internalCalendarDomains = new Set(["nikufra.ai", "nikufra.pt"]);
 const stageRank: Record<string, number> = { nao_contactado: 0, contactado: 1, reuniao_marcada: 2, reuniao_feita: 3, piloto: 4, proposta: 5, cliente: 6, perdido: -1, adiado: -1 };
 
 class GoogleApiError extends Error {
@@ -68,6 +69,12 @@ function clean(value: unknown, max = 500) {
   return String(value ?? "").trim().slice(0, max);
 }
 
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") return error.message;
+  try { return JSON.stringify(error); } catch { return String(error); }
+}
+
 function businessDomain(email?: string | null) {
   const domain = email?.split("@")[1]?.toLowerCase() ?? "";
   return domain && !publicEmailDomains.has(domain) ? domain : null;
@@ -86,6 +93,102 @@ function isAutomated(headers: GmailHeader[], email: string) {
 function meetingSignal(subject: string, snippet: string) {
   const text = normalized(`${subject} ${snippet}`);
   return /(reuniao|meeting|calendar|calendario|convite|invite|teams|googlemeet|zoom|agendamento|schedule|disponibilidade)/.test(text);
+}
+
+function normalizedCalendarEmail(value: unknown) {
+  return clean(value, 320).toLowerCase();
+}
+
+function isCalendarResource(attendee: Record<string, any>, email: string) {
+  if (attendee.resource === true) return true;
+  const [local = "", domain = ""] = email.split("@");
+  if (["resource.calendar.google.com", "group.calendar.google.com"].includes(domain)) return true;
+  return /(^|[._-])(room|meetingroom|resource)([._+-]|$)/i.test(local)
+    || /(^|[._-])(no-?reply|mailer-daemon)([._+-]|$)/i.test(local)
+    || /(^|[._-])bot([._+-]|$)/i.test(local);
+}
+
+function calendarParticipantClassification(event: Record<string, any>, ownEmail: string, internalEmails: ReadonlySet<string>) {
+  const organizerEmail = normalizedCalendarEmail(event.organizer?.email);
+  const organizerIsSelf = event.organizer?.self === true || Boolean(organizerEmail && organizerEmail === ownEmail);
+  const humans = new Map<string, "internal" | "external">();
+  const resources = new Set<string>();
+  let anonymousResources = 0;
+  let selfResponseStatus = organizerIsSelf ? "accepted" : "unknown";
+
+  for (const attendee of Array.isArray(event.attendees) ? event.attendees : []) {
+    const email = normalizedCalendarEmail(attendee.email);
+    const isSelf = attendee.self === true || Boolean(email && email === ownEmail);
+    if (isSelf) selfResponseStatus = clean(attendee.responseStatus, 40) || selfResponseStatus;
+
+    if (attendee.resource === true && !email) {
+      anonymousResources += 1;
+      continue;
+    }
+    if (!email) continue;
+    if (isCalendarResource(attendee, email)) {
+      resources.add(email);
+      continue;
+    }
+    // A declined attendee is not an expected participant. The current user's
+    // own response is still stored above so the whole event can be excluded.
+    if (attendee.responseStatus === "declined") continue;
+    const domain = email.split("@")[1] ?? "";
+    humans.set(email, isSelf || internalEmails.has(email) || internalCalendarDomains.has(domain) ? "internal" : "external");
+  }
+
+  if (organizerEmail && !isCalendarResource(event.organizer ?? {}, organizerEmail)) {
+    const domain = organizerEmail.split("@")[1] ?? "";
+    humans.set(organizerEmail, organizerIsSelf || internalEmails.has(organizerEmail) || internalCalendarDomains.has(domain) ? "internal" : "external");
+  }
+
+  // Google does not always repeat an event owner in attendees.
+  if (organizerIsSelf && ownEmail && !humans.has(ownEmail)) humans.set(ownEmail, "internal");
+
+  const externalEmails = [...humans.entries()]
+    .filter(([, kind]) => kind === "external")
+    .map(([email]) => email);
+  return {
+    organizerIsSelf,
+    selfResponseStatus: ["accepted", "declined", "tentative", "needsAction"].includes(selfResponseStatus)
+      ? selfResponseStatus
+      : "unknown",
+    internalHumanCount: [...humans.values()].filter((kind) => kind === "internal").length,
+    externalHumanCount: externalEmails.length,
+    resourceCount: resources.size + anonymousResources,
+    externalEmails,
+  };
+}
+
+function googleCalendarInstant(value: Record<string, any> | null | undefined) {
+  const raw = value?.dateTime ?? (value?.date ? `${value.date}T00:00:00.000Z` : null);
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function calendarLocalDate(instant: string, timeZone = "Europe/Lisbon") {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(instant)).map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function calendarOccurrence(event: Record<string, any>, start: string) {
+  const originalStart = googleCalendarInstant(event.originalStartTime) ?? start;
+  const icalUid = clean(event.iCalUID, 1000) || `google:${clean(event.id, 1000)}`;
+  const recurring = Boolean(event.recurringEventId || event.originalStartTime);
+  return {
+    icalUid,
+    originalStart,
+    // A standalone event keeps the same iCalUID when it is rescheduled. A
+    // recurring series needs the original occurrence instant to distinguish
+    // each expanded instance without changing identity after a move.
+    occurrenceKey: recurring ? `${icalUid}::${originalStart}` : icalUid,
+  };
 }
 
 async function googleJson(url: URL | string, accessToken: string, api = "Google API") {
@@ -205,18 +308,31 @@ function personSeed(person: Record<string, any>, userId: string, source: "Google
 async function listCalendarEvents(accessToken: string, syncToken: string | null) {
   async function load(token: string | null) {
     const events: Array<Record<string, any>> = []; let pageToken = ""; let nextSyncToken = token;
+    const fullSyncNow = new Date();
+    const fullSyncFrom = new Date(fullSyncNow);
+    const fullSyncTo = new Date(fullSyncNow);
+    fullSyncFrom.setUTCFullYear(fullSyncFrom.getUTCFullYear() - 10);
+    fullSyncTo.setUTCFullYear(fullSyncTo.getUTCFullYear() + 5);
     do {
       const url = new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");
       url.searchParams.set("maxResults", "2500");
       url.searchParams.set("showDeleted", "true");
-      if (token) url.searchParams.set("syncToken", token);
+      url.searchParams.set("singleEvents", "true");
+      if (token) {
+        url.searchParams.set("syncToken", token);
+      } else {
+        // Recurring series can otherwise expand indefinitely. Google encodes
+        // this initial bounded collection into the returned sync token.
+        url.searchParams.set("timeMin", fullSyncFrom.toISOString());
+        url.searchParams.set("timeMax", fullSyncTo.toISOString());
+      }
       if (pageToken) url.searchParams.set("pageToken", pageToken);
       const payload = await googleJson(url, accessToken, "Google Calendar");
       events.push(...(payload.items ?? []));
       pageToken = payload.nextPageToken ?? "";
       nextSyncToken = payload.nextSyncToken ?? nextSyncToken;
     } while (pageToken);
-    return { events, nextSyncToken };
+    return { events, nextSyncToken, fullSync: !token };
   }
   try { return await load(syncToken); }
   catch (error) { if (syncToken && error instanceof GoogleApiError && error.status === 410) return load(null); throw error; }
@@ -224,6 +340,10 @@ async function listCalendarEvents(accessToken: string, syncToken: string | null)
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  const requestBody = request.method === "POST"
+    ? await request.json().catch(() => ({})) as { calendarOnly?: boolean }
+    : {};
+  const calendarOnly = requestBody.calendarOnly === true;
   const serviceRequest = request.headers.get("authorization") === `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`;
   let requestedUserId: string | null = null;
   try { if (!serviceRequest) requestedUserId = (await activeUser(request)).user.id; }
@@ -234,6 +354,13 @@ Deno.serve(async (request) => {
   if (requestedUserId) tokenQuery = tokenQuery.eq("user_id", requestedUserId);
   const { data: tokenRows, error: tokenError } = await tokenQuery;
   if (tokenError) return Response.json({ error: tokenError.message }, { status: 500, headers: corsHeaders });
+  const { data: activeProfiles, error: profilesError } = await admin.from("profiles").select("email").eq("ativo", true);
+  if (profilesError) return Response.json({ error: profilesError.message }, { status: 500, headers: corsHeaders });
+  // Team members may authenticate with personal Gmail addresses, so a domain
+  // check alone is not enough to distinguish internal from client attendees.
+  const internalCalendarEmails = new Set((activeProfiles ?? [])
+    .map((profile) => normalizedCalendarEmail(profile.email))
+    .filter(Boolean));
   let totalSynced = 0; let totalContactsCreated = 0; let totalMeetingsSynced = 0;
 
   for (const tokenRow of (tokenRows ?? []) as TokenRow[]) {
@@ -251,8 +378,10 @@ Deno.serve(async (request) => {
       let newestHistory = tokenRow.history_id;
       let nextBackfillPage: string | null = tokenRow.backfill_page_token;
       let backfillComplete = tokenRow.backfill_complete;
+      let peopleSyncToken = tokenRow.people_sync_token;
+      let otherContactsSyncToken = tokenRow.other_contacts_sync_token;
 
-      if (!backfillComplete) {
+      if (!calendarOnly && !backfillComplete) {
         if (!newestHistory) {
           const gmailProfile = await googleJson("https://gmail.googleapis.com/gmail/v1/users/me/profile", accessToken, "Gmail API");
           newestHistory = gmailProfile.historyId ?? null;
@@ -264,7 +393,7 @@ Deno.serve(async (request) => {
         for (const message of payload.messages ?? []) messageIds.add(message.id);
         nextBackfillPage = payload.nextPageToken ?? null;
         backfillComplete = !nextBackfillPage;
-      } else if (newestHistory) {
+      } else if (!calendarOnly && newestHistory) {
         let pageToken = "";
         try {
           do {
@@ -285,7 +414,7 @@ Deno.serve(async (request) => {
         }
       }
 
-      const fetchedMessages = await mapLimit([...messageIds], 10, async (messageId) => {
+      const fetchedMessages = calendarOnly ? [] : await mapLimit([...messageIds], 10, async (messageId) => {
         const messageUrl = new URL(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}`);
         messageUrl.searchParams.set("format", "metadata");
         for (const name of ["From", "To", "Cc", "Subject", "Date", "List-Unsubscribe", "Auto-Submitted", "Precedence"]) messageUrl.searchParams.append("metadataHeaders", name);
@@ -339,123 +468,250 @@ Deno.serve(async (request) => {
         }
       }
 
-      let peopleSyncToken = tokenRow.people_sync_token; let otherContactsSyncToken = tokenRow.other_contacts_sync_token;
-      try {
-        const saved = await listPeople(accessToken, "connections", peopleSyncToken);
-        for (const person of saved.people) {
-          if (person.metadata?.deleted) continue;
-          const seed = personSeed(person, tokenRow.user_id, "Google Contacts");
-          if (!isExternalEmail(seed.email)) continue;
-          const ensured = await ensureContact(admin, seed); peopleProcessed += 1;
-          if (!ensured) continue;
-          if (ensured.created) batchContactsCreated += 1;
-        }
-        peopleSyncToken = saved.nextSyncToken;
-      } catch (error) { sourceErrors.push(error instanceof Error ? error.message : String(error)); }
-      try {
-        const other = await listPeople(accessToken, "other", otherContactsSyncToken);
-        for (const person of other.people) {
-          if (person.metadata?.deleted) continue;
-          const seed = personSeed(person, tokenRow.user_id, "Google Contacts");
-          if (!isExternalEmail(seed.email)) continue;
-          const ensured = await ensureContact(admin, seed); peopleProcessed += 1;
-          if (!ensured) continue;
-          if (ensured.created) batchContactsCreated += 1;
-        }
-        otherContactsSyncToken = other.nextSyncToken;
-      } catch (error) { sourceErrors.push(error instanceof Error ? error.message : String(error)); }
+      if (!calendarOnly) {
+        try {
+          const saved = await listPeople(accessToken, "connections", peopleSyncToken);
+          for (const person of saved.people) {
+            if (person.metadata?.deleted) continue;
+            const seed = personSeed(person, tokenRow.user_id, "Google Contacts");
+            if (!isExternalEmail(seed.email)) continue;
+            const ensured = await ensureContact(admin, seed); peopleProcessed += 1;
+            if (!ensured) continue;
+            if (ensured.created) batchContactsCreated += 1;
+          }
+          peopleSyncToken = saved.nextSyncToken;
+        } catch (error) { sourceErrors.push(errorMessage(error)); }
+        try {
+          const other = await listPeople(accessToken, "other", otherContactsSyncToken);
+          for (const person of other.people) {
+            if (person.metadata?.deleted) continue;
+            const seed = personSeed(person, tokenRow.user_id, "Google Contacts");
+            if (!isExternalEmail(seed.email)) continue;
+            const ensured = await ensureContact(admin, seed); peopleProcessed += 1;
+            if (!ensured) continue;
+            if (ensured.created) batchContactsCreated += 1;
+          }
+          otherContactsSyncToken = other.nextSyncToken;
+        } catch (error) { sourceErrors.push(errorMessage(error)); }
+      }
 
       let calendarSyncToken = tokenRow.calendar_sync_token; let calendarSucceeded = false;
+      const previousCalendarSyncToken = calendarSyncToken;
       try {
         const calendar = await listCalendarEvents(accessToken, calendarSyncToken);
         calendarSyncToken = calendar.nextSyncToken;
+        const staleEventIds = new Set<string>();
+        const calendarRows: Record<string, unknown>[] = [];
+        const cancelledCalendarEventIds: string[] = [];
+        if (calendar.fullSync) {
+          const { data: storedEvents, error: storedEventsError } = await admin
+            .from("google_calendar_events")
+            .select("google_event_id")
+            .eq("user_id", tokenRow.user_id)
+            .eq("calendar_id", "primary");
+          if (storedEventsError) throw storedEventsError;
+          for (const stored of storedEvents ?? []) staleEventIds.add(stored.google_event_id);
+        }
         for (const event of calendar.events) {
-          if (!event.id || event.status === "cancelled") {
-            if (event.id) {
-              await Promise.all([
-                admin.from("atividades").delete().eq("calendar_event_id", event.id).eq("user_id", tokenRow.user_id),
-                admin.from("google_calendar_events").delete().eq("google_event_id", event.id).eq("user_id", tokenRow.user_id),
-              ]);
-            }
-            continue;
+          if (!event.id) continue;
+          const cancelled = event.status === "cancelled";
+          if (!cancelled && event.eventType && !["default", "fromGmail"].includes(event.eventType)) continue;
+
+          // Cancelled items returned by an incremental sync are sometimes only
+          // an id. Reuse the last known interval so cancellation remains a
+          // queryable tombstone instead of erasing the historical occurrence.
+          let previousEvent: Record<string, any> | null = null;
+          if (cancelled) {
+            const { data } = await admin.from("google_calendar_events")
+              .select("titulo,inicio,fim,dia_inteiro,privado,localizacao,html_link,meet_link,organizador_email,participantes,ical_uid,occurrence_key,recurring_event_id,original_start,event_type,self_response_status,organizer_is_self,internal_human_count,external_human_count,resource_count,google_updated_at")
+              .eq("google_event_id", event.id)
+              .eq("user_id", tokenRow.user_id)
+              .eq("calendar_id", "primary")
+              .maybeSingle();
+            previousEvent = data;
           }
-          if (event.eventType && !["default", "fromGmail"].includes(event.eventType)) continue;
-          const start = event.start?.dateTime ?? (event.start?.date ? `${event.start.date}T09:00:00.000Z` : null);
+
+          const start = googleCalendarInstant(event.start)
+            ?? googleCalendarInstant(event.originalStartTime)
+            ?? previousEvent?.inicio
+            ?? null;
           if (!start) continue;
-          const end = event.end?.dateTime ?? (event.end?.date ? `${event.end.date}T09:00:00.000Z` : start);
+          const end = googleCalendarInstant(event.end) ?? previousEvent?.fim ?? start;
           const privateEvent = event.visibility === "private";
-          const summary = privateEvent ? "Ocupado" : clean(event.summary, 500) || "Evento Google Calendar";
+          const summary = privateEvent
+            ? "Ocupado"
+            : clean(event.summary, 500) || previousEvent?.titulo || "Evento Google Calendar";
           const conferenceEntry = (event.conferenceData?.entryPoints ?? []).find((entry: Record<string, any>) => entry.entryPointType === "video");
-          const { error: calendarEventError } = await admin.from("google_calendar_events").upsert({
+          const classification = calendarParticipantClassification(event, ownEmail, internalCalendarEmails);
+          const occurrence = calendarOccurrence(event, start);
+          const calendarRow = {
             user_id: tokenRow.user_id,
             google_event_id: event.id,
             calendar_id: "primary",
             titulo: summary,
             inicio: start,
             fim: end,
-            dia_inteiro: Boolean(event.start?.date),
-            privado: privateEvent,
-            estado: clean(event.status, 40) || "confirmed",
-            localizacao: privateEvent ? null : clean(event.location, 500) || null,
-            html_link: clean(event.htmlLink, 2000) || null,
-            meet_link: clean(event.hangoutLink ?? conferenceEntry?.uri, 2000) || null,
-            organizador_email: clean(event.organizer?.email, 320) || null,
-            participantes: Array.isArray(event.attendees) ? event.attendees.filter((attendee: Record<string, any>) => attendee.responseStatus !== "declined").length : 0,
-            google_updated_at: event.updated ?? null,
-          }, { onConflict: "user_id,calendar_id,google_event_id" });
-          if (calendarEventError) throw calendarEventError;
-          const participants = new Map<string, string>();
-          for (const attendee of event.attendees ?? []) if (attendee.email && attendee.responseStatus !== "declined" && isExternalEmail(attendee.email)) participants.set(attendee.email.toLowerCase(), attendee.displayName ?? attendee.email);
-          if (event.organizer?.email && isExternalEmail(event.organizer.email)) participants.set(event.organizer.email.toLowerCase(), event.organizer.displayName ?? event.organizer.email);
-          const seenCompanies = new Set<string>();
-          for (const [email, name] of participants) {
-            const ensured = await ensureContact(admin, { userId: tokenRow.user_id, name, email, contacted: true, source: "Google Calendar" });
-            if (!ensured) continue;
-            if (ensured.created) batchContactsCreated += 1;
-            const meetingDate = start.slice(0, 10);
-            const contactChanges: Record<string, unknown> = {};
-            if ((stageRank[ensured.contact.estado] ?? 0) < stageRank.reuniao_marcada) contactChanges.estado = "reuniao_marcada";
-            if (!ensured.contact.data_reuniao) contactChanges.data_reuniao = meetingDate;
-            if (Object.keys(contactChanges).length) await admin.from("contactos").update(contactChanges).eq("id", ensured.contact.id);
-            const opportunityChanges: Record<string, unknown> = {};
-            if ((stageRank[ensured.opportunity.estado] ?? 0) < stageRank.reuniao_marcada) opportunityChanges.estado = "reuniao_marcada";
-            if (!ensured.opportunity.data_reuniao) opportunityChanges.data_reuniao = meetingDate;
-            if (Object.keys(opportunityChanges).length) await admin.from("oportunidades").update(opportunityChanges).eq("id", ensured.opportunity.id);
-            if (seenCompanies.has(ensured.contact.empresa_id)) continue;
-            seenCompanies.add(ensured.contact.empresa_id);
-            const { error } = await admin.from("atividades").upsert({ oportunidade_id: ensured.opportunity.id, empresa_id: ensured.contact.empresa_id, contacto_id: ensured.contact.id, user_id: tokenRow.user_id, tipo: "reuniao", data: start, descricao: summary, calendar_event_id: event.id, assunto: summary, reuniao_inferida: false }, { onConflict: "calendar_event_id,contacto_id" });
-            if (!error) meetingsProcessed += 1;
+            dia_inteiro: event.start ? Boolean(event.start?.date) : Boolean(previousEvent?.dia_inteiro),
+            privado: event.visibility ? privateEvent : Boolean(previousEvent?.privado),
+            estado: cancelled ? "cancelled" : clean(event.status, 40) || "confirmed",
+            localizacao: privateEvent ? null : clean(event.location, 500) || previousEvent?.localizacao || null,
+            html_link: clean(event.htmlLink, 2000) || previousEvent?.html_link || null,
+            meet_link: clean(event.hangoutLink ?? conferenceEntry?.uri, 2000) || previousEvent?.meet_link || null,
+            organizador_email: normalizedCalendarEmail(event.organizer?.email) || previousEvent?.organizador_email || null,
+            participantes: event.attendees
+              ? classification.internalHumanCount + classification.externalHumanCount
+              : Number(previousEvent?.participantes ?? 0),
+            google_updated_at: event.updated ?? previousEvent?.google_updated_at ?? null,
+            ical_uid: clean(event.iCalUID, 1000) || previousEvent?.ical_uid || occurrence.icalUid,
+            occurrence_key: previousEvent?.occurrence_key || occurrence.occurrenceKey,
+            recurring_event_id: clean(event.recurringEventId, 1000) || previousEvent?.recurring_event_id || null,
+            original_start: previousEvent?.original_start || occurrence.originalStart,
+            event_type: clean(event.eventType, 80) || previousEvent?.event_type || "default",
+            self_response_status: event.attendees || event.organizer
+              ? classification.selfResponseStatus
+              : previousEvent?.self_response_status || "unknown",
+            organizer_is_self: event.organizer
+              ? classification.organizerIsSelf
+              : Boolean(previousEvent?.organizer_is_self),
+            internal_human_count: event.attendees || event.organizer
+              ? classification.internalHumanCount
+              : Number(previousEvent?.internal_human_count ?? 0),
+            external_human_count: event.attendees || event.organizer
+              ? classification.externalHumanCount
+              : Number(previousEvent?.external_human_count ?? 0),
+            resource_count: event.attendees
+              ? classification.resourceCount
+              : Number(previousEvent?.resource_count ?? 0),
+            cancelled_at: cancelled ? new Date().toISOString() : null,
+          };
+          if (calendarOnly) {
+            calendarRows.push(calendarRow);
+          } else {
+            const { error: calendarEventError } = await admin.from("google_calendar_events")
+              .upsert(calendarRow, { onConflict: "user_id,calendar_id,google_event_id" });
+            if (calendarEventError) throw calendarEventError;
+          }
+          staleEventIds.delete(event.id);
+
+          if (cancelled) {
+            if (calendarOnly) {
+              cancelledCalendarEventIds.push(event.id);
+            } else {
+              const { error: activityDeleteError } = await admin.from("atividades")
+                .delete()
+                .eq("user_id", tokenRow.user_id)
+                .eq("calendar_event_id", event.id);
+              if (activityDeleteError) throw activityDeleteError;
+            }
+            continue;
+          }
+
+          // The dedicated Calendar schedule only maintains the authoritative
+          // projection used by the agenda and analytics. Contact/opportunity
+          // enrichment stays in the full import path; otherwise a historical
+          // Calendar rebuild can exceed the Edge runtime CPU budget.
+          if (!calendarOnly) {
+            const participants = new Map<string, string>();
+            for (const attendee of event.attendees ?? []) {
+              const email = normalizedCalendarEmail(attendee.email);
+              if (email && classification.externalEmails.includes(email)) {
+                participants.set(email, attendee.displayName ?? email);
+              }
+            }
+            const organizerEmail = normalizedCalendarEmail(event.organizer?.email);
+            if (organizerEmail && classification.externalEmails.includes(organizerEmail)) {
+              participants.set(organizerEmail, event.organizer.displayName ?? organizerEmail);
+            }
+            const seenCompanies = new Set<string>();
+            for (const [email, name] of participants) {
+              const ensured = await ensureContact(admin, { userId: tokenRow.user_id, name, email, contacted: true, source: "Google Calendar" });
+              if (!ensured) continue;
+              if (ensured.created) batchContactsCreated += 1;
+              const meetingDate = calendarLocalDate(start);
+              const contactChanges: Record<string, unknown> = {};
+              if ((stageRank[ensured.contact.estado] ?? 0) < stageRank.reuniao_marcada) contactChanges.estado = "reuniao_marcada";
+              if (!ensured.contact.data_reuniao) contactChanges.data_reuniao = meetingDate;
+              if (Object.keys(contactChanges).length) await admin.from("contactos").update(contactChanges).eq("id", ensured.contact.id);
+              const opportunityChanges: Record<string, unknown> = {};
+              if ((stageRank[ensured.opportunity.estado] ?? 0) < stageRank.reuniao_marcada) opportunityChanges.estado = "reuniao_marcada";
+              if (!ensured.opportunity.data_reuniao) opportunityChanges.data_reuniao = meetingDate;
+              if (Object.keys(opportunityChanges).length) await admin.from("oportunidades").update(opportunityChanges).eq("id", ensured.opportunity.id);
+              if (seenCompanies.has(ensured.contact.empresa_id)) continue;
+              seenCompanies.add(ensured.contact.empresa_id);
+              const { error } = await admin.from("atividades").upsert({ oportunidade_id: ensured.opportunity.id, empresa_id: ensured.contact.empresa_id, contacto_id: ensured.contact.id, user_id: tokenRow.user_id, tipo: "reuniao", data: start, descricao: summary, calendar_event_id: event.id, assunto: summary, reuniao_inferida: false }, { onConflict: "calendar_event_id,contacto_id" });
+              if (!error) meetingsProcessed += 1;
+            }
           }
         }
+
+        if (calendarOnly) {
+          for (let offset = 0; offset < calendarRows.length; offset += 200) {
+            const { error: calendarBatchError } = await admin.from("google_calendar_events")
+              .upsert(calendarRows.slice(offset, offset + 200), { onConflict: "user_id,calendar_id,google_event_id" });
+            if (calendarBatchError) throw calendarBatchError;
+          }
+          for (let offset = 0; offset < cancelledCalendarEventIds.length; offset += 40) {
+            const { error: activityDeleteError } = await admin.from("atividades")
+              .delete()
+              .eq("user_id", tokenRow.user_id)
+              .in("calendar_event_id", cancelledCalendarEventIds.slice(offset, offset + 40));
+            if (activityDeleteError) throw activityDeleteError;
+          }
+        }
+
+        // A full Calendar sync is authoritative. Reconcile only after every
+        // fetched event has been persisted, so a mid-sync failure never wipes
+        // good local data. This removes deleted events and the recurring
+        // masters superseded by expanded occurrences.
+        const staleIds = [...staleEventIds];
+        for (let offset = 0; offset < staleIds.length; offset += 40) {
+          const chunk = staleIds.slice(offset, offset + 40);
+          const { error: activityDeleteError } = await admin.from("atividades")
+            .delete()
+            .eq("user_id", tokenRow.user_id)
+            .in("calendar_event_id", chunk);
+          if (activityDeleteError) throw activityDeleteError;
+          const { error: eventDeleteError } = await admin.from("google_calendar_events")
+            .delete()
+            .eq("user_id", tokenRow.user_id)
+            .eq("calendar_id", "primary")
+            .in("google_event_id", chunk);
+          if (eventDeleteError) throw eventDeleteError;
+        }
         calendarSucceeded = true;
-      } catch (error) { sourceErrors.push(error instanceof Error ? error.message : String(error)); }
+      } catch (error) {
+        calendarSyncToken = previousCalendarSyncToken;
+        sourceErrors.push(errorMessage(error));
+      }
 
       const [{ count: exactMessageCount }, { count: exactCalendarCount }] = await Promise.all([
         admin.from("atividades").select("id", { count: "exact", head: true }).eq("user_id", tokenRow.user_id).not("message_id", "is", null),
         admin.from("google_calendar_events").select("id", { count: "exact", head: true }).eq("user_id", tokenRow.user_id),
       ]);
       const update = {
-        history_id: newestHistory,
-        backfill_page_token: nextBackfillPage,
-        backfill_complete: backfillComplete,
-        last_sync_at: new Date().toISOString(),
-        messages_synced: exactMessageCount ?? Number(tokenRow.messages_synced || 0),
+        ...(!calendarOnly ? {
+          history_id: newestHistory,
+          backfill_page_token: nextBackfillPage,
+          backfill_complete: backfillComplete,
+          last_sync_at: new Date().toISOString(),
+          messages_synced: exactMessageCount ?? Number(tokenRow.messages_synced || 0),
+          people_sync_token: peopleSyncToken,
+          other_contacts_sync_token: otherContactsSyncToken,
+          people_contacts_synced: Number(tokenRow.people_contacts_synced || 0) + peopleProcessed,
+        } : {}),
         contacts_created: Number(tokenRow.contacts_created || 0) + batchContactsCreated,
-        people_sync_token: peopleSyncToken,
-        other_contacts_sync_token: otherContactsSyncToken,
         calendar_sync_token: calendarSyncToken,
-        people_contacts_synced: Number(tokenRow.people_contacts_synced || 0) + peopleProcessed,
         calendar_events_synced: exactCalendarCount ?? Number(tokenRow.calendar_events_synced || 0),
-        calendar_last_sync_at: calendarSucceeded ? new Date().toISOString() : null,
+        ...(calendarSucceeded ? { calendar_last_sync_at: new Date().toISOString() } : {}),
         sync_error: sourceErrors.length ? sourceErrors.join(" · ").slice(0, 1000) : null,
       };
       await admin.from("google_tokens").update(update).eq("user_id", tokenRow.user_id);
       totalSynced += batchSynced; totalContactsCreated += batchContactsCreated; totalMeetingsSynced += meetingsProcessed;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       await admin.from("google_tokens").update({ sync_error: message.slice(0, 1000), last_sync_at: new Date().toISOString() }).eq("user_id", tokenRow.user_id);
       console.error(`Sync Google falhou para ${tokenRow.user_id}`, error);
     }
   }
-  return Response.json({ synced: totalSynced, contactsCreated: totalContactsCreated, meetingsSynced: totalMeetingsSynced, accounts: tokenRows?.length ?? 0 }, { headers: corsHeaders });
+  return Response.json({ mode: calendarOnly ? "calendar" : "full", synced: totalSynced, contactsCreated: totalContactsCreated, meetingsSynced: totalMeetingsSynced, accounts: tokenRows?.length ?? 0 }, { headers: corsHeaders });
 });

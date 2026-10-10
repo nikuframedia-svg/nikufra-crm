@@ -64,6 +64,7 @@ export function CalendarPage() {
         .select("id,user_id,titulo,inicio,fim,dia_inteiro,privado,localizacao,html_link,meet_link,participantes")
         .lt("inicio", weekEnd.toISOString())
         .gt("fim", weekStart.toISOString())
+        .neq("estado", "cancelled")
         .order("inicio", { ascending: true });
       if (ownerFilter !== "all") query = query.eq("user_id", ownerFilter);
       const { data, error: queryError } = await query;
@@ -90,7 +91,7 @@ export function CalendarPage() {
     if (!supabase) return;
     setSyncing(true);
     try {
-      const { error: syncError } = await supabase.functions.invoke("gmail-sync", { body: {} });
+      const { error: syncError } = await supabase.functions.invoke("gmail-sync", { body: { calendarOnly: true } });
       if (syncError) throw syncError;
       await queryClient.invalidateQueries({ queryKey: ["google-team-calendar"] });
     } finally {

@@ -1,4 +1,4 @@
-import { BarChart3, CalendarRange, ChevronDown, CircleGauge, Clock3, Target, TrendingUp, Users } from "lucide-react";
+import { BarChart3, CalendarRange, CircleGauge, Clock3, Target, TrendingUp, Users } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useQuery } from "@tanstack/react-query";
 import { stageLabels, stageOrder } from "../data/seed";
@@ -7,6 +7,7 @@ import { useRevenueData } from "../hooks/use-revenue-data";
 import { supabase } from "../lib/supabase";
 import { useCRM } from "../state/crm-context";
 import { Card, MetricCard, PageHeader, SampleBadge } from "../components/ui";
+import { MeetingMetricsPanel } from "../components/MeetingMetricsPanel";
 
 function median(values: number[]) {
   if (!values.length) return null;
@@ -97,10 +98,11 @@ export function MetricsPage() {
 
   return (
     <div className="page">
-      <PageHeader eyebrow="Honestidade estatística" title="Métricas comerciais" description="Cada percentagem mostra a amostra real que a sustenta. Sinais de reunião detetados no Gmail ficam por confirmar e não entram nesta taxa." actions={<><label className="select-button"><CalendarRange size={15} />Histórico disponível<select defaultValue="all"><option value="all">Todo o histórico</option></select><ChevronDown size={14} /></label><label className="select-button"><Users size={15} />Toda a equipa<select><option>Toda a equipa</option></select><ChevronDown size={14} /></label></>} />
+      <PageHeader eyebrow="Honestidade estatística" title="Métricas comerciais" description="Evolução das reuniões diretamente do Google Calendar, seguida pelas métricas do funil e da carteira. Cada valor identifica a amostra real que o sustenta." />
+      <MeetingMetricsPanel />
       <section className="metric-grid metric-grid--5">
         <MetricCard label={serverMetrics ? "Taxa de reunião por empresa" : "Taxa de reunião por contacto"} value={meetingRate === null ? "Sem amostra" : formatPercentage(meetingRate)} detail={serverMetrics ? `${meetingNumerator} em ${meetingDenominator} empresas contactadas` : `${meetingNumerator} em ${meetingDenominator} contactos · ${met.length}/${contacted.length} empresas`} icon={<Users size={17} />} />
-        <MetricCard label="No-show" value={noShowN ? formatPercentage(Number(serverMetrics?.noShow?.taxa_no_show)) : "Sem amostra"} detail={noShowN ? `n=${noShowN} reuniões marcadas` : "requer presenças registadas"} icon={<CalendarRange size={17} />} />
+        <MetricCard label="Pipeline: reunião ainda não feita" value={noShowN ? formatPercentage(Number(serverMetrics?.noShow?.taxa_no_show)) : "Sem amostra"} detail={noShowN ? `${Math.max(0, noShowN - Number(serverMetrics?.noShow?.n_feitas ?? 0))} em ${noShowN} oportunidades marcadas` : "não representa presenças nem no-show"} icon={<CalendarRange size={17} />} />
         <MetricCard label="Cliente / base contactada" value={clientRate === null ? "Sem amostra" : formatPercentage(clientRate)} detail={`${clients.length} clientes em ${contacted.length} empresas`} icon={<Target size={17} />} />
         <MetricCard label="1.º contacto → acordo verbal" value={cycleMedian === null ? "Sem amostra" : `${formatDecimal(cycleMedian)} ${cycleMedian === 1 ? "mês" : "meses"}`} detail={cycleN ? `média: ${formatDecimal(cycleAverage ?? 0)} meses · n=${cycleN} confirmados` : "requer duração confirmada na ficha"} icon={<Clock3 size={17} />} />
         <MetricCard label="Pipeline ponderado" value={formatCurrency(pipelineValue)} detail={`${opportunities.length} oportunidades`} icon={<CircleGauge size={17} />} />
