@@ -684,6 +684,7 @@ required = {
     "services/outreach/src/rotation.ts",
     "services/outreach/src/router.ts",
     "services/outreach/src/scheduler.ts",
+    "services/outreach/src/template.ts",
     "services/outreach/src/transport-security.ts",
     "services/outreach/src/types.ts",
     "services/outreach/src/verification.ts",
