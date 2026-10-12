@@ -8,6 +8,7 @@ import { assertMailboxReconciliationClear, audit, campaignReadiness, providerSes
 import { inspectDomain } from "./dns.js";
 import { verifyEmailAddress } from "./verification.js";
 import { revokeProviderAuthorization } from "./providers.js";
+import { recipientNameInSignature } from "./template.js";
 
 const uuid = z.uuid();
 const campaignStepSchema = z.object({
@@ -19,7 +20,10 @@ const campaignStepSchema = z.object({
     name: z.string().trim().min(1).max(40).default("A"),
     weight: z.number().int().min(0).max(10_000).default(100),
     subject: z.string().trim().min(1).max(998),
-    body: z.string().trim().min(1).max(200_000),
+    body: z.string().trim().min(1).max(200_000).refine(
+      (body) => !recipientNameInSignature(body),
+      "A assinatura usa o nome do destinatário. Usa {{remetente}} para assinar a mensagem.",
+    ),
     active: z.boolean().default(true),
   })).max(10).default([]),
 }).superRefine((step, context) => {

@@ -6,6 +6,7 @@ import { pool, transaction } from "./db.js";
 import { HttpError } from "./errors.js";
 import { buildMime } from "./mime.js";
 import { providerSession } from "./repository.js";
+import { recipientNameInSignature } from "./template.js";
 import { isProviderAuthorizationFailure, prepareProviderSession, reconcileProviderMessage, sendProviderMessage } from "./providers.js";
 import type { ProviderSession } from "./providers.js";
 import type { DeliveryEnvelope, ProviderReceipt } from "./types.js";
@@ -164,6 +165,9 @@ async function loadJob(jobId: string): Promise<JobRow> {
 }
 
 async function createEnvelope(job: JobRow) {
+  if (recipientNameInSignature(job.body_template)) {
+    throw new HttpError(409, "template_signature_uses_recipient_name", "A assinatura usa o nome do destinatário. Corrige o modelo para {{remetente}} antes de enviar.");
+  }
   const token = unsubscribeToken(job.recipient_id, job.id);
   const tokenHash = sha256(token);
   await pool.query(`insert into private.outreach_unsubscribe_tokens(token_hash,recipient_id,expires_at) values($1,$2,now()+interval '2 years') on conflict(token_hash) do nothing`, [tokenHash, job.recipient_id]);
