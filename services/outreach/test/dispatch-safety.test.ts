@@ -6,7 +6,7 @@ vi.mock("../src/db.js", () => ({
   transaction: vi.fn(),
 }));
 
-import { abortReservedBeforeProvider, dispatchCanaryTripReason, handleDispatchGuardFailure, handleProviderPermitFailure, isSerializationFailure } from "../src/delivery.js";
+import { abortReservedBeforeProvider, dispatchCanaryTripReason, handleDispatchGuardFailure, handleProviderPermitFailure, isSerializationFailure, retrySerializationConflict } from "../src/delivery.js";
 
 describe("final dispatch safety gate", () => {
   beforeEach(() => {
@@ -70,6 +70,27 @@ describe("final dispatch safety gate", () => {
     });
     expect(mocks.query.mock.calls[1]?.[0]).toContain("status='reconciliation_required'");
     expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes("status='cancelled'"))).toBe(false);
+  });
+
+  it("retries only a serialization-aborted finalization transaction", async () => {
+    const conflict = Object.assign(new Error("could not serialize access"), { code: "40001" });
+    const finalize = vi.fn().mockRejectedValueOnce(conflict).mockResolvedValueOnce(true);
+
+    await expect(retrySerializationConflict(finalize)).resolves.toBe(true);
+    expect(finalize).toHaveBeenCalledTimes(2);
+
+    const otherError = Object.assign(new Error("connection lost"), { code: "08006" });
+    const failed = vi.fn().mockRejectedValue(otherError);
+    await expect(retrySerializationConflict(failed)).rejects.toBe(otherError);
+    expect(failed).toHaveBeenCalledOnce();
+  });
+
+  it("stops after the retry limit so an accepted send enters reconciliation", async () => {
+    const conflict = Object.assign(new Error("could not serialize access"), { code: "40001" });
+    const finalize = vi.fn().mockRejectedValue(conflict);
+
+    await expect(retrySerializationConflict(finalize, 2)).rejects.toBe(conflict);
+    expect(finalize).toHaveBeenCalledTimes(2);
   });
 
   it("closes a writer-quarantined reservation when provider revalidation rejects before the call", async () => {

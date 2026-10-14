@@ -219,6 +219,18 @@ export function isSerializationFailure(error: unknown) {
   return typeof error === "object" && error !== null && "code" in error && error.code === "40001";
 }
 
+export async function retrySerializationConflict<T>(operation: () => Promise<T>, maxAttempts = 5): Promise<T> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isSerializationFailure(error) || attempt === maxAttempts - 1) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25 * (2 ** attempt)));
+    }
+  }
+  throw new Error("A finalização não foi tentada.");
+}
+
 async function recordProviderAccepted(jobId: string, receipt: ProviderReceipt, client: PoolClient) {
   await client.query("begin");
   try {
@@ -242,7 +254,10 @@ async function recordProviderAccepted(jobId: string, receipt: ProviderReceipt, c
 }
 
 async function finalizeDispatch(job: JobRow, envelope: DeliveryEnvelope, receipt: ProviderReceipt, scheduleFollowUp = true) {
-  return transaction(async (client) => {
+  // Gmail has already accepted this message. A serializable commit can race
+  // with another mailbox's completion; retry only the database transaction,
+  // never the provider send. Every aborted attempt rolls back the ledger CAS.
+  return retrySerializationConflict(() => transaction(async (client) => {
     const claimed = await client.query(`
       update private.outreach_delivery_ledger
       set status='confirmed',provider_message_id=$2,
@@ -267,7 +282,7 @@ async function finalizeDispatch(job: JobRow, envelope: DeliveryEnvelope, receipt
       on conflict(mailbox_id,provider_message_id) do nothing`, [threadId, job.recipient_id, job.mailbox_id, receipt.providerMessageId, receipt.providerThreadId, receipt.internetMessageId, envelope.subject, envelope.text, receipt.acceptedAt]);
     if (scheduleFollowUp) await scheduleNextStep(client, job);
     return true;
-  }, "serializable");
+  }, "serializable"));
 }
 
 async function scheduleNextStep(client: import("pg").PoolClient, job: JobRow) {
