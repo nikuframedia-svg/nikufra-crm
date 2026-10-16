@@ -608,8 +608,9 @@ export async function updateMailbox(actor: Actor, mailboxId: string, raw: unknow
 }
 
 export async function advanceMailboxRamp(actor: Actor, mailboxId: string) {
+  // Expanding (function()).* can invoke a volatile PostgreSQL function once per field.
   const result = await pool.query<{ id: string; daily_limit: number; ramp_daily_limit: number }>(
-    `select (private.outreach_advance_mailbox_ramp($1,$2)).*`,
+    `select id,daily_limit,ramp_daily_limit from private.outreach_advance_mailbox_ramp($1,$2)`,
     [mailboxId, actor.id],
   );
   const mailbox = result.rows[0];
