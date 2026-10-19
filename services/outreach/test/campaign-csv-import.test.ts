@@ -30,9 +30,9 @@ describe("CSV imported into a campaign", () => {
     mocks.query.mockImplementation(async (sqlValue: unknown) => {
       const sql = String(sqlValue);
       if (sql.includes("from public.contactos c join public.empresas")) return { rows: [contact(contactIds[0]!, "one@example.com"), contact(contactIds[1]!, "two@example.com")] };
-      if (sql.includes("select id from public.outreach_campaigns where id=$1 and status='draft'")) return { rows: [{ id: campaignId }] };
-      if (sql.includes("count(*)::text count from public.outreach_recipients")) return { rows: [{ count: "1" }] };
+      if (sql.includes("select status::text from public.outreach_campaigns")) return { rows: [{ status: "draft" }] };
       if (sql.includes("insert into public.outreach_audiences")) return { rows: [{ id: audienceId }] };
+      if (sql.includes("insert into public.outreach_recipients")) return { rows: [{ contact_id: contactIds[1] }] };
       return { rows: [], rowCount: 1 };
     });
     await expect(addCampaignCsvContacts(actor, campaignId, { name: "Piloto · lista.csv", contactIds })).resolves.toMatchObject({
@@ -46,11 +46,40 @@ describe("CSV imported into a campaign", () => {
     expect(mocks.audit).toHaveBeenCalledWith(actor.id, "campaign.csv_contacts_added", "campaign", campaignId, expect.objectContaining({ added: 1, existing: 1 }), expect.anything());
   });
 
-  it("does not create a list when the campaign is already launched", async () => {
+  it("schedules only the newly added eligible contacts when the campaign is running", async () => {
+    mocks.query.mockImplementation(async (sqlValue: unknown) => {
+      const sql = String(sqlValue);
+      if (sql.includes("from public.contactos c join public.empresas")) return { rows: [{ ...contact(contactIds[0]!, "one@example.com"), outreach_legal_basis: "contract", outreach_legal_basis_recorded_at: new Date("2026-10-01T00:00:00Z"), outreach_legal_basis_recorded_by: actor.id, outreach_legal_basis_evidence: "contract-1", verification_status: "valid" }] };
+      if (sql.includes("select status::text from public.outreach_campaigns")) return { rows: [{ status: "running" }] };
+      if (sql.includes("insert into public.outreach_audiences")) return { rows: [{ id: audienceId }] };
+      if (sql.includes("insert into public.outreach_recipients")) return { rows: [{ contact_id: contactIds[0] }] };
+      if (sql.includes("count(*)::text count from public.outreach_jobs")) return { rows: [{ count: "1" }] };
+      return { rows: [], rowCount: 1 };
+    });
+    await expect(addCampaignCsvContacts(actor, campaignId, { name: "Novos contactos", contactIds: [contactIds[0]] }))
+      .resolves.toMatchObject({ added: 1, eligible: 1 });
+    const jobInsert = mocks.query.mock.calls.find(([sql]) => String(sql).includes("insert into public.outreach_jobs"));
+    expect(jobInsert?.[1]).toEqual([campaignId, [contactIds[0]]]);
+  });
+
+  it("reuses the same CSV list on retry without duplicating recipients", async () => {
     mocks.query.mockImplementation(async (sqlValue: unknown) => {
       const sql = String(sqlValue);
       if (sql.includes("from public.contactos c join public.empresas")) return { rows: [contact(contactIds[0]!, "one@example.com")] };
-      if (sql.includes("select id from public.outreach_campaigns where id=$1 and status='draft'")) return { rows: [] };
+      if (sql.includes("select status::text from public.outreach_campaigns")) return { rows: [{ status: "draft" }] };
+      if (sql.includes("from public.outreach_audiences audience")) return { rows: [{ id: audienceId }] };
+      return { rows: [], rowCount: 1 };
+    });
+    await expect(addCampaignCsvContacts(actor, campaignId, { name: "Piloto · lista.csv", contactIds: [contactIds[0]] }))
+      .resolves.toMatchObject({ audienceId, added: 0, existing: 1 });
+    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes("insert into public.outreach_audiences"))).toBe(false);
+  });
+
+  it("does not create a list when the campaign no longer accepts contacts", async () => {
+    mocks.query.mockImplementation(async (sqlValue: unknown) => {
+      const sql = String(sqlValue);
+      if (sql.includes("from public.contactos c join public.empresas")) return { rows: [contact(contactIds[0]!, "one@example.com")] };
+      if (sql.includes("select status::text from public.outreach_campaigns")) return { rows: [] };
       throw new Error(`Unexpected query: ${sql}`);
     });
     await expect(addCampaignCsvContacts(actor, campaignId, { name: "Lista", contactIds: [contactIds[0]] }))

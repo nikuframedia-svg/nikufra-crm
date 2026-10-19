@@ -371,7 +371,7 @@ export async function queueCampaignMessageTest(actor: Actor, sourceCampaignId: s
   }, "serializable");
 }
 
-async function materializeInitialJobs(client: import("pg").PoolClient, campaignId: string) {
+async function materializeInitialJobs(client: import("pg").PoolClient, campaignId: string, contactIds?: string[]) {
   await client.query(`
     with first_email as (
       select s.* from public.outreach_campaign_steps s where s.campaign_id=$1 and s.ativo and s.kind='email' order by s.position limit 1
@@ -399,9 +399,12 @@ async function materializeInitialJobs(client: import("pg").PoolClient, campaignI
         ),false)
       order by md5(r.id::text||mailbox.id::text) limit 1
     ) m
-    where r.campaign_id=$1 and r.status='eligible'
-    on conflict(idempotency_key) do nothing`, [campaignId]);
-  const scheduled = await client.query<{ count: string }>(`select count(*)::text count from public.outreach_jobs where campaign_id=$1 and status in ('pending','leased','reconciliation_required')`, [campaignId]);
+    where r.campaign_id=$1 and r.status='eligible' and ($2::uuid[] is null or r.contact_id=any($2::uuid[]))
+    on conflict(idempotency_key) do nothing`, [campaignId, contactIds ?? null]);
+  const scheduled = await client.query<{ count: string }>(`select count(*)::text count from public.outreach_jobs job
+    join public.outreach_recipients recipient on recipient.id=job.recipient_id
+    where job.campaign_id=$1 and job.status in ('pending','leased','reconciliation_required')
+      and ($2::uuid[] is null or recipient.contact_id=any($2::uuid[]))`, [campaignId, contactIds ?? null]);
   if (!Number(scheduled.rows[0]?.count ?? 0)) throw new HttpError(409, "campaign_jobs_not_materialized", "Não foi possível distribuir os destinatários por mailboxes elegíveis.");
 }
 
@@ -520,11 +523,15 @@ export async function addCampaignCsvContacts(actor: Actor, campaignId: string, r
   const eligibility = await contactEligibility(input.contactIds);
   if (eligibility.length !== input.contactIds.length) throw new HttpError(409, "contact_not_found", "Um ou mais contactos do CSV já não existem no CRM. Volta a importar o ficheiro.");
   return transaction(async (client) => {
-    const campaign = await client.query(`select id from public.outreach_campaigns where id=$1 and status='draft' for update`, [campaignId]);
-    if (!campaign.rows[0]) throw new HttpError(409, "campaign_not_editable", "Só é possível adicionar contactos a uma campanha em rascunho.");
-    const existing = await client.query<{ count: string }>(`select count(*)::text count from public.outreach_recipients where campaign_id=$1 and contact_id=any($2::uuid[])`, [campaignId, input.contactIds]);
-    const inserted = await client.query<{ id: string }>(`insert into public.outreach_audiences(nome,descricao,filter_definition,created_by) values($1,$2,'{}'::jsonb,$3) returning id`, [input.name, `CSV importado diretamente para a campanha`, actor.id]);
-    const audienceId = inserted.rows[0]!.id;
+    const campaign = await client.query<{ status: string }>(`select status::text from public.outreach_campaigns where id=$1 and status in ('draft','paused','running') for update`, [campaignId]);
+    if (!campaign.rows[0]) throw new HttpError(409, "campaign_not_editable", "Esta campanha não aceita novos contactos.");
+    const previous = await client.query<{ id: string }>(`
+      select audience.id from public.outreach_audiences audience
+      join public.outreach_campaign_audiences link on link.audience_id=audience.id
+      where link.campaign_id=$1 and audience.nome=$2 and audience.descricao='CSV importado diretamente para a campanha'
+      order by audience.created_at limit 1`, [campaignId, input.name]);
+    const inserted = previous.rows[0] ? null : await client.query<{ id: string }>(`insert into public.outreach_audiences(nome,descricao,filter_definition,created_by) values($1,$2,'{}'::jsonb,$3) returning id`, [input.name, "CSV importado diretamente para a campanha", actor.id]);
+    const audienceId = (previous.rows[0] ?? inserted!.rows[0]!).id;
     const items = eligibility.map((item) => ({
       contact_id: item.contactId, company_id: item.companyId, email: item.email,
       status: item.eligible ? "eligible" : "ineligible", reasons: item.reasons, variables: item.variables,
@@ -534,14 +541,17 @@ export async function addCampaignCsvContacts(actor: Actor, campaignId: string, r
       select $1,item.contact_id,item.status::public.outreach_eligibility_status,item.reasons,now(),$3
       from jsonb_to_recordset($2::jsonb) as item(contact_id uuid,status text,reasons text[])
       on conflict(audience_id,contact_id) do nothing`, [audienceId, JSON.stringify(items), actor.id]);
-    await client.query(`insert into public.outreach_campaign_audiences(campaign_id,audience_id) values($1,$2)`, [campaignId, audienceId]);
-    await client.query(`
+    await client.query(`insert into public.outreach_campaign_audiences(campaign_id,audience_id) values($1,$2) on conflict do nothing`, [campaignId, audienceId]);
+    const addedRecipients = await client.query<{ contact_id: string }>(`
       insert into public.outreach_recipients(campaign_id,audience_member_id,contact_id,company_id,email_snapshot,variable_snapshot,status,eligibility_reasons)
       select $1,member.id,item.contact_id,item.company_id,item.email,item.variables,item.status::public.outreach_recipient_status,item.reasons
       from jsonb_to_recordset($3::jsonb) as item(contact_id uuid,company_id uuid,email text,variables jsonb,status text,reasons text[])
       join public.outreach_audience_members member on member.audience_id=$2 and member.contact_id=item.contact_id
-      on conflict(campaign_id,contact_id) where contact_id is not null do nothing`, [campaignId, audienceId, JSON.stringify(items)]);
-    const added = eligibility.length - Number(existing.rows[0]?.count ?? 0);
+      on conflict(campaign_id,contact_id) where contact_id is not null do nothing
+      returning contact_id`, [campaignId, audienceId, JSON.stringify(items)]);
+    const newEligibleIds = addedRecipients.rows.map((row) => row.contact_id).filter((id) => eligibility.some((item) => item.contactId === id && item.eligible));
+    if (campaign.rows[0].status === "running" && newEligibleIds.length) await materializeInitialJobs(client, campaignId, newEligibleIds);
+    const added = addedRecipients.rows.length;
     await audit(actor.id, "campaign.csv_contacts_added", "campaign", campaignId, { audienceId, rows: eligibility.length, added, existing: eligibility.length - added }, client);
     return { audienceId, assessed: eligibility.length, added, existing: eligibility.length - added, eligible: eligibility.filter((item) => item.eligible).length };
   }, "serializable");
