@@ -510,6 +510,43 @@ export async function addAudienceContacts(actor: Actor, audienceId: string, raw:
   return { assessed: eligibility.length, eligible: eligibility.filter((item) => item.eligible).length, items: eligibility };
 }
 
+const campaignCsvSchema = z.object({
+  name: z.string().trim().min(1).max(180),
+  contactIds: z.array(uuid).min(1).max(1_000).refine((ids) => new Set(ids).size === ids.length, "A lista contém contactos repetidos."),
+});
+
+export async function addCampaignCsvContacts(actor: Actor, campaignId: string, raw: unknown) {
+  const input = campaignCsvSchema.parse(raw);
+  const eligibility = await contactEligibility(input.contactIds);
+  if (eligibility.length !== input.contactIds.length) throw new HttpError(409, "contact_not_found", "Um ou mais contactos do CSV já não existem no CRM. Volta a importar o ficheiro.");
+  return transaction(async (client) => {
+    const campaign = await client.query(`select id from public.outreach_campaigns where id=$1 and status='draft' for update`, [campaignId]);
+    if (!campaign.rows[0]) throw new HttpError(409, "campaign_not_editable", "Só é possível adicionar contactos a uma campanha em rascunho.");
+    const existing = await client.query<{ count: string }>(`select count(*)::text count from public.outreach_recipients where campaign_id=$1 and contact_id=any($2::uuid[])`, [campaignId, input.contactIds]);
+    const inserted = await client.query<{ id: string }>(`insert into public.outreach_audiences(nome,descricao,filter_definition,created_by) values($1,$2,'{}'::jsonb,$3) returning id`, [input.name, `CSV importado diretamente para a campanha`, actor.id]);
+    const audienceId = inserted.rows[0]!.id;
+    const items = eligibility.map((item) => ({
+      contact_id: item.contactId, company_id: item.companyId, email: item.email,
+      status: item.eligible ? "eligible" : "ineligible", reasons: item.reasons, variables: item.variables,
+    }));
+    await client.query(`
+      insert into public.outreach_audience_members(audience_id,contact_id,eligibility_status,eligibility_reasons,assessed_at,added_by)
+      select $1,item.contact_id,item.status::public.outreach_eligibility_status,item.reasons,now(),$3
+      from jsonb_to_recordset($2::jsonb) as item(contact_id uuid,status text,reasons text[])
+      on conflict(audience_id,contact_id) do nothing`, [audienceId, JSON.stringify(items), actor.id]);
+    await client.query(`insert into public.outreach_campaign_audiences(campaign_id,audience_id) values($1,$2)`, [campaignId, audienceId]);
+    await client.query(`
+      insert into public.outreach_recipients(campaign_id,audience_member_id,contact_id,company_id,email_snapshot,variable_snapshot,status,eligibility_reasons)
+      select $1,member.id,item.contact_id,item.company_id,item.email,item.variables,item.status::public.outreach_recipient_status,item.reasons
+      from jsonb_to_recordset($3::jsonb) as item(contact_id uuid,company_id uuid,email text,variables jsonb,status text,reasons text[])
+      join public.outreach_audience_members member on member.audience_id=$2 and member.contact_id=item.contact_id
+      on conflict(campaign_id,contact_id) where contact_id is not null do nothing`, [campaignId, audienceId, JSON.stringify(items)]);
+    const added = eligibility.length - Number(existing.rows[0]?.count ?? 0);
+    await audit(actor.id, "campaign.csv_contacts_added", "campaign", campaignId, { audienceId, rows: eligibility.length, added, existing: eligibility.length - added }, client);
+    return { audienceId, assessed: eligibility.length, added, existing: eligibility.length - added, eligible: eligibility.filter((item) => item.eligible).length };
+  }, "serializable");
+}
+
 async function materializeRecipients(client: import("pg").PoolClient, audienceId: string, campaignId: string, eligibility: EligibilityResult[]) {
   const campaign = await client.query(`select id from public.outreach_campaigns where id=$1 and status='draft' for update`, [campaignId]);
   if (!campaign.rows[0]) throw new HttpError(409, "campaign_not_editable", "Só é possível adicionar uma audiência a uma campanha em rascunho.");

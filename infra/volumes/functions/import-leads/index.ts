@@ -35,6 +35,70 @@ async function insertChunks(admin: ReturnType<typeof adminClient>, table: string
   return inserted;
 }
 
+// Campaign imports only create missing CRM contacts. Existing records must retain their
+// company, pipeline stage and compliance fields even when a CSV contains older data.
+async function importCampaignContacts(admin: ReturnType<typeof adminClient>, leads: Array<Record<string, unknown>>) {
+  const unique = new Map<string, Record<string, unknown>>();
+  for (const lead of leads) {
+    const email = clean(lead.email, 320).toLowerCase();
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && !unique.has(email)) unique.set(email, lead);
+  }
+  if (!unique.size) return { contactsCreated: 0, contactsExisting: 0, contacts: [] };
+  const contacts = new Map<string, ContactRow>();
+  const emails = [...unique.keys()];
+  for (let index = 0; index < emails.length; index += 100) {
+    const { data, error } = await admin.from("contactos").select("id,email,empresa_id").in("email", emails.slice(index, index + 100));
+    if (error) throw error;
+    for (const row of (data ?? []) as ContactRow[]) if (row.email) contacts.set(row.email.toLowerCase(), row);
+  }
+  const contactsExisting = contacts.size;
+  const missing = [...unique].filter(([email]) => !contacts.has(email));
+  if (missing.length) {
+    const companies: CompanyRow[] = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await admin.from("empresas").select("id,nome,nome_normalizado,email_domain").range(from, from + 999);
+      if (error) throw error;
+      companies.push(...(data ?? []) as CompanyRow[]);
+      if ((data ?? []).length < 1000) break;
+    }
+    const byName = new Map(companies.map((company) => [company.nome_normalizado || normalize(company.nome), company]));
+    const byDomain = new Map(companies.filter((company) => company.email_domain && !publicEmailDomains.has(company.email_domain.toLowerCase())).map((company) => [String(company.email_domain).toLowerCase(), company]));
+    const toInsert = new Map<string, Record<string, unknown>>();
+    const pendingDomains = new Set<string>();
+    for (const [email, lead] of missing) {
+      const name = clean(lead.empresa, 240) || `${clean(lead.nome, 240) || email} (particular)`;
+      const key = normalize(name);
+      const domain = businessDomain(email);
+      if (byName.has(key) || (domain && (byDomain.has(domain) || pendingDomains.has(domain))) || toInsert.has(key)) continue;
+      toInsert.set(key, { id: crypto.randomUUID(), nome: name, nome_normalizado: key, email_domain: domain, vertical: verticals[clean(lead.vertical)] ?? "outro", pais: clean(lead.pais, 2).toUpperCase() || "PT", cidade: clean(lead.cidade, 120) || null, origem: "outbound_email", notas: "Importada por CSV" });
+      if (domain) pendingDomains.add(domain);
+    }
+    const insertedCompanies = await insertChunks(admin, "empresas", [...toInsert.values()]);
+    for (const company of insertedCompanies as CompanyRow[]) {
+      byName.set(String(company.nome_normalizado), company);
+      if (company.email_domain && !byDomain.has(company.email_domain.toLowerCase())) byDomain.set(company.email_domain.toLowerCase(), company);
+    }
+    const firstNewContactByCompany = new Set<string>();
+    const contactRows: Array<Record<string, unknown>> = [];
+    for (const [email, lead] of missing) {
+      const name = clean(lead.nome, 240) || email;
+      const companyName = clean(lead.empresa, 240) || `${name} (particular)`;
+      const company = byName.get(normalize(companyName)) ?? byDomain.get(businessDomain(email) ?? "");
+      if (!company) throw new Error(`Não foi possível criar a empresa para ${email}.`);
+      const principal = !companies.some((item) => item.id === company.id) && !firstNewContactByCompany.has(company.id);
+      if (principal) firstNewContactByCompany.add(company.id);
+      contactRows.push({ id: crypto.randomUUID(), empresa_id: company.id, nome: name, cargo: clean(lead.cargo, 240) || null, email, telefone: clean(lead.telefone, 80) || null, principal, estado: "nao_contactado", notas: "Importado por CSV" });
+    }
+    const insertedContacts = await insertChunks(admin, "contactos", contactRows);
+    for (const contact of insertedContacts as ContactRow[]) if (contact.email) contacts.set(contact.email.toLowerCase(), contact);
+  }
+  return {
+    contactsCreated: contacts.size - contactsExisting,
+    contactsExisting,
+    contacts: emails.map((email) => ({ email, id: contacts.get(email)?.id, companyId: contacts.get(email)?.empresa_id })).filter((item) => item.id),
+  };
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   try {
@@ -47,6 +111,7 @@ Deno.serve(async (request) => {
     const requestedNikufraFinancials = body.includeNikufraFinancials === true;
     if (!leads.length) return Response.json({ error: "Sem contactos para importar" }, { status: 400, headers: corsHeaders });
     const admin = adminClient();
+    if (body.contactsOnly === true) return Response.json(await importCampaignContacts(admin, leads), { headers: corsHeaders });
     const [{ data: existingCompanies, error: companyLoadError }, { data: existingContacts, error: contactLoadError }, { data: existingOpportunities, error: opportunityLoadError }] = await Promise.all([
       admin.from("empresas").select("id,nome,nome_normalizado,email_domain"),
       admin.from("contactos").select("id,email,empresa_id"),
