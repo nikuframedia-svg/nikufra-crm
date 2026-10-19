@@ -1,9 +1,9 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createColumnHelper, flexRender, getCoreRowModel, getFilteredRowModel, getPaginationRowModel, getSortedRowModel, useReactTable, type PaginationState, type SortingState } from "@tanstack/react-table";
 import { AlertTriangle, ArrowDownUp, Check, Download, MailPlus, Search, Trash2, Upload, X } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { pipelineBoardOrder, stageLabels, stageProbability } from "../data/seed";
-import { csvFieldLabels, csvRecord, parseCsv, stageFromText, verticalFromText, type CsvField, type ParsedCsv } from "../lib/csv-import";
+import { csvContactName, csvFieldLabels, csvRecord, parseCsv, stageFromText, verticalFromText, type CsvField, type ParsedCsv } from "../lib/csv-import";
 import { useCRM } from "../state/crm-context";
 import type { Lead, Opportunity, Stage, Vertical } from "../types";
 import { Avatar, Button, Card, Modal, PageHeader } from "../components/ui";
@@ -30,6 +30,11 @@ export function LeadsPage() {
   const verifyLeads = useVerifyLeads();
   const assignableTeam = useMemo(() => dataMode === "supabase" ? team.filter((owner) => /^[0-9a-f-]{36}$/i.test(owner.id)) : team, [dataMode, team]);
   const importEmailCount = useMemo(() => importData ? new Set(importData.rows.map((row) => (csvRecord(importData, row).email ?? "").trim().toLowerCase()).filter(Boolean)).size : 0, [importData]);
+  const hasEmailColumn = Boolean(importData?.mapping.includes("email"));
+
+  useEffect(() => {
+    if (window.location.hash === "#importar-csv") setImportOpen(true);
+  }, []);
 
   const columns = useMemo(() => [
     helper.display({ id: "select", header: () => <input type="checkbox" aria-label="Selecionar todos" checked={selected.size === leads.length && leads.length > 0} onChange={(event) => setSelected(event.target.checked ? new Set(leads.map((lead) => lead.id)) : new Set())} />, cell: ({ row }) => <input type="checkbox" aria-label={`Selecionar ${row.original.nome}`} checked={selected.has(row.original.id)} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(row.original.id); else next.delete(row.original.id); return next; })} /> }),
@@ -52,12 +57,14 @@ export function LeadsPage() {
   }
 
   async function handleFile(file: File) {
+    setImportData(null);
+    setImportVerificationResults(null);
     if (file.size > 5 * 1024 * 1024) { setImportError("O ficheiro ultrapassa o limite de 5 MB."); return; }
     const parsed = parseCsv(await file.text());
     if (!parsed.headers.length || !parsed.rows.length) { setImportError("O CSV está vazio ou não tem cabeçalho."); return; }
+    if (parsed.rows.length > 1000) { setImportError("O CSV tem mais de 1000 linhas. Divide-o em ficheiros mais pequenos."); return; }
     setImportData(parsed);
     setImportError("");
-    setImportVerificationResults(null);
   }
 
   function normalizedCompanyKey(value: string) { return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, ""); }
@@ -67,16 +74,18 @@ export function LeadsPage() {
 
   async function handleImport() {
     if (!importData) return;
+    if (!hasEmailColumn) { setImportError("Associa uma coluna ao campo Email antes de importar."); return; }
     if (!assignableTeam.length) { setImportError("A equipa ainda está a carregar. Tenta novamente dentro de alguns segundos."); return; }
     const seenEmails = new Set<string>();
+    const existingEmails = new Set(leads.map((lead) => lead.email.trim().toLowerCase()).filter(Boolean));
     const existingCompanyByName = new Map(opportunities.map((item) => [normalizedCompanyKey(item.empresa), item]));
     const opportunityByCompany = new Map<string, Opportunity>();
     const newLeads: Lead[] = []; const newOpportunities: Opportunity[] = [];
     for (const row of importData.rows) {
       const record = csvRecord(importData, row);
       const email = (record.email ?? "").trim().toLowerCase();
-      if (!email || !email.includes("@") || seenEmails.has(email)) continue;
-      const contactName = (record.nome || inferName(email)).trim();
+      if (!email || !email.includes("@") || seenEmails.has(email) || existingEmails.has(email)) continue;
+      const contactName = csvContactName(record, inferName(email));
       const rawCompany = (record.empresa || inferCompany(email)).trim();
       const empresa = normalizedCompanyKey(rawCompany) === "particular" ? `${contactName} (particular)` : rawCompany;
       const key = normalizedCompanyKey(empresa) || crypto.randomUUID();
@@ -141,13 +150,13 @@ export function LeadsPage() {
         <div className="table-footer"><span>A mostrar {pagination.pageIndex * pagination.pageSize + 1}–{Math.min((pagination.pageIndex + 1) * pagination.pageSize, table.getFilteredRowModel().rows.length)} de {table.getFilteredRowModel().rows.length}</span><span className="pagination-controls"><Button variant="ghost" disabled={!table.getCanPreviousPage()} onClick={() => table.previousPage()}>Anterior</Button><b className="mono">{pagination.pageIndex + 1}/{table.getPageCount()}</b><Button variant="ghost" disabled={!table.getCanNextPage()} onClick={() => table.nextPage()}>Seguinte</Button></span><span>{dataMode === "supabase" ? "Dados partilhados no servidor" : "Base Nikufra carregada localmente"}</span></div>
       </Card>
 
-      <Modal open={importOpen} onClose={() => { if (!importBusy) setImportOpen(false); }} title="Importar contactos" description="O CRM deteta o separador e reconhece colunas em português ou inglês. Podes corrigir o mapeamento antes de importar." width="820px">
-        <div className="import-drop" onClick={() => fileRef.current?.click()}><Upload size={22} /><strong>Escolhe um CSV ou arrasta para aqui</strong><span>Deteção de duplicados por email · máximo 5 MB</span><input ref={fileRef} type="file" accept=".csv,text/csv" hidden onChange={(event) => event.target.files?.[0] && handleFile(event.target.files[0])} /></div>
-        {importData ? <div className="import-preview"><div className="import-preview__head"><strong>{importData.rows.length} registos · separador {importData.delimiter === "\t" ? "tab" : importData.delimiter}</strong><span>{importData.mapping.filter(Boolean).length}/{importData.headers.length} campos reconhecidos</span></div><div className="mapping-grid">{importData.headers.map((header, index) => <label key={`${header}-${index}`}><span>{header}</span><select value={importData.mapping[index] ?? ""} onChange={(event) => setImportData((current) => current ? { ...current, mapping: current.mapping.map((field, fieldIndex) => fieldIndex === index ? (event.target.value || null) as CsvField | null : field) } : current)}><option value="">Ignorar coluna</option>{Object.entries(csvFieldLabels).map(([field, label]) => <option value={field} key={field}>{label}</option>)}</select></label>)}</div><table><thead><tr>{importData.headers.slice(0, 6).map((header, index) => <th key={`${header}-${index}`}>{header}</th>)}</tr></thead><tbody>{importData.rows.slice(0, 5).map((row, index) => <tr key={index}>{row.slice(0, 6).map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>)}</tbody></table></div> : null}
+      <Modal open={importOpen} onClose={() => { if (!importBusy) setImportOpen(false); }} title="Importar contactos" description="Escolhe um CSV. O CRM lê os títulos das colunas; confirma a que campo corresponde cada uma antes de importar." width="960px">
+        <div className="import-drop" onClick={() => fileRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) void handleFile(file); }}><Upload size={22} /><strong>Escolhe um CSV ou arrasta para aqui</strong><span>Até 1000 linhas e 5 MB por ficheiro</span><input ref={fileRef} type="file" accept=".csv,text/csv" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleFile(file); event.target.value = ""; }} /></div>
+        {importData ? <div className="import-preview"><div className="import-preview__head"><strong>{importData.rows.length} registos · separador {importData.delimiter === "\t" ? "tab" : importData.delimiter}</strong><span>{importData.mapping.filter(Boolean).length}/{importData.headers.length} campos reconhecidos</span></div><p className="import-mapping-help">Confirma o mapeamento. Podes associar primeiro nome, último nome, email e empresa; o email é obrigatório.</p><div className="mapping-grid">{importData.headers.map((header, index) => <label key={`${header}-${index}`}><span title={header}>{header || `Coluna ${index + 1}`}</span><select value={importData.mapping[index] ?? ""} onChange={(event) => setImportData((current) => current ? { ...current, mapping: current.mapping.map((field, fieldIndex) => fieldIndex === index ? (event.target.value || null) as CsvField | null : field === event.target.value ? null : field) } : current)}><option value="">Ignorar coluna</option>{Object.entries(csvFieldLabels).map(([field, label]) => <option value={field} key={field}>{label}</option>)}</select></label>)}</div><table><thead><tr>{importData.headers.slice(0, 6).map((header, index) => <th key={`${header}-${index}`}>{header}</th>)}</tr></thead><tbody>{importData.rows.slice(0, 5).map((row, index) => <tr key={index}>{row.slice(0, 6).map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>)}</tbody></table></div> : null}
         {importData && dataMode === "supabase" ? <div className="import-verification"><span><strong>Avaliação automática de {importEmailCount} emails</strong><small>Após importar, o CRM avalia sintaxe e DNS em lotes de 25. Um domínio apto a receber correio não confirma a existência da caixa; esses casos ficam inconclusivos. Isto não autoriza envios comerciais.</small></span></div> : null}
         {importVerificationResults ? <div className="import-verification-results" role="status"><strong>Importação concluída · {importVerificationResults.filter((item) => item.status === "exempt").length} dispensados por histórico · {importVerificationResults.filter((item) => item.status === "valid").length} confirmados por prova anterior · {importVerificationResults.filter((item) => item.status === "invalid").length} inválidos · {importVerificationResults.filter((item) => item.status === "risky").length} arriscados · {importVerificationResults.filter((item) => item.status === "unknown").length} inconclusivos</strong><ul>{importVerificationResults.map((item) => <li key={item.contactId}>{item.email ?? "Sem email"}: {item.reason}</li>)}</ul><small>Um resultado inconclusivo não confirma que a caixa exista. Vê o estado em Outreach → Audiências.</small></div> : null}
         {importError ? <div className="auth-error">{importError}</div> : null}
-        <div className="modal__actions"><Button variant="secondary" disabled={importBusy} onClick={() => setImportOpen(false)}>{importData ? "Cancelar" : "Fechar"}</Button>{importData ? <Button disabled={importBusy} onClick={() => void handleImport()}>{importBusy ? "A importar e avaliar…" : dataMode === "supabase" ? "Importar e avaliar" : "Importar sem duplicados"}</Button> : null}</div>
+        <div className="modal__actions"><Button variant="secondary" disabled={importBusy} onClick={() => setImportOpen(false)}>{importData ? "Cancelar" : "Fechar"}</Button>{importData ? <Button disabled={importBusy || !hasEmailColumn} onClick={() => void handleImport()}>{importBusy ? "A importar e avaliar…" : dataMode === "supabase" ? "Importar e avaliar" : "Importar sem duplicados"}</Button> : null}</div>
       </Modal>
       <Modal open={deleteOpen} onClose={() => !deleteBusy && setDeleteOpen(false)} title={`Apagar ${selected.size} registo${selected.size === 1 ? "" : "s"} comercial${selected.size === 1 ? "" : "is"}?`} description="A empresa e a lead são o mesmo registo em todo o CRM.">
         <div className="delete-contact-warning"><AlertTriangle size={20} /><div><strong>A eliminação é definitiva e será refletida também no Kanban.</strong><p>Serão removidos a empresa, todos os contactos associados, oportunidades, atividades e faturação. O Google fica impedido de voltar a importar os contactos apagados.</p></div></div>

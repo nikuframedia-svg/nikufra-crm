@@ -124,6 +124,7 @@ else
   )"
   export OUTREACH_IMAGE_TAG="sha-${outreach_source_hash}"
 fi
+export OUTREACH_WORKER_IMAGE_TAG="${OUTREACH_IMAGE_TAG}"
 
 CRM_API_PORT="${CRM_API_PORT:-8800}"
 if [[ "${DEPLOY_MODE}" == --rollback-preloaded ]]; then

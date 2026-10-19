@@ -12,6 +12,7 @@ import {
   addAudienceContacts,
   advanceMailboxRamp,
   campaignAction,
+  archiveCampaign,
   contactEligibility,
   createAudience,
   createCampaign,
@@ -108,6 +109,10 @@ export function buildRouter() {
   router.add("PATCH", `${API}/campaigns/:campaignId`, async (context) => {
     assertOrigin(context.request);
     success(context, await updateCampaign(actor(context), uuid.parse(context.params.campaignId), await readJson(context.request)));
+  }, { capability: "outreach.campaign.manage" });
+  router.add("DELETE", `${API}/campaigns/:campaignId`, async (context) => {
+    assertOrigin(context.request);
+    success(context, await archiveCampaign(actor(context), uuid.parse(context.params.campaignId)));
   }, { capability: "outreach.campaign.manage" });
   router.add("POST", `${API}/campaigns/:campaignId/message-tests`, async (context) => {
     assertOrigin(context.request);

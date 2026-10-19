@@ -120,6 +120,14 @@ export function useCreateCampaign() {
   return useMutation({ mutationFn: (input: { name: string; description: string; dailyLimit: number; audienceId?: string; steps: Array<{ delayMinutes: number; replyToPrevious: boolean; variants: Array<{ name: string; weight: number; subject: string; body: string }> }> }) => postJson<CampaignDetail>("/campaigns", input), onSuccess: () => void queryClient.invalidateQueries({ queryKey: outreachKeys.all }) });
 }
 
+export function useArchiveCampaign() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => deleteJson<{ id: string; status: "archived" }>(`/campaigns/${encodeURIComponent(id)}`),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: outreachKeys.all }),
+  });
+}
+
 export function useCampaignAction(id: string) {
   const queryClient = useQueryClient();
   return useMutation({ mutationFn: (action: "launch" | "pause" | "resume") => postJson<CampaignDetail>(`/campaigns/${encodeURIComponent(id)}/${action}`), onSuccess: () => void queryClient.invalidateQueries({ queryKey: outreachKeys.all }) });

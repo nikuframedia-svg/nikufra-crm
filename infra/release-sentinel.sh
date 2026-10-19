@@ -6,9 +6,9 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"
 COMPOSE=(docker compose --env-file "${ENV_FILE}" -f "${SCRIPT_DIR}/docker-compose.yml" -f "${SCRIPT_DIR}/docker-compose.production.yml")
 SENTINEL_MODE="${1:---full}"
-(( $# <= 1 )) || { echo "Uso: $0 [--full|--local-dark]" >&2; exit 2; }
+(( $# <= 1 )) || { echo "Uso: $0 [--full|--local-dark|--preserve-worker]" >&2; exit 2; }
 case "${SENTINEL_MODE}" in
-  --full|--local-dark) ;;
+  --full|--local-dark|--preserve-worker) ;;
   *) echo "Modo de sentinel inválido: ${SENTINEL_MODE}" >&2; exit 2 ;;
 esac
 OUTREACH_IMAGE_ARCHIVE="${PROJECT_DIR}/.outreach-image.tar"
@@ -69,6 +69,18 @@ outreach_release_id="$(< "${PROJECT_DIR}/.release-id")"
   exit 1
 }
 export OUTREACH_IMAGE_TAG="release-${outreach_release_id}"
+if [[ "${SENTINEL_MODE}" == --preserve-worker ]]; then
+  [[ -f "${PROJECT_DIR}/.preserved-worker-image.ref" ]] || {
+    echo "Sentinel recusado: referência do worker preservado em falta." >&2; exit 1;
+  }
+  preserved_worker_ref="$(< "${PROJECT_DIR}/.preserved-worker-image.ref")"
+  [[ "${preserved_worker_ref}" == nikufra-outreach:release-* ]] || {
+    echo "Sentinel recusado: referência do worker preservado inválida." >&2; exit 1;
+  }
+  export OUTREACH_WORKER_IMAGE_TAG="${preserved_worker_ref#nikufra-outreach:}"
+else
+  export OUTREACH_WORKER_IMAGE_TAG="${OUTREACH_IMAGE_TAG}"
+fi
 expected_outreach_image="nikufra-outreach:${OUTREACH_IMAGE_TAG}"
 
 for artifact in "${OUTREACH_IMAGE_ARCHIVE}" "${OUTREACH_IMAGE_CHECKSUM}" "${OUTREACH_IMAGE_ID}" "${OUTREACH_IMAGE_REF}"; do
@@ -160,19 +172,37 @@ for service in outreach-api outreach-worker; do
   [[ -n "${container_id}" ]] || { echo "Sentinel recusado: ${service} não está em execução." >&2; exit 1; }
   configured_image="$(docker inspect --format '{{.Config.Image}}' "${container_id}")"
   running_image_id="$(docker inspect --format '{{.Image}}' "${container_id}")"
-  [[ "${configured_image}" == "${expected_outreach_image}" \
-    && "${running_image_id}" == "${expected_outreach_image_id}" ]] || {
-    echo "Sentinel recusado: ${service} usa ${configured_image}/${running_image_id}, esperado ${expected_outreach_image}/${expected_outreach_image_id}." >&2
+  service_image="${expected_outreach_image}"
+  service_image_id="${expected_outreach_image_id}"
+  if [[ "${SENTINEL_MODE}" == --preserve-worker && "${service}" == outreach-worker ]]; then
+    [[ -f "${PROJECT_DIR}/.preserved-worker-image.ref" && -f "${PROJECT_DIR}/.preserved-worker-image.id" ]] || {
+      echo "Sentinel recusado: identidade do worker preservado em falta." >&2; exit 1;
+    }
+    service_image="$(< "${PROJECT_DIR}/.preserved-worker-image.ref")"
+    service_image_id="$(< "${PROJECT_DIR}/.preserved-worker-image.id")"
+    [[ "${service_image}" =~ ^nikufra-outreach:release-[0-9a-f]{40}-[0-9]+-[0-9]+$ \
+      && "${service_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+      echo "Sentinel recusado: identidade do worker preservado inválida." >&2; exit 1;
+    }
+  fi
+  [[ "${configured_image}" == "${service_image}" \
+    && "${running_image_id}" == "${service_image_id}" ]] || {
+    echo "Sentinel recusado: ${service} usa ${configured_image}/${running_image_id}, esperado ${service_image}/${service_image_id}." >&2
     exit 1
   }
   health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container_id}")"
   [[ "${health}" == healthy ]] || { echo "Sentinel recusado: ${service} não está healthy (${health})." >&2; exit 1; }
   send_enabled="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${container_id}" | sed -n 's/^OUTREACH_SEND_ENABLED=//p')"
   shadow_mode="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${container_id}" | sed -n 's/^OUTREACH_SHADOW_MODE=//p')"
-  [[ "${send_enabled}" == false && "${shadow_mode}" == true ]] || {
-    echo "Sentinel recusado: gates runtime de ${service} não estão false/true." >&2
-    exit 1
-  }
+  if [[ "${SENTINEL_MODE}" == --preserve-worker ]]; then
+    [[ "${send_enabled}" == true && "${shadow_mode}" == false ]] || {
+      echo "Sentinel recusado: gates runtime de ${service} não estão true/false." >&2; exit 1;
+    }
+  else
+    [[ "${send_enabled}" == false && "${shadow_mode}" == true ]] || {
+      echo "Sentinel recusado: gates runtime de ${service} não estão false/true." >&2; exit 1;
+    }
+  fi
 done
 
 found_migration=false
@@ -246,6 +276,23 @@ if [[ "${SENTINEL_MODE}" == --local-dark ]]; then
     exit 1
   }
   echo "RELEASE_SENTINEL_LOCAL_DARK_OK"
+  exit 0
+fi
+
+if [[ "${SENTINEL_MODE}" == --preserve-worker ]]; then
+  [[ "${OUTREACH_SEND_ENABLED:-}" == true && "${OUTREACH_SHADOW_MODE:-}" == false ]] || {
+    echo "Sentinel recusado: gates no env da release não estão true/false." >&2; exit 1;
+  }
+  [[ "$(db_scalar "select mode || ':' || send_enabled::text from public.outreach_system_state where id")" == canary:true ]] || {
+    echo "Sentinel recusado: DB não está canary:true." >&2; exit 1;
+  }
+  curl --fail --silent --show-error --max-time 10 \
+    "http://127.0.0.1:${OUTREACH_API_PORT:-8787}/healthz" >/dev/null
+  [[ "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 \
+    "http://127.0.0.1:${OUTREACH_API_PORT:-8787}/api/outreach/v1/overview")" == 401 ]] || {
+    echo "Sentinel recusado: API local não exige sessão CRM." >&2; exit 1;
+  }
+  echo "RELEASE_SENTINEL_PRESERVE_WORKER_OK"
   exit 0
 fi
 

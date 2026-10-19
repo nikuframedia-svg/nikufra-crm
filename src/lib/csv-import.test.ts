@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { csvRecord, parseCsv, stageFromText } from "./csv-import";
+import { csvContactName, csvRecord, parseCsv, stageFromText } from "./csv-import";
 
 describe("importação CSV inteligente", () => {
   it("deteta nomes de coluna e delimitador", () => {
@@ -17,5 +17,16 @@ describe("importação CSV inteligente", () => {
     expect(stageFromText("Reunião")).toBe("reuniao_feita");
     expect(stageFromText("Won")).toBe("cliente");
     expect(stageFromText("Recusado")).toBe("perdido");
+  });
+
+  it("reconhece primeiro e último nome e compõe o nome do contacto", () => {
+    const parsed = parseCsv("First Name;Apelido;E-mail;Company\nAna;Silva;ana@example.com;Ficosa");
+    expect(parsed.mapping).toEqual(["primeiro_nome", "ultimo_nome", "email", "empresa"]);
+    expect(csvContactName(csvRecord(parsed, parsed.rows[0]), "Fallback")).toBe("Ana Silva");
+  });
+
+  it("ignora atribuições automáticas repetidas para o mesmo campo", () => {
+    const parsed = parseCsv("Email,Mail,First Name\nana@example.com,ana@example.com,Ana");
+    expect(parsed.mapping).toEqual(["email", null, "primeiro_nome"]);
   });
 });

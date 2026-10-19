@@ -241,7 +241,7 @@ export async function getCampaign(id: string) {
     (select count(*)::int from public.outreach_messages message where message.campaign_id=c.id and message.direction='inbound' and message.kind='reply') as "replyCount",
     (select count(*)::int from public.outreach_messages message where message.campaign_id=c.id and message.kind='hard_bounce') as "bounceCount",
     (select count(*)::int from public.outreach_threads thread where thread.campaign_id=c.id and thread.classification='positive') as "positiveCount"
-    from public.outreach_campaigns c where c.id=$1`, [id]);
+    from public.outreach_campaigns c where c.id=$1 and c.status <> 'archived'`, [id]);
   if (!campaign.rows[0]) throw new HttpError(404, "campaign_not_found", "Campanha não encontrada.");
   const [steps, recipients, readiness, availableMailboxes] = await Promise.all([
     pool.query(`select s.id, s.position, s.kind, s.delay_minutes as "delayMinutes", s.reply_to_previous as "replyToPrevious", s.ativo as active,

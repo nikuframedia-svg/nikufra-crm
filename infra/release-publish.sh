@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # Forced command for the production deploy key. The only accepted operations
-# are a validated backend release, a read-only backend sentinel, a web
+# are a validated backend release (dark or worker-preserving), a read-only backend sentinel, a web
 # publication tied to that exact backend release, and a fail-closed rollback to
 # an immutable release previously created by this publisher.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -492,7 +492,7 @@ install_dark_env() {
   # Remove every inherited occurrence before appending the two authoritative
   # dark values. Editing just the first occurrence is unsafe because Compose
   # accepts duplicate keys and the final value wins.
-  perl -0pi -e 's/^OUTREACH_(?:SEND_ENABLED|SHADOW_MODE)=.*\n?//mg' "${env_tmp}"
+  perl -0pi -e 's/^OUTREACH_(?:SEND_ENABLED|SHADOW_MODE|WORKER_IMAGE_TAG)=.*\n?//mg' "${env_tmp}"
   printf '\nOUTREACH_SEND_ENABLED=false\nOUTREACH_SHADOW_MODE=true\n' >> "${env_tmp}"
   count="$(grep -c '^OUTREACH_SEND_ENABLED=' "${env_tmp}" || true)"
   if [[ "${count}" != 1 ]] || ! grep -qx 'OUTREACH_SEND_ENABLED=false' "${env_tmp}"; then
@@ -508,6 +508,40 @@ install_dark_env() {
   fi
   chmod 600 "${env_tmp}"
   mv -f -- "${env_tmp}" "${tree}/infra/.env"
+}
+
+install_preserved_env() {
+  local source="$1" tree="$2" worker_ref="$3" env_tmp
+  [[ -f "${source}" && ! -L "${source}" && "$(stat -c '%a' "${source}")" == 600 ]] || {
+    echo "Env de origem inseguro." >&2; return 1;
+  }
+  [[ "${worker_ref}" =~ ^nikufra-outreach:release-[0-9a-f]{40}-[0-9]+-[0-9]+$ ]] || {
+    echo "Ref do worker preservado inválida." >&2; return 1;
+  }
+  [[ "$(grep -c '^OUTREACH_SEND_ENABLED=' "${source}" || true)" == 1 \
+    && "$(grep -c '^OUTREACH_SHADOW_MODE=' "${source}" || true)" == 1 \
+    && "$(grep -cx 'OUTREACH_SEND_ENABLED=true' "${source}" || true)" == 1 \
+    && "$(grep -cx 'OUTREACH_SHADOW_MODE=false' "${source}" || true)" == 1 ]] || {
+    echo "Release preserve exige env live true/false." >&2; return 1;
+  }
+  env_tmp="$(mktemp "${tree}/infra/.env.preserve.XXXXXX")"
+  install -m 600 "${source}" "${env_tmp}"
+  perl -0pi -e 's/^OUTREACH_WORKER_IMAGE_TAG=.*\n?//mg' "${env_tmp}"
+  printf '\nOUTREACH_WORKER_IMAGE_TAG=%s\n' "${worker_ref#nikufra-outreach:}" >> "${env_tmp}"
+  chmod 600 "${env_tmp}"
+  mv -f -- "${env_tmp}" "${tree}/infra/.env"
+}
+
+sentinel_for_release() {
+  local tree="$1" mode
+  mode="$(cat "${tree}/.release-mode" 2>/dev/null || true)"
+  if [[ "${mode}" == preserve-worker ]]; then
+    COMPOSE_PROJECT_NAME=nikufra-crm NIKUFRA_BACKUP_ROOT="${BACKUP_ROOT}" \
+      "${tree}/infra/release-sentinel.sh" --preserve-worker
+  else
+    COMPOSE_PROJECT_NAME=nikufra-crm NIKUFRA_BACKUP_ROOT="${BACKUP_ROOT}" \
+      "${tree}/infra/release-sentinel.sh"
+  fi
 }
 
 verify_target_migration_ledger() {
@@ -572,7 +606,7 @@ assert_current_release() {
 }
 
 case "${action}" in
-  publish-backend)
+  publish-backend|publish-backend-preserve)
     [[ ! -e "${release_dir}" ]] || { echo "A release ${release_id} ja existe; usa um novo run attempt." >&2; exit 1; }
     command -v python3 >/dev/null || { echo "python3 e obrigatorio." >&2; exit 1; }
     command -v timeout >/dev/null || { echo "timeout e obrigatorio." >&2; exit 1; }
@@ -610,6 +644,7 @@ required = {
     "infra/configure-pgsodium.sh",
     "infra/configure-wal-archive.sh",
     "infra/deploy-production.sh",
+    "infra/deploy-preserve-warmup.sh",
     "infra/disk-safety.sh",
     "infra/install-backup-schedule.sh",
     "infra/outreach-readiness.sh",
@@ -776,9 +811,26 @@ PY
     printf '%s\n' "${ROLLBACK_CAPABILITY}" > "${stage}/.rollback-capability"
 
     config_source="$(resolve_config_source)"
-    # Every automated release is deliberately demoted to dark mode. A canary
-    # or live promotion remains an explicit, separate operator action.
-    install_dark_env "${config_source}" "${stage}"
+    if [[ "${action}" == publish-backend-preserve ]]; then
+      [[ -L "${current_link}" ]] || { echo "Release anterior em falta." >&2; exit 1; }
+      current_tree="$(readlink -f "${current_link}")"
+      current_id="$(basename "${current_tree}")"
+      [[ "${current_id}" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$ ]] || { echo "Release anterior inválida." >&2; exit 1; }
+      verify_backend_release "${current_tree}" "${current_id}"
+      current_worker_id="$(docker compose --project-name nikufra-crm --env-file "${current_tree}/infra/.env" -f "${current_tree}/infra/docker-compose.yml" -f "${current_tree}/infra/docker-compose.production.yml" ps -q outreach-worker)"
+      [[ -n "${current_worker_id}" ]] || { echo "Worker atual ausente." >&2; exit 1; }
+      current_worker_ref="$(docker inspect --format '{{.Config.Image}}' "${current_worker_id}")"
+      current_worker_image_id="$(docker inspect --format '{{.Image}}' "${current_worker_id}")"
+      [[ "${current_worker_ref}" =~ ^nikufra-outreach:release-[0-9a-f]{40}-[0-9]+-[0-9]+$ \
+        && "${current_worker_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Worker atual não tem imagem de release." >&2; exit 1; }
+      printf '%s\n' "${current_worker_ref}" > "${stage}/.preserved-worker-image.ref"
+      printf '%s\n' "${current_worker_image_id}" > "${stage}/.preserved-worker-image.id"
+      printf 'preserve-worker\n' > "${stage}/.release-mode"
+      install_preserved_env "${config_source}" "${stage}" "${current_worker_ref}"
+    else
+      # Standard releases deliberately demote production to dark mode.
+      install_dark_env "${config_source}" "${stage}"
+    fi
     ln -s "${BACKUP_ROOT}" "${stage}/backups"
     chmod 755 "${stage}"/infra/*.sh
     chmod 400 "${stage}/.release-id" "${stage}/.rollback-capability"
@@ -798,11 +850,16 @@ PY
         "${release_dir}/infra/capture-pre-unification-recovery.sh"
     fi
 
-    COMPOSE_PROJECT_NAME=nikufra-crm NIKUFRA_BACKUP_ROOT="${BACKUP_ROOT}" "${release_dir}/infra/deploy-production.sh"
+    if [[ "${action}" == publish-backend-preserve ]]; then
+      verify_target_migration_ledger "${release_dir}"
+      COMPOSE_PROJECT_NAME=nikufra-crm NIKUFRA_BACKUP_ROOT="${BACKUP_ROOT}" "${release_dir}/infra/deploy-preserve-warmup.sh"
+    else
+      COMPOSE_PROJECT_NAME=nikufra-crm NIKUFRA_BACKUP_ROOT="${BACKUP_ROOT}" "${release_dir}/infra/deploy-production.sh"
+    fi
     export_outreach_image "${release_dir}"
     capture_core_images "${release_dir}"
     verify_backend_release "${release_dir}" "${release_id}"
-    COMPOSE_PROJECT_NAME=nikufra-crm NIKUFRA_BACKUP_ROOT="${BACKUP_ROOT}" "${release_dir}/infra/release-sentinel.sh"
+    sentinel_for_release "${release_dir}"
 
     activate_current_release "${release_id}"
 
@@ -816,11 +873,11 @@ PY
       install -m 755 "${release_dir}/infra/release-publish.sh" "${SCRIPT_DIR}/.release-publish.sh.new"
       mv -f -- "${SCRIPT_DIR}/.release-publish.sh.new" "${SCRIPT_DIR}/release-publish.sh"
     fi
-    echo "BACKEND_RELEASE_OK ${release_id} (dark mode)"
+    echo "BACKEND_RELEASE_OK ${release_id} (${action})"
     ;;
   verify-backend)
     assert_current_release
-    COMPOSE_PROJECT_NAME=nikufra-crm NIKUFRA_BACKUP_ROOT="${BACKUP_ROOT}" "${release_dir}/infra/release-sentinel.sh"
+    sentinel_for_release "${release_dir}"
     echo "BACKEND_VERIFY_OK ${release_id}"
     ;;
   publish-web)
@@ -872,7 +929,7 @@ PY
     # The bundle is now a validated local file and every failure below leaves
     # only the previous web release active while the EXIT trap removes temps.
     assert_current_release
-    COMPOSE_PROJECT_NAME=nikufra-crm NIKUFRA_BACKUP_ROOT="${BACKUP_ROOT}" "${release_dir}/infra/release-sentinel.sh"
+    sentinel_for_release "${release_dir}"
     [[ ! -e "${release_dir}/${WEB_BUNDLE}" && ! -e "${release_dir}/${WEB_CHECKSUM}" ]] || {
       echo "A release ${release_id} ganhou artefactos web durante o preflight." >&2
       exit 1
@@ -885,7 +942,7 @@ PY
     mv -- "${web_checksum_partial}" "${release_dir}/${WEB_CHECKSUM}"
     verify_web_release "${release_dir}"
     publish_stored_web "${release_dir}" "${release_id}"
-    COMPOSE_PROJECT_NAME=nikufra-crm NIKUFRA_BACKUP_ROOT="${BACKUP_ROOT}" "${release_dir}/infra/release-sentinel.sh"
+    sentinel_for_release "${release_dir}"
     echo "WEB_RELEASE_OK ${release_id}"
     ;;
   rollback-release)

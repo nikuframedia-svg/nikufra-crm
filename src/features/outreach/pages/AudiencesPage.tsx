@@ -1,6 +1,6 @@
 import { useDeferredValue, useMemo, useState, type FormEvent } from "react";
 import { Link } from "@tanstack/react-router";
-import { AlertTriangle, Check, ExternalLink, Plus, Search, ShieldCheck, UsersRound, X } from "lucide-react";
+import { AlertTriangle, Check, ExternalLink, Plus, Search, ShieldCheck, Upload, UsersRound, X } from "lucide-react";
 import { Button } from "../../../components/ui";
 import { stageLabels } from "../../../data/seed";
 import { useCRM } from "../../../state/crm-context";
@@ -118,7 +118,7 @@ export function OutreachAudiencesPage() {
   }
 
   return <div className="outreach-page">
-    <OutreachPageHeader eyebrow="Contactos canónicos" title="Audiências" description="Segmenta contactos do CRM. Identidade e propriedade continuam a ser editadas exclusivamente na ficha CRM." actions={<><Button variant="secondary" disabled={!verifySelected.size} onClick={() => { setVerificationResults(null); setVerificationOpen(true); }}><ShieldCheck size={15} />Verificar {verifySelected.size || ""} leads</Button><Button disabled={!selected.size} onClick={openAudienceDialog}><Plus size={15} />Adicionar {selected.size || ""} a audiência ou campanha</Button></>} />
+    <OutreachPageHeader eyebrow="Contactos canónicos" title="Audiências" description="Segmenta contactos do CRM. Identidade e propriedade continuam a ser editadas exclusivamente na ficha CRM." actions={<><Link className="button button--secondary" to="/leads" hash="importar-csv"><Upload size={15} />Importar CSV</Link><Button variant="secondary" disabled={!verifySelected.size} onClick={() => { setVerificationResults(null); setVerificationOpen(true); }}><ShieldCheck size={15} />Verificar {verifySelected.size || ""} leads</Button><Button disabled={!selected.size} onClick={openAudienceDialog}><Plus size={15} />Adicionar {selected.size || ""} a audiência ou campanha</Button></>} />
     <section className="outreach-audience-summary">
       <div><strong>{formatNumber(leads.length)}</strong><span>contactos no CRM</span></div><div><strong>{formatNumber(audiences.data?.items.length ?? 0)}</strong><span>audiências guardadas</span></div><p><AlertTriangle size={15} />Elegibilidade é apenas uma pré-análise. Antes do envio, o worker volta a validar endereço, base legal, histórico da conta ou verificação, opt-out, resposta e quota.</p>
     </section>
