@@ -81,12 +81,27 @@ printf '%s\n' \
   'OUTREACH_SHADOW_MODE=false' > "${WORK}/source.env"
 chmod 600 "${WORK}/source.env"
 install_dark_env "${WORK}/source.env" "${WORK}/release"
-unset -f stat 2>/dev/null || true
 dark_env="${WORK}/release/infra/.env"
 [[ "$(grep -c '^OUTREACH_SEND_ENABLED=' "${dark_env}")" == 1 ]] || fail "SEND gate duplicado"
 [[ "$(grep -c '^OUTREACH_SHADOW_MODE=' "${dark_env}")" == 1 ]] || fail "shadow gate duplicado"
 grep -qx 'OUTREACH_SEND_ENABLED=false' "${dark_env}" || fail "SEND gate não ficou false"
 grep -qx 'OUTREACH_SHADOW_MODE=true' "${dark_env}" || fail "shadow gate não ficou true"
+
+# A code-only canary release must inherit exactly one live gate pair and pin
+# the existing worker image. Duplicated gate values must fail before deploy.
+eval "$(awk '/^install_preserved_env\(\) \{/{copy=1} copy{print} copy && /^}$/{exit}' "${ROOT}/infra/release-publish.sh")"
+mkdir -p "${WORK}/preserved/infra"
+printf '%s\n' 'OUTREACH_SEND_ENABLED=true' 'OUTREACH_SHADOW_MODE=false' > "${WORK}/live.env"
+chmod 600 "${WORK}/live.env"
+worker_ref="nikufra-outreach:release-$(printf 'a%.0s' {1..40})-1-1"
+install_preserved_env "${WORK}/live.env" "${WORK}/preserved" "${worker_ref}"
+grep -qx "OUTREACH_WORKER_IMAGE_TAG=${worker_ref#nikufra-outreach:}" "${WORK}/preserved/infra/.env" \
+  || fail "release preserve não fixou a imagem original do worker"
+printf '%s\n' 'OUTREACH_SEND_ENABLED=false' >> "${WORK}/live.env"
+if install_preserved_env "${WORK}/live.env" "${WORK}/preserved" "${worker_ref}" >/dev/null 2>&1; then
+  fail "release preserve aceitou gates duplicados"
+fi
+unset -f stat 2>/dev/null || true
 
 # A bare result=ok is not a recovery proof. Validate the exact function used
 # by deploy and ensure it accepts only a complete, bounded report.
@@ -490,7 +505,7 @@ web_receive_line="$(grep -Fn 'receive_web_bundle "${web_partial}"' <<< "${publis
 web_fd_close_line="$(grep -Fn 'exec 3<&-' <<< "${publish_web_block}" | cut -d: -f1)"
 web_validate_line="$(grep -Fn 'NIKUFRA_WEB_VALIDATE_ONLY=true' <<< "${publish_web_block}" | cut -d: -f1)"
 web_current_line="$(grep -Fn 'assert_current_release' <<< "${publish_web_block}" | cut -d: -f1)"
-web_sentinel_line="$(grep -Fn 'release-sentinel.sh"' <<< "${publish_web_block}" | head -1 | cut -d: -f1)"
+web_sentinel_line="$(grep -Fn 'sentinel_for_release "${release_dir}"' <<< "${publish_web_block}" | head -1 | cut -d: -f1)"
 web_recheck_line="$(grep -Fn '[[ ! -e "${release_dir}/${WEB_BUNDLE}" && ! -e "${release_dir}/${WEB_CHECKSUM}" ]]' <<< "${publish_web_block}" | tail -1 | cut -d: -f1)"
 web_commit_line="$(grep -Fn 'mv -- "${web_partial}" "${release_dir}/${WEB_BUNDLE}"' <<< "${publish_web_block}" | cut -d: -f1)"
 [[ -n "${web_fd_copy_line}" && -n "${web_stdin_close_line}" \

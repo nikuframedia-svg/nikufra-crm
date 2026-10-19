@@ -267,7 +267,7 @@ services:
     networks: [backend]
 
   outreach-worker:
-    image: nikufra-outreach:${OUTREACH_IMAGE_TAG:-local}
+    image: nikufra-outreach:${OUTREACH_WORKER_IMAGE_TAG:-${OUTREACH_IMAGE_TAG:-local}}
     restart: unless-stopped
     init: true
     depends_on:
