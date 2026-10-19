@@ -1,9 +1,9 @@
 import { useCallback, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowRight, Megaphone, Plus, Trash2, Upload } from "lucide-react";
+import { ArrowRight, Megaphone, Plus, Trash2 } from "lucide-react";
 import { Button } from "../../../components/ui";
 import { CampaignBadge, EmptyPanel, formatDateTime, formatNumber, ModuleDialog, OutreachError, OutreachLoading, OutreachPageHeader, OutreachPagination, ProgressBar, SearchField, useOutreachAccess } from "../components";
-import { useArchiveCampaign, useAudiences, useCampaigns, useCreateCampaign } from "../hooks";
+import { useArchiveCampaign, useCampaigns, useCreateCampaign } from "../hooks";
 import type { CampaignSummary } from "../types";
 
 export function OutreachCampaignsPage() {
@@ -15,7 +15,6 @@ export function OutreachCampaignsPage() {
   const [deleteTarget, setDeleteTarget] = useState<CampaignSummary | null>(null);
   const navigate = useNavigate();
   const access = useOutreachAccess();
-  const audiences = useAudiences(access.can("outreach.campaign.manage"));
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([{ subject: "", body: "", delayHours: 0 }]);
   const close = useCallback(() => { setOpen(false); setMessages([{ subject: "", body: "", delayHours: 0 }]); }, []);
@@ -31,7 +30,6 @@ export function OutreachCampaignsPage() {
         name: String(form.get("name") ?? "").trim(),
         description: String(form.get("description") ?? "").trim(),
         dailyLimit: Number(form.get("dailyLimit") ?? 10),
-        audienceId: String(form.get("audienceId") ?? "") || undefined,
         steps: messages.map((message, index) => ({
           delayMinutes: Math.round(message.delayHours * 60),
           replyToPrevious: index > 0,
@@ -44,7 +42,7 @@ export function OutreachCampaignsPage() {
   }
 
   return <div className="outreach-page">
-    <OutreachPageHeader eyebrow="Sequências" title="Campanhas" description="Cada lançamento exige audiência elegível, mailbox pronta e autorização operacional." actions={access.can("outreach.campaign.manage") ? <><Link className="button button--secondary" to="/leads" hash="importar-csv"><Upload size={15} />Importar CSV</Link><Button onClick={() => setOpen(true)}><Plus size={15} />Nova campanha</Button></> : undefined} />
+    <OutreachPageHeader eyebrow="Sequências" title="Campanhas" description="Cria uma campanha e importa os seus contactos diretamente no rascunho." actions={access.can("outreach.campaign.manage") ? <Button onClick={() => setOpen(true)}><Plus size={15} />Nova campanha</Button> : undefined} />
     <div className="outreach-toolbar"><SearchField value={query} onChange={(value) => { setQuery(value); setPage(1); }} placeholder="Pesquisar pelo nome da campanha…" /><span>{formatNumber(campaigns.data?.page?.total ?? filtered.length)} campanhas</span></div>
     {filtered.length ? <section className="outreach-campaign-grid">{filtered.map((campaign) => <div key={campaign.id} className="outreach-campaign-shell"><Link to="/outreach/campanhas/$campaignId" params={{ campaignId: campaign.id }} className="outreach-campaign-card"><header><span className="outreach-card-icon"><Megaphone size={18} /></span><CampaignBadge status={campaign.status} /></header><h3>{campaign.name}</h3><p>{campaign.description || "Campanha sem descrição."}</p><div className="outreach-card-progress"><span><b>{Math.round(campaign.progress || 0)}%</b><small>{formatNumber(campaign.sentCount)} enviados de {formatNumber(campaign.recipientCount)}</small></span><ProgressBar value={campaign.progress} label={`Progresso de ${campaign.name}`} /></div><dl><div><dt>Respostas</dt><dd>{formatNumber(campaign.replyCount)}</dd></div><div><dt>Positivas</dt><dd>{formatNumber(campaign.positiveCount)}</dd></div><div><dt>Bounces</dt><dd>{formatNumber(campaign.bounceCount)}</dd></div></dl><footer><span>Atualizada {formatDateTime(campaign.updatedAt)}</span><ArrowRight size={15} /></footer></Link>{access.can("outreach.campaign.manage") ? <button className="outreach-campaign-delete" type="button" onClick={() => { archive.reset(); setDeleteTarget(campaign); }} aria-label={`Apagar campanha ${campaign.name}`} title={campaign.status === "running" ? "Pausa a campanha antes de apagar" : "Apagar campanha"}><Trash2 size={15} /> Apagar</button> : null}</div>)}</section> : <EmptyPanel icon={<Megaphone size={22} />} title={query ? "Nenhuma campanha corresponde à pesquisa" : access.can("outreach.campaign.manage") ? "Cria a primeira campanha" : "Ainda não existem campanhas"} description={query ? "Experimenta outro nome." : access.can("outreach.campaign.manage") ? "A campanha começa em rascunho e nunca envia antes de passar todos os gates." : "Um campaign manager pode criar a primeira campanha."} action={!query && access.can("outreach.campaign.manage") ? <Button onClick={() => setOpen(true)}><Plus size={15} />Nova campanha</Button> : undefined} />}
     <OutreachPagination page={campaigns.data?.page} onPageChange={setPage} />
@@ -57,13 +55,11 @@ export function OutreachCampaignsPage() {
       </div>
     </ModuleDialog>
 
-    <ModuleDialog open={open && access.can("outreach.campaign.manage")} onClose={close} title="Nova campanha" description="Seleciona a lista de destinatários e escreve a sequência. A campanha começa em rascunho.">
+    <ModuleDialog open={open && access.can("outreach.campaign.manage")} onClose={close} title="Nova campanha" description="Escreve a sequência. Depois de criar o rascunho, usa Adicionar lista para importar o CSV nesta campanha.">
       <form className="outreach-form" onSubmit={(event) => void handleCreate(event)}>
         <label>Nome<input required name="name" autoComplete="off" placeholder="Ex.: Indústria Norte · Q4" /></label>
         <label>Descrição<textarea name="description" rows={3} placeholder="Objetivo, segmento e contexto da campanha." /></label>
-        <label>Lista de destinatários<select name="audienceId"><option value="">Associar mais tarde</option>{audiences.data?.items.filter((item) => item.contactCount > 0).map((item) => <option key={item.id} value={item.id}>{item.name} · {item.contactCount} contactos</option>)}</select></label>
-        {audiences.isError ? <p className="outreach-inline-error" role="alert">Não foi possível carregar as listas. Podes associar os destinatários após criar o rascunho.</p> : null}
-        <p className="outreach-field-help">Só serão enviados emails a contactos elegíveis. <Link to="/outreach/audiencias" onClick={close}>Criar lista na página Audiências</Link>.</p>
+        <p className="outreach-field-help">Os contactos serão adicionados a partir do CSV, diretamente na página da campanha. Só serão enviados emails a contactos elegíveis.</p>
         {messages.map((message, index) => <fieldset className="outreach-form-group outreach-create-step" key={index}>
           <legend>Mensagem {index + 1}</legend>
           {index > 0 ? <div className="outreach-create-step-tools"><label>Espera antes do envio (horas)<input type="number" min={0} max={8760} step={0.5} value={message.delayHours} onChange={(event) => setMessages((current) => current.map((item, at) => at === index ? { ...item, delayHours: Number(event.target.value) } : item))} /></label><button type="button" onClick={() => setMessages((current) => current.filter((_, at) => at !== index))} aria-label={`Remover mensagem ${index + 1}`}><Trash2 size={15} /></button></div> : null}

@@ -15,6 +15,12 @@ interface OutreachComplianceInput {
   optout?: boolean;
 }
 
+interface ImportBatchResult {
+  contactsCreated: number;
+  contactsExisting: number;
+  contacts: Array<{ email: string; id: string; companyId: string }>;
+}
+
 interface CRMState {
   leads: Lead[];
   opportunities: Opportunity[];
@@ -28,7 +34,7 @@ interface CRMState {
   dataMode: "local" | "supabase";
   moveOpportunity: (id: string, estado: Stage, loss?: { motivo: string; notas: string; valorProposta: number }) => Promise<void>;
   addOpportunity: (opportunity: Opportunity, lead: Lead) => void;
-  importBatch: (leads: Lead[], opportunities: Opportunity[], options?: { includeNikufraFinancials?: boolean }) => Promise<void>;
+  importBatch: (leads: Lead[], opportunities: Opportunity[], options?: { includeNikufraFinancials?: boolean; contactsOnly?: boolean }) => Promise<ImportBatchResult | undefined>;
   updateOpportunity: (id: string, changes: Partial<Opportunity>) => void;
   updateCompanyName: (companyId: string, name: string) => Promise<void>;
   updateLead: (id: string, field: keyof Lead, value: string) => void;
@@ -240,14 +246,21 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     if (Object.keys(payload).length) void supabase.from("oportunidades").update(payload).eq("id", id).then(({ error }) => { if (error) console.error("Falha ao editar empresa", error.message); });
   }, [persist]);
 
-  const importBatch = useCallback(async (newLeads: Lead[], newOpportunities: Opportunity[], options: { includeNikufraFinancials?: boolean } = {}) => {
+  const importBatch = useCallback(async (newLeads: Lead[], newOpportunities: Opportunity[], options: { includeNikufraFinancials?: boolean; contactsOnly?: boolean } = {}) => {
+    let result: ImportBatchResult | undefined;
     if (supabase) {
-      const { error } = await supabase.functions.invoke("import-leads", { body: { leads: newLeads, opportunities: newOpportunities, includeNikufraFinancials: Boolean(options.includeNikufraFinancials) } });
+      const { data, error } = await supabase.functions.invoke("import-leads", { body: { leads: newLeads, opportunities: newOpportunities, includeNikufraFinancials: Boolean(options.includeNikufraFinancials), contactsOnly: Boolean(options.contactsOnly) } });
       if (error) throw new Error(error.message);
+      if (data?.error) throw new Error(String(data.error));
+      if (options.contactsOnly) {
+        if (!Array.isArray(data?.contacts) || data.contacts.length !== newLeads.length) throw new Error("O CRM não devolveu todos os contactos importados. Volta a tentar.");
+        result = data as ImportBatchResult;
+      }
     }
     setLeads((current) => {
       const existing = new Set(current.map((lead) => lead.email.toLowerCase()).filter(Boolean));
-      const next = [...newLeads.filter((lead) => !existing.has(lead.email.toLowerCase())), ...current];
+      const contacts = new Map(result?.contacts.map((contact) => [contact.email, contact]) ?? []);
+      const next = [...newLeads.filter((lead) => !existing.has(lead.email.toLowerCase())).map((lead) => ({ ...lead, id: contacts.get(lead.email.toLowerCase())?.id ?? lead.id, empresaId: contacts.get(lead.email.toLowerCase())?.companyId ?? lead.empresaId })), ...current];
       persist("nikufra:v2:leads", next);
       return next;
     });
@@ -257,6 +270,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       persist("nikufra:v2:opportunities", next);
       return next;
     });
+    return result;
   }, [persist]);
 
   const updateCompanyName = useCallback(async (companyId: string, name: string) => {

@@ -254,6 +254,20 @@ export function useAttachAudienceToCampaign() {
   return useMutation({ mutationFn: ({ campaignId, audienceId }: { campaignId: string; audienceId: string }) => patchJson<CampaignDetail>(`/campaigns/${encodeURIComponent(campaignId)}`, { addAudienceId: audienceId }), onSuccess: (_data, variables) => { void queryClient.invalidateQueries({ queryKey: outreachKeys.campaign(variables.campaignId) }); void queryClient.invalidateQueries({ queryKey: outreachKeys.campaigns }); } });
 }
 
+export function useAddCampaignCsvContacts() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ campaignId, name, contactIds }: { campaignId: string; name: string; contactIds: string[] }) =>
+      postJson<{ audienceId: string; assessed: number; added: number; existing: number; eligible: number }>(`/campaigns/${encodeURIComponent(campaignId)}/csv-contacts`, { name, contactIds }),
+    onSuccess: (_data, variables) => {
+      void queryClient.invalidateQueries({ queryKey: outreachKeys.campaign(variables.campaignId) });
+      void queryClient.invalidateQueries({ queryKey: outreachKeys.campaignRecipients(variables.campaignId) });
+      void queryClient.invalidateQueries({ queryKey: outreachKeys.campaigns });
+      void queryClient.invalidateQueries({ queryKey: outreachKeys.audiences });
+    },
+  });
+}
+
 export function useMailboxes(enabled = true) {
   return useQuery({ queryKey: outreachKeys.mailboxes, queryFn: async () => { const result = asCollection(await outreachRequest<Collection<Mailbox> | Mailbox[]>("/mailboxes")); return { ...result, items: result.items.map((item) => toMailbox(item as RawMailbox)) }; }, enabled });
 }

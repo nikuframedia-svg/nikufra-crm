@@ -277,11 +277,11 @@ test("campaign mailbox selection saves the exact selected ids", async ({ page })
   await expect(mailboxes).toContainText("0 prontas de 1 selecionadas");
 });
 
-test("new campaign form accepts a recipient list and multiple messages", async ({ page }) => {
+test("new campaign form creates a draft for CSV import and multiple messages", async ({ page }) => {
   await openRoute(page, "/outreach/campanhas");
   await page.getByRole("button", { name: "Nova campanha" }).click();
   await page.getByRole("textbox", { name: "Nome", exact: true }).fill("Piloto Q4");
-  await page.getByRole("combobox", { name: "Lista de destinatários" }).selectOption("audience-1");
+  await expect(page.getByRole("dialog", { name: "Nova campanha" })).toContainText("Adicionar lista");
   await page.getByRole("textbox", { name: "Assunto" }).fill("Primeiro contacto");
   await page.getByRole("textbox", { name: "Mensagem" }).fill("Olá {{nome}}");
   await page.getByRole("button", { name: "Adicionar mensagem" }).click();
@@ -291,20 +291,24 @@ test("new campaign form accepts a recipient list and multiple messages", async (
   await expectNoCriticalAccessibilityViolations(page);
   const requestPromise = page.waitForRequest((request) => request.method() === "POST" && request.url().endsWith("/campaigns"));
   await page.getByRole("button", { name: "Criar rascunho" }).click();
-  const payload = (await requestPromise).postDataJSON() as { audienceId: string; steps: Array<{ delayMinutes: number; variants: Array<{ subject: string }> }> };
-  expect(payload.audienceId).toBe("audience-1");
+  const payload = (await requestPromise).postDataJSON() as { audienceId?: string; steps: Array<{ delayMinutes: number; variants: Array<{ subject: string }> }> };
+  expect(payload.audienceId).toBeUndefined();
   expect(payload.steps).toHaveLength(2);
   expect(payload.steps[1]).toMatchObject({ delayMinutes: 2_880, variants: [{ subject: "Seguimento" }] });
 });
 
-test("a draft campaign can attach a recipient list and save another message", async ({ page }) => {
+test("a draft campaign opens CSV import with automatic column mapping and saves another message", async ({ page }) => {
   await openRoute(page, "/outreach/campanhas/campaign-1");
   const audience = page.locator(".outreach-campaign-audience");
-  await audience.getByRole("combobox", { name: "Lista de destinatários" }).selectOption("audience-1");
-  const attachRequest = page.waitForRequest((request) => request.method() === "PATCH" && request.url().endsWith("/campaigns/campaign-1") && Boolean((request.postDataJSON() as { addAudienceId?: string }).addAudienceId));
   await audience.getByRole("button", { name: "Adicionar lista" }).click();
-  expect((await attachRequest).postDataJSON()).toEqual({ addAudienceId: "audience-1" });
-  await expect(audience).toContainText("Fabricantes");
+  const dialog = page.getByRole("dialog", { name: "Adicionar lista à campanha" });
+  await expect(dialog).toBeVisible();
+  await dialog.locator('input[type="file"]').setInputFiles({ name: "piloto.csv", mimeType: "text/csv", buffer: Buffer.from("Primeiro nome,Último nome,Email,Empresa\nAna,Silva,ana@example.com,Exemplo\nAna,Silva,ana@example.com,Exemplo\nBruno,Costa,bruno@example.com,Exemplo") });
+  await expect(dialog.locator(".mapping-grid select").nth(2)).toHaveValue("email");
+  await expect(dialog).toContainText("2 emails únicos válidos");
+  await expect(dialog.getByRole("button", { name: "Adicionar 2 à campanha" })).toBeEnabled();
+  await dialog.getByRole("button", { name: "Cancelar" }).click();
+  await expect(dialog).toHaveCount(0);
 
   const sequence = page.locator(".outreach-campaign-sequence");
   await sequence.getByRole("button", { name: "Editar mensagens" }).click();

@@ -10,6 +10,7 @@ import { processWebhookEvents, storeWebhook, syncMailbox } from "./inbound.js";
 import { sendThreadReply } from "./delivery.js";
 import {
   addAudienceContacts,
+  addCampaignCsvContacts,
   advanceMailboxRamp,
   campaignAction,
   archiveCampaign,
@@ -104,6 +105,10 @@ export function buildRouter() {
   }, { capability: "outreach.campaign.manage" });
   router.add("GET", `${API}/campaigns/:campaignId`, async (context) => success(context, await getCampaign(uuid.parse(context.params.campaignId))), { capability: "outreach.read" });
   router.add("GET", `${API}/campaigns/:campaignId/recipients`, async (context) => success(context, await listCampaignRecipients(uuid.parse(context.params.campaignId), pageParams(context.url))), { capability: "outreach.campaign.manage" });
+  router.add("POST", `${API}/campaigns/:campaignId/csv-contacts`, async (context) => {
+    assertOrigin(context.request);
+    success(context, await addCampaignCsvContacts(actor(context), uuid.parse(context.params.campaignId), await readJson(context.request)), 201);
+  }, { capability: "outreach.campaign.manage" });
   router.add("GET", `${API}/campaigns/:campaignId/message-tests`, async (context) => success(context, await listCampaignMessageTests(uuid.parse(context.params.campaignId))), { capability: "outreach.campaign.manage" });
   router.add("GET", `${API}/campaigns/:campaignId/message-test-contacts`, async (context) => success(context, await searchMessageTestContacts(uuid.parse(context.params.campaignId), context.url.searchParams.get("search") ?? "")), { capability: "outreach.campaign.manage" });
   router.add("PATCH", `${API}/campaigns/:campaignId`, async (context) => {
