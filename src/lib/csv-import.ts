@@ -1,15 +1,17 @@
 import type { Stage, Vertical } from "../types";
 
-export type CsvField = "nome" | "empresa" | "email" | "telefone" | "estado" | "data_reuniao" | "cargo" | "vertical" | "responsavel" | "valor" | "oportunidade" | "cidade" | "pais";
+export type CsvField = "nome" | "primeiro_nome" | "ultimo_nome" | "empresa" | "email" | "telefone" | "estado" | "data_reuniao" | "cargo" | "vertical" | "responsavel" | "valor" | "oportunidade" | "cidade" | "pais";
 
 export const csvFieldLabels: Record<CsvField, string> = {
-  nome: "Nome", empresa: "Empresa", email: "Email", telefone: "Telefone", estado: "Estado",
+  nome: "Nome completo", primeiro_nome: "Primeiro nome", ultimo_nome: "Último nome", empresa: "Empresa", email: "Email", telefone: "Telefone", estado: "Estado",
   data_reuniao: "Data da reunião", cargo: "Cargo", vertical: "Vertical", responsavel: "Responsável",
   valor: "Valor", oportunidade: "Oportunidade", cidade: "Cidade", pais: "País",
 };
 
 const aliases: Record<CsvField, string[]> = {
   nome: ["nome", "name", "contacto", "contato", "contact", "lead", "pessoa"],
+  primeiro_nome: ["primeiro nome", "first name", "firstname", "given name", "forename", "nome proprio"],
+  ultimo_nome: ["ultimo nome", "last name", "lastname", "surname", "family name", "apelido"],
   empresa: ["empresa", "company", "companhia", "organizacao", "organization", "account", "cliente"],
   email: ["email", "e-mail", "mail", "correio", "endereco de email"],
   telefone: ["telefone", "telemovel", "telefone movel", "phone", "mobile", "numero", "número", "tel"],
@@ -78,7 +80,12 @@ export function inferCsvMapping(headers: string[], rows: string[][]) {
           : ratio((value) => Boolean(stageFromText(value))) > 0.7 ? "estado" : null;
     if (inferred && !used.has(inferred)) { mapping[column] = inferred; used.add(inferred); }
   }
-  return mapping;
+  const seen = new Set<CsvField>();
+  return mapping.map((field) => {
+    if (!field || seen.has(field)) return null;
+    seen.add(field);
+    return field;
+  });
 }
 
 export function stageFromText(value: string): Stage | null {
@@ -110,4 +117,8 @@ export function csvRecord(parsed: ParsedCsv, row: string[]) {
   const output: Partial<Record<CsvField, string>> = {};
   parsed.mapping.forEach((field, index) => { if (field) output[field] = row[index]?.trim() ?? ""; });
   return output;
+}
+
+export function csvContactName(record: Partial<Record<CsvField, string>>, fallback: string) {
+  return (record.nome?.trim() || [record.primeiro_nome, record.ultimo_nome].map((part) => part?.trim()).filter(Boolean).join(" ") || fallback).trim();
 }

@@ -326,8 +326,9 @@ textarea { padding: 9px 10px; resize: vertical; line-height: 1.45; }
 .company-cell-edit > a:hover { text-decoration: underline; }
 .company-cell-edit > input { color: var(--muted); font-size: 9px; }
 .mapping-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin: 10px 0 14px; }
+.import-mapping-help { margin: 12px 0 5px; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .mapping-grid label { display: grid; gap: 4px; min-width: 0; }
-.mapping-grid label > span { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.mapping-grid label > span { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .mapping-grid select { width: 100%; }
 .integration-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .gmail-progress { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 10px 0; }
@@ -1179,6 +1180,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); outline
 .outreach-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .outreach-search input { width: 100%; min-width: 0; height: auto; padding: 0; border: 0; outline: 0; background: transparent; font-size: 12px; }
 .outreach-campaign-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.outreach-campaign-shell { position: relative; min-width: 0; }
+.outreach-campaign-shell .outreach-campaign-card { height: 100%; padding-bottom: 51px; text-decoration: none; }
+.outreach-campaign-delete { position: absolute; right: 15px; bottom: 11px; display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 5px 8px; border: 1px solid transparent; border-radius: 4px; color: var(--muted); background: transparent; cursor: pointer; font: inherit; font-size: 12px; }
+.outreach-campaign-delete:hover, .outreach-campaign-delete:focus-visible { border-color: var(--line-strong); color: var(--red); background: var(--surface-soft); }
 .outreach-campaign-card { display: flex; min-height: 280px; flex-direction: column; padding: 15px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .outreach-campaign-card:hover { border-color: var(--line-strong); transform: translateY(-1px); }
 .outreach-campaign-card > header { display: flex; align-items: center; justify-content: space-between; }

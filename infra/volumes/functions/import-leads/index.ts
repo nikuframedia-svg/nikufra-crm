@@ -75,22 +75,17 @@ Deno.serve(async (request) => {
       { id: "cc9f0090-b4a8-5c68-aca7-3157162ae5d4", empresa: "Ficosa", data: "2026-06-18", tipo: "Faturado", valor: 1175, valorBruto: 1445.25, iva: 270.25, taxaIva: 23, descricao: "Base sem IVA; total indicado de 1.445,25 € à taxa de 23%", ref: "Entrada manual" },
     );
     const companiesToInsert: Array<Record<string, unknown>> = [];
-    const companiesToUpdate: Array<Record<string, unknown>> = [];
     for (const [key, lead] of leadByCompany) {
       if (companyByName.has(key)) continue;
       const companyName = clean(lead.empresa, 240); const email = clean(lead.email, 320).toLowerCase();
       const emailDomain = businessDomain(email);
       const existingByDomain = emailDomain ? companyByDomain.get(emailDomain) : undefined;
       if (existingByDomain) {
-        const updated = { ...existingByDomain, nome: companyName, nome_normalizado: key, vertical: verticals[clean(lead.vertical)] ?? "outro" };
-        companyByName.set(key, updated); companiesToUpdate.push({ id: existingByDomain.id, nome: companyName, nome_normalizado: key, vertical: updated.vertical });
+        companyByName.set(key, existingByDomain);
         continue;
       }
       companiesToInsert.push({ id: validUuid(lead.empresaId), nome: companyName, nome_normalizado: key, email_domain: emailDomain, vertical: verticals[clean(lead.vertical)] ?? "outro", pais: clean(lead.pais, 2).toUpperCase() || "PT", cidade: clean(lead.cidade, 120) || null, origem: "outbound_email", notas: "Importada por CSV" });
     }
-    const companyUpdates = await Promise.all(companiesToUpdate.map((row) => admin.from("empresas").update({ nome: row.nome, nome_normalizado: row.nome_normalizado, vertical: row.vertical }).eq("id", row.id)));
-    const companyUpdateError = companyUpdates.find((result) => result.error)?.error;
-    if (companyUpdateError) throw companyUpdateError;
     const insertedCompanies = await insertChunks(admin, "empresas", companiesToInsert);
     for (const company of insertedCompanies as CompanyRow[]) companyByName.set(String(company.nome_normalizado), company);
     const newCompanyIds = new Set(insertedCompanies.map((company) => String(company.id)));

@@ -245,6 +245,34 @@ export async function campaignAction(actor: Actor, campaignId: string, action: "
   }, "serializable");
 }
 
+export async function archiveCampaign(actor: Actor, campaignId: string) {
+  return transaction(async (client) => {
+    const campaign = await client.query<{ name: string; status: string }>(`
+      select nome as name,status::text status
+      from public.outreach_campaigns where id=$1 for update`, [campaignId]);
+    const current = campaign.rows[0];
+    if (!current || current.status === "archived") {
+      throw new HttpError(404, "campaign_not_found", "Campanha não encontrada.");
+    }
+    if (current.status === "running") {
+      throw new HttpError(409, "campaign_running", "Pausa a campanha antes de a apagar.");
+    }
+    const unsettled = await client.query<{ count: string }>(`
+      select count(*)::text count from public.outreach_jobs
+      where campaign_id=$1 and status in ('leased','reconciliation_required')`, [campaignId]);
+    if (Number(unsettled.rows[0]?.count ?? 0) > 0) {
+      throw new HttpError(409, "campaign_jobs_unsettled", "Há envios em curso ou por reconciliar. Aguarda a conclusão antes de apagar a campanha.");
+    }
+    await client.query(`
+      update public.outreach_jobs
+      set status='cancelled',last_error='campaign_archived',updated_at=now()
+      where campaign_id=$1 and status='pending'`, [campaignId]);
+    await client.query(`update public.outreach_campaigns set status='archived',updated_at=now() where id=$1`, [campaignId]);
+    await client.query(`insert into public.outreach_audit_log(actor_id,action,entity_type,entity_id,details) values($1,'campaign.archived','campaign',$2,$3::jsonb)`, [actor.id, campaignId, JSON.stringify({ name: current.name, previousStatus: current.status })]);
+    return { id: campaignId, status: "archived" as const };
+  }, "serializable");
+}
+
 const messageTestSchema = z.object({
   stepId: uuid,
   variantId: uuid,
@@ -288,7 +316,7 @@ export async function queueCampaignMessageTest(actor: Actor, sourceCampaignId: s
       join public.outreach_campaign_steps s on s.campaign_id=c.id and s.id=$2 and s.ativo and s.kind='email'
       join public.outreach_campaign_variants v on v.step_id=s.id and v.id=$3 and v.ativo
       join public.outreach_campaign_mailboxes selection on selection.campaign_id=c.id and selection.mailbox_id=$4
-      where c.id=$1 and c.test_source_campaign_id is null
+      where c.id=$1 and c.status <> 'archived' and c.test_source_campaign_id is null
       for share of c,s,v`, [sourceCampaignId, input.stepId, input.variantId, input.mailboxId]);
     const template = source.rows[0];
     if (!template) throw new HttpError(409, "test_message_unavailable", "Seleciona uma mensagem ativa e uma mailbox desta campanha.");
