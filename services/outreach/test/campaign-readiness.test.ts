@@ -127,6 +127,7 @@ describe("campaign readiness authority", () => {
     mocks.query.mockImplementation(async (sqlValue: unknown) => {
       const sql = String(sqlValue);
       if (sql.includes("select status::text status")) return { rows: [{ status: "draft" }] };
+      if (sql.includes("select id,contact_id from public.outreach_recipients")) return { rows: [] };
       if (sql.includes('as "readyMailboxCount"')) return { rows: [readinessRow(1, 8, 1, 0)] };
       throw new Error(`SQL inesperado: ${sql}`);
     });
@@ -164,6 +165,24 @@ describe("campaign readiness authority", () => {
     expect(String(jobInsert?.[0])).toContain("selection.campaign_id=$1");
     expect(String(jobInsert?.[0])).toContain("dns.checked_at > now()-interval '24 hours'");
     expect(String(jobInsert?.[0])).toContain("order by dns.checked_at desc,dns.id desc limit 1");
+  });
+
+  it("records an admin-approved canary pilot before launching external recipients", async () => {
+    mocks.query.mockImplementation(async (sqlValue: unknown) => {
+      const sql = String(sqlValue);
+      if (sql.includes("select status::text status")) return { rows: [{ status: "draft" }] };
+      if (sql.includes("select id,contact_id from public.outreach_recipients")) return { rows: [] };
+      if (sql.includes('as "readyMailboxCount"')) return { rows: [readinessRow(3, 66, 3, 3)] };
+      if (sql.includes("from public.outreach_system_state state")) return { rows: [{ mode: "canary", outside_canary_count: 66 }] };
+      if (sql.includes("count(*)::int count from public.outreach_recipients")) return { rows: [{ count: 0 }] };
+      if (sql.includes("select count(*)::text count from public.outreach_jobs")) return { rows: [{ count: "66" }] };
+      return { rows: [], rowCount: 1 };
+    });
+
+    await expect(campaignAction(admin, campaignId, "launch")).resolves.toMatchObject({ status: "running" });
+    const statements = mocks.query.mock.calls.map(([sql]) => String(sql));
+    expect(statements.findIndex((sql) => sql.includes("private.outreach_approve_campaign_pilot")))
+      .toBeLessThan(statements.findIndex((sql) => sql.includes("set status='running'")));
   });
 
   it("replaces campaign mailbox selection atomically and writes a dedicated audit entry", async () => {

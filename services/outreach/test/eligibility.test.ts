@@ -40,7 +40,7 @@ describe("audience eligibility pre-analysis", () => {
     expect(items[0]).toMatchObject({ eligible: false, reasons: ["suppressed"] });
   });
 
-  it("keeps a DNS-only unknown mailbox out of an audience", async () => {
+  it("blocks an unknown address when its DNS check did not prove a mail route", async () => {
     mocks.query.mockResolvedValue({ rows: [{
       id: "00000000-0000-4000-8000-000000000001",
       email: "does-not-exist@example.com",
@@ -68,6 +68,24 @@ describe("audience eligibility pre-analysis", () => {
 
     const [item] = await contactEligibility(["00000000-0000-4000-8000-000000000001"]);
     expect(item).toMatchObject({ eligible: false, reasons: ["verification_unknown"] });
+  });
+
+  it("allows a consented contact with a recent inconclusive MX check", async () => {
+    mocks.query.mockResolvedValue({ rows: [{
+      id: "00000000-0000-4000-8000-000000000001", email: "lead@example.com", optout: false,
+      outreach_legal_basis: "consent", outreach_consent_at: new Date("2026-10-01T00:00:00Z"),
+      outreach_consent_source: "Formulário de contacto",
+      outreach_legal_basis_recorded_at: new Date("2026-10-20T00:00:00Z"),
+      outreach_legal_basis_recorded_by: "00000000-0000-4000-8000-000000000009",
+      empresa_id: "00000000-0000-4000-8000-000000000002", contact_name: "Lead",
+      company_name: "Example", cargo: null, telefone: null, linkedin_url: null,
+      vertical: "industrial", pais: "PT", cidade: null, website: null,
+      verification_status: "unknown", verification_provider: "dns_syntax",
+      verification_reasons: ["Domínio com MX válido, mas a existência desta caixa não foi confirmada."],
+      owned_mailbox_history: false, suppressed: false,
+    }] });
+    const [item] = await contactEligibility(["00000000-0000-4000-8000-000000000001"]);
+    expect(item).toMatchObject({ eligible: true, reasons: [], verification: "unknown" });
   });
 
   it("shows missing lawful-basis evidence before a contact can be selected", async () => {

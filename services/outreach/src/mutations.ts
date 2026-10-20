@@ -228,14 +228,40 @@ export async function campaignAction(actor: Actor, campaignId: string, action: "
     } else {
       const allowed = action === "launch" ? ["draft", "paused"] : ["paused"];
       if (!allowed.includes(current)) throw new HttpError(409, "invalid_campaign_state", "A campanha não pode avançar a partir do estado atual.");
+      if (current === "draft") await reassessDraftRecipients(client, campaignId);
       const readiness = await campaignReadiness(campaignId, client);
       if (!readiness.ready) {
         throw new HttpError(
           409,
           "campaign_not_ready",
-          "A campanha precisa de um passo de email e variante ativos, destinatários elegíveis e uma mailbox Google com DNS recente.",
+          readiness.blockers.join(" "),
           readiness,
         );
+      }
+      if (current === "draft") {
+        const rollout = await client.query<{ mode: string; outside_canary_count: number }>(`
+          select state.mode::text mode,
+            (select count(*)::int
+             from public.outreach_recipients recipient
+             where recipient.campaign_id=$1
+               and not exists (
+                 select 1 from private.outreach_canary_allowlist allowed
+                 where lower(allowed.email::text)=lower(recipient.email_snapshot::text)
+               )) outside_canary_count
+          from public.outreach_system_state state where state.id`, [campaignId]);
+        const state = rollout.rows[0];
+        if (state?.mode === "canary" && Number(state.outside_canary_count) > 0) {
+          if (actor.crmRole !== "admin") {
+            throw new HttpError(403, "campaign_pilot_admin_required", "O piloto com destinatários externos exige lançamento por um administrador.");
+          }
+          const ineligible = await client.query<{ count: number }>(`
+            select count(*)::int count from public.outreach_recipients
+            where campaign_id=$1 and status <> 'eligible'`, [campaignId]);
+          if (Number(ineligible.rows[0]?.count ?? 0) > 0) {
+            throw new HttpError(409, "campaign_pilot_contacts_ineligible", "O piloto exige que todos os destinatários tenham consentimento registado e estejam aptos para envio.");
+          }
+          await client.query(`select private.outreach_approve_campaign_pilot($1,$2)`, [campaignId, actor.id]);
+        }
       }
       await client.query(`update public.outreach_campaigns set status='running',launched_at=coalesce(launched_at,now()),paused_at=null where id=$1`, [campaignId]);
       await materializeInitialJobs(client, campaignId);
@@ -243,6 +269,23 @@ export async function campaignAction(actor: Actor, campaignId: string, action: "
     await client.query(`insert into public.outreach_audit_log(actor_id,action,entity_type,entity_id,details) values($1,$2,'campaign',$3,'{}')`, [actor.id, `campaign.${action}`, campaignId]);
     return { id: campaignId, status: action === "pause" ? "paused" : "running" };
   }, "serializable");
+}
+
+async function reassessDraftRecipients(client: import("pg").PoolClient, campaignId: string) {
+  const recipients = await client.query<{ id: string; contact_id: string }>(`
+    select id,contact_id from public.outreach_recipients
+    where campaign_id=$1 and contact_id is not null and status in ('eligible','ineligible')
+    for update`, [campaignId]);
+  const decisions = await contactEligibility(recipients.rows.map((row) => row.contact_id), client);
+  const byContact = new Map(decisions.map((decision) => [decision.contactId, decision]));
+  for (const recipient of recipients.rows) {
+    const decision = byContact.get(recipient.contact_id);
+    if (!decision) continue;
+    await client.query(`
+      update public.outreach_recipients
+      set status=$2::public.outreach_recipient_status,eligibility_reasons=$3,variable_snapshot=$4::jsonb
+      where id=$1`, [recipient.id, decision.eligible ? "eligible" : "ineligible", decision.reasons, JSON.stringify(decision.variables)]);
+  }
 }
 
 export async function archiveCampaign(actor: Actor, campaignId: string) {
@@ -445,20 +488,24 @@ export async function contactEligibility(contactIds: string[], client?: import("
     outreach_legitimate_interest_purpose: string | null; outreach_lia_reference: string | null;
     outreach_legitimate_interest_expires_at: Date | null;
     empresa_id: string; contact_name: string; company_name: string; cargo: string | null; telefone: string | null; linkedin_url: string | null;
-    vertical: string; pais: string; cidade: string | null; website: string | null; verification_status: string | null; owned_mailbox_history: boolean; suppressed: boolean;
+    vertical: string; pais: string; cidade: string | null; website: string | null;
+    verification_status: string | null; verification_provider: string | null; verification_reasons: string[] | null;
+    owned_mailbox_history: boolean; suppressed: boolean;
   }>(`
     select c.id,c.email::text,c.optout,c.outreach_legal_basis,c.outreach_consent_at,
            c.outreach_legal_basis_recorded_at,c.outreach_legal_basis_recorded_by,c.outreach_consent_source,
            c.outreach_legal_basis_evidence,c.outreach_legitimate_interest_purpose,c.outreach_lia_reference,
            c.outreach_legitimate_interest_expires_at,
            c.empresa_id,c.nome contact_name,e.nome company_name,c.cargo,c.telefone,c.linkedin_url,e.vertical::text,e.pais,e.cidade,e.website,
-           verification.status::text verification_status,
+           verification.status::text verification_status,verification.provider verification_provider,
+           verification.reasons verification_reasons,
            private.outreach_has_owned_mailbox_email(c.id, c.email::text) owned_mailbox_history,
            private.outreach_is_suppressed(c.email::text,c.empresa_id) suppressed
     from public.contactos c join public.empresas e on e.id=c.empresa_id
     left join lateral (
       select case when v.expires_at is null or v.expires_at>now()
-        then v.status else 'unknown'::public.outreach_verification_status end status
+        then v.status else null::public.outreach_verification_status end status,
+        v.provider,v.reasons
       from public.outreach_email_verifications v
       where v.email=c.email
       order by v.verified_at desc nulls last,v.created_at desc,v.id desc limit 1
@@ -477,7 +524,14 @@ export async function contactEligibility(contactIds: string[], client?: import("
         || !row.outreach_legitimate_interest_expires_at
         || row.outreach_legitimate_interest_expires_at.getTime() <= Date.now()
       ))) reasons.push("lawful_basis_missing");
-    if (!row.owned_mailbox_history && row.verification_status !== "valid") reasons.push(row.verification_status ? `verification_${row.verification_status}` : "verification_missing");
+    const inconclusiveWithMailRoute = row.verification_status === "unknown"
+      && row.verification_provider === "dns_syntax"
+      && Boolean(row.verification_reasons?.some((reason) =>
+        reason === "Domínio com MX válido, mas a existência desta caixa não foi confirmada."
+        || reason === "Domínio com A/AAAA para receber correio, mas a existência desta caixa não foi confirmada."));
+    if (!row.owned_mailbox_history && row.verification_status !== "valid" && !inconclusiveWithMailRoute) {
+      reasons.push(row.verification_status ? `verification_${row.verification_status}` : "verification_missing");
+    }
     if (row.suppressed) reasons.push("suppressed");
     const firstName = row.contact_name.trim().split(/\s+/)[0] ?? row.contact_name;
     return {
