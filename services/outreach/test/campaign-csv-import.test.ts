@@ -62,6 +62,32 @@ describe("CSV imported into a campaign", () => {
     expect(jobInsert?.[1]).toEqual([campaignId, [contactIds[0]]]);
   });
 
+  it("authorizes CSV recipients for this campaign before reassessing them", async () => {
+    let authorized = false;
+    mocks.query.mockImplementation(async (sqlValue: unknown) => {
+      const sql = String(sqlValue);
+      if (sql.includes("from public.contactos c join public.empresas")) return {
+        rows: [{ ...contact(contactIds[0]!, "one@example.com"), verification_status: "valid", operator_authorized: authorized }],
+      };
+      if (sql.includes("select status::text from public.outreach_campaigns")) return { rows: [{ status: "running" }] };
+      if (sql.includes("insert into public.outreach_audiences")) return { rows: [{ id: audienceId }] };
+      if (sql.includes("insert into public.outreach_recipients")) return { rows: [{ contact_id: contactIds[0] }] };
+      if (sql.includes("outreach_authorize_campaign_contacts")) {
+        authorized = true;
+        return { rows: [{ outreach_authorize_campaign_contacts: 1 }] };
+      }
+      if (sql.includes("count(*)::text count from public.outreach_jobs")) return { rows: [{ count: "1" }] };
+      return { rows: [], rowCount: 1 };
+    });
+    await expect(addCampaignCsvContacts(actor, campaignId, { name: "Lista consentida", contactIds: [contactIds[0]] }))
+      .resolves.toMatchObject({ added: 1, eligible: 1 });
+    const statements = mocks.query.mock.calls.map(([sql]) => String(sql));
+    expect(statements.findIndex((sql) => sql.includes("outreach_authorize_campaign_contacts")))
+      .toBeLessThan(statements.findIndex((sql) => sql.includes("insert into public.outreach_jobs")));
+    expect(mocks.query.mock.calls.find(([sql]) => String(sql).includes("outreach_authorize_campaign_contacts"))?.[1])
+      .toEqual([campaignId, [contactIds[0]], actor.id, "CSV: Lista consentida"]);
+  });
+
   it("reuses the same CSV list on retry without duplicating recipients", async () => {
     mocks.query.mockImplementation(async (sqlValue: unknown) => {
       const sql = String(sqlValue);

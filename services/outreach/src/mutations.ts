@@ -197,7 +197,7 @@ export async function updateCampaign(actor: Actor, campaignId: string, raw: unkn
       await client.query(`delete from public.outreach_campaign_steps where campaign_id=$1`, [campaignId]);
       await insertCampaignSteps(client, campaignId, input.steps);
       const recipients = await client.query<{ id: string; contact_id: string }>(`select id,contact_id from public.outreach_recipients where campaign_id=$1 and contact_id is not null`, [campaignId]);
-      const currentContacts = await contactEligibility(recipients.rows.map((row) => row.contact_id), client);
+      const currentContacts = await contactEligibility(recipients.rows.map((row) => row.contact_id), client, campaignId);
       const byContact = new Map(currentContacts.map((item) => [item.contactId, item]));
       for (const recipient of recipients.rows) {
         const current = byContact.get(recipient.contact_id);
@@ -258,7 +258,7 @@ export async function campaignAction(actor: Actor, campaignId: string, action: "
             select count(*)::int count from public.outreach_recipients
             where campaign_id=$1 and status <> 'eligible'`, [campaignId]);
           if (Number(ineligible.rows[0]?.count ?? 0) > 0) {
-            throw new HttpError(409, "campaign_pilot_contacts_ineligible", "O piloto exige que todos os destinatários tenham consentimento registado e estejam aptos para envio.");
+            throw new HttpError(409, "campaign_pilot_contacts_ineligible", "O piloto exige que todos os destinatários estejam aptos para envio.");
           }
           await client.query(`select private.outreach_approve_campaign_pilot($1,$2)`, [campaignId, actor.id]);
         }
@@ -276,7 +276,7 @@ async function reassessDraftRecipients(client: import("pg").PoolClient, campaign
     select id,contact_id from public.outreach_recipients
     where campaign_id=$1 and contact_id is not null and status in ('eligible','ineligible')
     for update`, [campaignId]);
-  const decisions = await contactEligibility(recipients.rows.map((row) => row.contact_id), client);
+  const decisions = await contactEligibility(recipients.rows.map((row) => row.contact_id), client, campaignId);
   const byContact = new Map(decisions.map((decision) => [decision.contactId, decision]));
   for (const recipient of recipients.rows) {
     const decision = byContact.get(recipient.contact_id);
@@ -479,7 +479,7 @@ export interface EligibilityResult {
   variables: Record<string, string | null>;
 }
 
-export async function contactEligibility(contactIds: string[], client?: import("pg").PoolClient): Promise<EligibilityResult[]> {
+export async function contactEligibility(contactIds: string[], client?: import("pg").PoolClient, campaignId?: string): Promise<EligibilityResult[]> {
   if (!contactIds.length) return [];
   const result = await (client ?? pool).query<{
     id: string; email: string | null; optout: boolean; outreach_legal_basis: string | null; outreach_consent_at: Date | null;
@@ -490,7 +490,7 @@ export async function contactEligibility(contactIds: string[], client?: import("
     empresa_id: string; contact_name: string; company_name: string; cargo: string | null; telefone: string | null; linkedin_url: string | null;
     vertical: string; pais: string; cidade: string | null; website: string | null;
     verification_status: string | null; verification_provider: string | null; verification_reasons: string[] | null;
-    owned_mailbox_history: boolean; suppressed: boolean;
+    owned_mailbox_history: boolean; suppressed: boolean; operator_authorized: boolean;
   }>(`
     select c.id,c.email::text,c.optout,c.outreach_legal_basis,c.outreach_consent_at,
            c.outreach_legal_basis_recorded_at,c.outreach_legal_basis_recorded_by,c.outreach_consent_source,
@@ -500,7 +500,12 @@ export async function contactEligibility(contactIds: string[], client?: import("
            verification.status::text verification_status,verification.provider verification_provider,
            verification.reasons verification_reasons,
            private.outreach_has_owned_mailbox_email(c.id, c.email::text) owned_mailbox_history,
-           private.outreach_is_suppressed(c.email::text,c.empresa_id) suppressed
+           private.outreach_is_suppressed(c.email::text,c.empresa_id) suppressed,
+           exists (
+             select 1 from private.outreach_campaign_operator_authorizations authz
+             join public.outreach_recipients recipient on recipient.id=authz.recipient_id
+             where authz.campaign_id=$2::uuid and recipient.contact_id=c.id
+           ) operator_authorized
     from public.contactos c join public.empresas e on e.id=c.empresa_id
     left join lateral (
       select case when v.expires_at is null or v.expires_at>now()
@@ -510,12 +515,12 @@ export async function contactEligibility(contactIds: string[], client?: import("
       where v.email=c.email
       order by v.verified_at desc nulls last,v.created_at desc,v.id desc limit 1
     ) verification on true
-    where c.id=any($1::uuid[])`, [contactIds]);
+    where c.id=any($1::uuid[])`, [contactIds, campaignId ?? null]);
   return result.rows.map((row) => {
     const reasons: string[] = [];
     if (!row.email) reasons.push("missing_email");
     if (row.optout) reasons.push("contact_optout");
-    if (!row.outreach_legal_basis || row.outreach_legal_basis === "not_applicable"
+    if ((!row.outreach_legal_basis || row.outreach_legal_basis === "not_applicable"
       || !row.outreach_legal_basis_recorded_at || !row.outreach_legal_basis_recorded_by
       || (row.outreach_legal_basis === "consent" && (!row.outreach_consent_at || !row.outreach_consent_source?.trim()))
       || (row.outreach_legal_basis === "contract" && !row.outreach_legal_basis_evidence?.trim())
@@ -523,7 +528,7 @@ export async function contactEligibility(contactIds: string[], client?: import("
         !row.outreach_legitimate_interest_purpose?.trim() || !row.outreach_lia_reference?.trim()
         || !row.outreach_legitimate_interest_expires_at
         || row.outreach_legitimate_interest_expires_at.getTime() <= Date.now()
-      ))) reasons.push("lawful_basis_missing");
+      ))) && !row.operator_authorized) reasons.push("lawful_basis_missing");
     const inconclusiveWithMailRoute = row.verification_status === "unknown"
       && row.verification_provider === "dns_syntax"
       && Boolean(row.verification_reasons?.some((reason) =>
@@ -603,11 +608,26 @@ export async function addCampaignCsvContacts(actor: Actor, campaignId: string, r
       join public.outreach_audience_members member on member.audience_id=$2 and member.contact_id=item.contact_id
       on conflict(campaign_id,contact_id) where contact_id is not null do nothing
       returning contact_id`, [campaignId, audienceId, JSON.stringify(items)]);
-    const newEligibleIds = addedRecipients.rows.map((row) => row.contact_id).filter((id) => eligibility.some((item) => item.contactId === id && item.eligible));
-    if (campaign.rows[0].status === "running" && newEligibleIds.length) await materializeInitialJobs(client, campaignId, newEligibleIds);
+    await client.query(`select private.outreach_authorize_campaign_contacts($1,$2::uuid[],$3,'csv_import',$4)`,
+      [campaignId, input.contactIds, actor.id, `CSV: ${input.name}`]);
+    const authorizedEligibility = await contactEligibility(input.contactIds, client, campaignId);
+    for (const item of authorizedEligibility) {
+      await client.query(`
+        update public.outreach_recipients
+        set status=$3::public.outreach_recipient_status,eligibility_reasons=$4,variable_snapshot=$5::jsonb
+        where campaign_id=$1 and contact_id=$2 and status in ('eligible','ineligible')`,
+      [campaignId, item.contactId, item.eligible ? "eligible" : "ineligible", item.reasons, JSON.stringify(item.variables)]);
+      await client.query(`
+        update public.outreach_audience_members
+        set eligibility_status=$3::public.outreach_eligibility_status,eligibility_reasons=$4,assessed_at=now()
+        where audience_id=$1 and contact_id=$2`,
+      [audienceId, item.contactId, item.eligible ? "eligible" : "ineligible", item.reasons]);
+    }
+    const eligibleIds = authorizedEligibility.filter((item) => item.eligible).map((item) => item.contactId);
+    if (campaign.rows[0].status === "running" && eligibleIds.length) await materializeInitialJobs(client, campaignId, eligibleIds);
     const added = addedRecipients.rows.length;
-    await audit(actor.id, "campaign.csv_contacts_added", "campaign", campaignId, { audienceId, rows: eligibility.length, added, existing: eligibility.length - added }, client);
-    return { audienceId, assessed: eligibility.length, added, existing: eligibility.length - added, eligible: eligibility.filter((item) => item.eligible).length };
+    await audit(actor.id, "campaign.csv_contacts_added", "campaign", campaignId, { audienceId, rows: eligibility.length, added, existing: eligibility.length - added, authorized: authorizedEligibility.length }, client);
+    return { audienceId, assessed: eligibility.length, added, existing: eligibility.length - added, eligible: eligibleIds.length };
   }, "serializable");
 }
 
