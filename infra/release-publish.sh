@@ -700,6 +700,7 @@ required = {
     "services/outreach/src/db.ts",
     "services/outreach/src/delivery-signals.ts",
     "services/outreach/src/delivery.ts",
+    "services/outreach/src/dns-refresh.ts",
     "services/outreach/src/dns.ts",
     "services/outreach/src/errors.ts",
     "services/outreach/src/heartbeat.ts",

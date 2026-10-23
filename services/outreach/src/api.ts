@@ -3,6 +3,7 @@ import { authenticate, requireCapability } from "./auth.js";
 import { buildRouter } from "./api-routes.js";
 import { config } from "./config.js";
 import { closeDatabase } from "./db.js";
+import { refreshDueDnsChecks } from "./dns-refresh.js";
 import { HttpError, publicError, requestId } from "./errors.js";
 import { json, safeRequestLogFields, setCors, setSecurityHeaders } from "./http.js";
 import { aggregateRateLimitKey, FixedWindowRateLimiter, requestRateLimitKey } from "./rate-limit.js";
@@ -11,6 +12,22 @@ const router = buildRouter();
 const rateLimiter = new FixedWindowRateLimiter();
 const rateLimitPruneTimer = setInterval(() => rateLimiter.prune(), 5 * 60_000);
 rateLimitPruneTimer.unref();
+let dnsRefreshRunning = false;
+async function dnsRefreshTick() {
+  if (dnsRefreshRunning || !config.outboundEnvEnabled || config.shadowMode) return;
+  dnsRefreshRunning = true;
+  try {
+    const result = await refreshDueDnsChecks();
+    if (result.due) console.log(JSON.stringify({ event: "outreach_dns_automatic_check", due: result.due, refreshed: result.refreshed, failures: result.failures.length }));
+    for (const failure of result.failures) console.error("outreach DNS automatic check failed", failure);
+  } catch (error) {
+    console.error("outreach DNS refresh cycle failed", { error: error instanceof Error ? error.message : String(error) });
+  } finally {
+    dnsRefreshRunning = false;
+  }
+}
+const dnsRefreshTimer = setInterval(() => void dnsRefreshTick(), 60 * 60_000);
+dnsRefreshTimer.unref();
 
 const server = createServer(async (request, response) => {
   setSecurityHeaders(response);
@@ -62,12 +79,14 @@ server.headersTimeout = 15_000;
 server.keepAliveTimeout = 5_000;
 server.listen(config.port, "0.0.0.0", () => {
   console.log(JSON.stringify({ event: "outreach_api_started", port: config.port, adminOnly: config.adminOnly, outboundEnvEnabled: config.outboundEnvEnabled }));
+  void dnsRefreshTick();
 });
 
 async function shutdown(signal: string) {
   console.log(JSON.stringify({ event: "outreach_api_stopping", signal }));
   server.close();
   clearInterval(rateLimitPruneTimer);
+  clearInterval(dnsRefreshTimer);
   await closeDatabase();
   process.exit(0);
 }
