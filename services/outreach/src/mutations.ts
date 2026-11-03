@@ -1007,8 +1007,8 @@ export async function createSuppressionWithClient(client: import("pg").PoolClien
       do update set reason=excluded.reason,source=excluded.source,note=excluded.note returning id`,
       [input.scope, input.scope === "email" ? input.email.toLowerCase() : null, input.scope === "domain" ? input.domain.toLowerCase() : null, input.scope === "company" ? input.companyId : null, input.reason, source, input.note, actor?.id ?? null],
     );
-    const recipientWhere = input.scope === "email" ? "lower(r.email_snapshot::text)=lower($2)" : input.scope === "domain" ? "split_part(lower(r.email_snapshot::text),'@',2)=lower($2)" : "r.company_id=$2::uuid";
-    await client.query(`update public.outreach_recipients r set status='suppressed',unsubscribed_at=case when $3='unsubscribe' then now() else unsubscribed_at end where ${recipientWhere} and status not in ('deleted','completed')`, [input.scope, identityValue, input.reason]);
+    const recipientWhere = input.scope === "email" ? "lower(r.email_snapshot::text)=lower($1::text)" : input.scope === "domain" ? "split_part(lower(r.email_snapshot::text),'@',2)=lower($1::text)" : "r.company_id=$1::uuid";
+    await client.query(`update public.outreach_recipients r set status='suppressed',unsubscribed_at=case when $2::text='unsubscribe' then now() else unsubscribed_at end where ${recipientWhere} and status not in ('deleted','completed')`, [identityValue, input.reason]);
     await client.query(`
       update public.outreach_jobs j
       set status=case
@@ -1022,7 +1022,7 @@ export async function createSuppressionWithClient(client: import("pg").PoolClien
           lease_owner=null,lease_expires_at=null,last_error='global_suppression',updated_at=now()
       from public.outreach_recipients r
       where j.recipient_id=r.id and ${recipientWhere}
-        and j.status in ('pending','leased','reconciliation_required')`, [input.scope, identityValue]);
+        and j.status in ('pending','leased','reconciliation_required')`, [identityValue]);
     // `outreach_service` deliberately has read-only access to CRM contacts.
     // The SECURITY DEFINER suppression trigger is the single authority that
     // mirrors an email suppression into contactos.optout.
