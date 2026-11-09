@@ -49,7 +49,8 @@ describe("mailbox activation and ramp", () => {
       configuredDailyLimit: 10,
       rampDailyLimit: 3,
     });
-    expect(mocks.query.mock.calls[0]?.[0]).toContain("private.outreach_advance_mailbox_ramp");
+    expect(mocks.query.mock.calls[0]?.[0]).toMatch(/select id,daily_limit,ramp_daily_limit from private\.outreach_advance_mailbox_ramp\(\$1,\$2\)/);
+    expect(mocks.query).toHaveBeenCalledTimes(1);
     expect(mocks.query.mock.calls[0]?.[1]).toEqual(["mailbox-1", admin.id]);
   });
 
