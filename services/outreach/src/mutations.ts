@@ -672,7 +672,7 @@ export async function createMailbox(actor: Actor, raw: unknown) {
 const mailboxPatchSchema = z.object({
   displayName: z.string().max(180).optional(),
   ownerProfileId: uuid.nullable().optional(),
-  dailyLimit: z.number().int().min(1).max(10).optional(),
+  dailyLimit: z.number().int().min(1).max(25).optional(),
   timezone: z.string().trim().min(1).max(80).optional(),
   sendEnabled: z.boolean().optional(),
   adminExceptionRecorded: z.boolean().optional(),

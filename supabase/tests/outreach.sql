@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap;
-select plan(195);
+select plan(197);
 
 -- Self-contained principals. The first @nikufra.ai account becomes the local
 -- test admin; invitations exercise the same onboarding path as production.
@@ -1961,6 +1961,21 @@ select ok(exists(
   select 1 from public.outreach_metric_daily
   where campaign_id = 'f0000000-0000-4000-8000-000000000001'
 ), 'métricas agregadas sobrevivem à eliminação');
+
+select ok(exists (
+  select 1 from pg_constraint
+  where conrelid = 'public.outreach_mailboxes'::regclass
+    and conname = 'outreach_mailboxes_ramp_daily_limit_check'
+    and pg_get_constraintdef(oid) like '%25%'
+), 'ramp live admite o teto de 25 por mailbox');
+select throws_ok(
+  $$select private.outreach_advance_mailbox_live_ramp(
+    'e0000000-0000-4000-8000-000000000001',
+    'a0000000-0000-4000-8000-000000000003'
+  )$$,
+  'P0001', 'Apenas administradores podem avançar o ramp da mailbox',
+  'não-admin não pode aumentar o volume live'
+);
 
 select * from finish();
 rollback;
