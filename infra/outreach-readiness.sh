@@ -310,9 +310,9 @@ if [[ "${target}" == --for-live ]]; then
     && "${live_ready:-0}" =~ ^[0-9]+$ \
     && "${live_total}" -gt 0 \
     && "${live_ready}" -eq "${live_total}" ]]; then
-    pass "todas as ${live_total} mailboxes têm ramp 1→3→5→10 comprovado, amostra enviada em cada nível, DNS fresco e 48h estáveis em 10"
+    pass "todas as ${live_total} mailboxes satisfazem a prova live ou uma exceção de ramp explícita, com DNS fresco"
   else
-    fail "prova live incompleta (${live_ready:-0}/${live_total:-0} mailboxes com sequência, envios por patamar, DNS <=24h e ramp=10 estável >=48h)"
+    fail "prova live incompleta (${live_ready:-0}/${live_total:-0} mailboxes com sequência e envios por patamar, DNS <=24h e ramp=10 estável >=48h ou exceção explícita)"
   fi
   nonterminal_deliveries="$(db_value "select count(*) from private.outreach_delivery_ledger where status in ('sending','accepted','ambiguous')")"
   [[ "${nonterminal_deliveries}" == 0 ]] \
